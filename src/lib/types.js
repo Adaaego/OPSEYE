@@ -3,6 +3,36 @@ export const ORGANIZATION_TYPES = {
     COMPANY: "company",
   };
   
+  export const MINISTRIES = [
+    "Ministry of Health",
+    "Ministry of Finance",
+    "Ministry of Energy",
+    "Ministry of Education",
+    "Ministry of Transport",
+    "Ministry of Interior",
+  ];
+  
+  export const SECTORS = [
+    "Energy",
+    "Healthcare",
+    "Finance",
+    "Telecommunications",
+    "Transportation",
+    "Manufacturing",
+    "Agriculture",
+    "Utilities",
+  ];
+  
+  export const COUNTRIES = [
+    "Ghana",
+    "Nigeria",
+    "Kenya",
+    "South Africa",
+    "Egypt",
+    "Uganda",
+    "Other",
+  ];
+  
   export const createMinistryDetails = () => ({
     ministryName: "",
     department: "",
