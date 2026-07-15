@@ -1,11 +1,9 @@
 
-import './App.css'
+import LandingPage from "./components/pages/landing-page"
 
 function App() {
 return (
-  <h1 className="text-4xl font-bold text-red-600 underline">
-  Hello Tailwind
-</h1>
+  <LandingPage/>
 )
   
 }
