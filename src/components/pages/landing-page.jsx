@@ -19,6 +19,8 @@ import {
   doResetPassword,
   doSignOut,
 } from "../../firebase/authMethods";
+import { createUserDocument } from "../../lib/functions";
+
 
 const REMEMBERED_EMAIL_KEY = "opseyeRememberedEmail";
 
@@ -212,28 +214,29 @@ export default function LandingPage() {
     if (!validateSignUp()) {
       return;
     }
-
+  
     try {
       setLoading(true);
       clearMessages();
-
+  
       const userCredentials = await doCreateWithEmailAndPassword(
         normalizedEmail,
         password
       );
-
+  
       const user = userCredentials.user;
-
+  
+      await createUserDocument(user);
       await sendEmailVerification(user);
       await doSignOut();
-
+  
       setMode("signin");
       setPassword("");
       setConfirmPassword("");
       setShowPassword(false);
       setShowConfirmPassword(false);
       setShowVerificationModal(true);
-
+  
       setInfo(
         `A verification link has been sent to ${normalizedEmail}. Verify your email before signing in.`
       );
