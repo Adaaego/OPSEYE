@@ -1,9 +1,17 @@
 import { useState } from "react";
-import { ORGANIZATION_TYPES, MINISTRIES, SECTORS, COUNTRIES } from "../../../lib/types";
-
+import {
+  ORGANIZATION_TYPES,
+  MINISTRIES,
+  SECTORS,
+  COUNTRIES,
+} from "../../../lib/types";
 
 export function OnboardingStep2({
-
+  organizationType,
+  ministryDetails,
+  companyDetails,
+  onSave,
+  onBack,
 }) {
   const isMinistry =
     organizationType === ORGANIZATION_TYPES.MINISTRY;
@@ -36,24 +44,29 @@ export function OnboardingStep2({
 
   const handleContinue = () => {
     if (isMinistry) {
-      if (!ministryName || !department || !country) {
+      const trimmedDepartment = department.trim();
+
+      if (!ministryName || !trimmedDepartment || !country) {
         alert("Please fill in all fields.");
         return;
       }
 
       onSave({
         ministryName,
-        department,
+        department: trimmedDepartment,
         country,
       });
 
       return;
     }
 
+    const trimmedIndustrySegment = industrySegment.trim();
+    const trimmedOrganizationName = organizationName.trim();
+
     if (
       !sector ||
-      !industrySegment ||
-      !organizationName ||
+      !trimmedIndustrySegment ||
+      !trimmedOrganizationName ||
       !country
     ) {
       alert("Please fill in all fields.");
@@ -62,8 +75,8 @@ export function OnboardingStep2({
 
     onSave({
       sector,
-      industrySegment,
-      organizationName,
+      industrySegment: trimmedIndustrySegment,
+      organizationName: trimmedOrganizationName,
       country,
     });
   };

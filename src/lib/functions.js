@@ -5,9 +5,11 @@ import {
     setDoc,
     updateDoc,
   } from "firebase/firestore";
-import { db } from "../firebase/firebase";
-  
-  const USERS_COLLECTION = "users";
+  import { db } from "../firebase/firebase";
+
+
+
+const USERS_COLLECTION = "users";
   
   export const createUserDocument = async (user) => {
     if (!user?.uid) {
