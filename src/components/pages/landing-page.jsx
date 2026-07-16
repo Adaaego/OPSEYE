@@ -19,7 +19,8 @@ import {
   doResetPassword,
   doSignOut,
 } from "../../firebase/authMethods";
-import { createUserDocument } from "../../lib/functions";
+import { createUserDocument,getUserDocument, updateUserDocument } from "../../lib/functions";
+import { useNavigate } from "react-router-dom";
 
 
 const REMEMBERED_EMAIL_KEY = "opseyeRememberedEmail";
@@ -51,6 +52,10 @@ const getAuthErrorMessage = (error) => {
 };
 
 export default function LandingPage() {
+  const navigate = useNavigate();
+
+
+
   const [mode, setMode] = useState("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -172,36 +177,81 @@ export default function LandingPage() {
     if (!validateSignIn()) {
       return;
     }
-
+  
     try {
       setLoading(true);
       clearMessages();
-
+  
       const userCredentials = await doSignInWithEmailAndPassword(
         normalizedEmail,
         password
       );
-
+  
       const user = userCredentials.user;
-
+  
       await user.reload();
-
+  
       if (!user.emailVerified) {
         await doSignOut();
+  
         setError(
           "Please verify your email address before signing in. Check your inbox for the verification link."
         );
+  
         return;
       }
-
+  
+      let userData = await getUserDocument(user.uid);
+  
+      if (!userData) {
+        await createUserDocument(user);
+        userData = await getUserDocument(user.uid);
+      }
+  
+      if (!userData) {
+        throw new Error("Your user account record could not be loaded.");
+      }
+  
+      if (!userData.emailVerified) {
+        await updateUserDocument(user.uid, {
+          emailVerified: true,
+        });
+      }
+  
       if (rememberMe) {
-        localStorage.setItem(REMEMBERED_EMAIL_KEY, normalizedEmail);
+        localStorage.setItem(
+          REMEMBERED_EMAIL_KEY,
+          normalizedEmail
+        );
       } else {
         localStorage.removeItem(REMEMBERED_EMAIL_KEY);
       }
-
-      setInfo("You have signed in successfully.");
+  
       setPassword("");
+  
+      if (!userData.onboardingCompleted) {
+        navigate("/onboarding", {
+          replace: true,
+        });
+  
+        return;
+      }
+  
+      const sector = String(userData.sector || "")
+        .trim()
+        .toLowerCase();
+  
+      if (sector === "energy") {
+        navigate("/energy-dashboard", {
+          replace: true,
+        });
+  
+        return;
+      }
+  
+      navigate("/coming-soon", {
+        replace: true,
+      });
     } catch (authError) {
       console.error("Sign-in error:", authError);
       setError(getAuthErrorMessage(authError));

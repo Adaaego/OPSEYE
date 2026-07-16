@@ -34,6 +34,24 @@ import { db } from "../firebase/firebase";
   
     return userData;
   };
+
+  export const getUserDocument = async (uid) => {
+    if (!uid) {
+      throw new Error("A user ID is required.");
+    }
+  
+    const userReference = doc(db, USERS_COLLECTION, uid);
+    const userSnapshot = await getDoc(userReference);
+  
+    if (!userSnapshot.exists()) {
+      return null;
+    }
+  
+    return {
+      id: userSnapshot.id,
+      ...userSnapshot.data(),
+    };
+  };
   
   export const updateUserDocument = async (uid, updates) => {
     if (!uid) {
