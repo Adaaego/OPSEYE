@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { CheckCircle2, Loader2 } from "lucide-react";
 
 export function OnboardingStep4({
@@ -7,29 +7,25 @@ export function OnboardingStep4({
   onBack,
 }) {
   const [otp, setOtp] = useState("");
-  const [generatedOtp, setGeneratedOtp] = useState("");
+
+  const [generatedOtp] = useState(() =>
+    String(Math.floor(Math.random() * 900000) + 100000)
+  );
+
   const [verified, setVerified] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    const generated = String(
-      Math.floor(Math.random() * 900000) + 100000
-    );
-
-    setGeneratedOtp(generated);
-  }, []);
+  const [error, setError] = useState("");
 
   const handleVerify = () => {
-    setError(null);
+    setError("");
 
     if (!otp) {
-      setError("Please enter the OTP.");
+      setError("Please enter the verification code.");
       return;
     }
 
     if (otp.length !== 6) {
-      setError("OTP must be 6 digits.");
+      setError("The verification code must be 6 digits.");
       return;
     }
 
@@ -42,7 +38,7 @@ export function OnboardingStep4({
         return;
       }
 
-      setError("Invalid OTP. Please try again.");
+      setError("Invalid verification code. Please try again.");
       setOtp("");
       setLoading(false);
     }, 1000);
@@ -52,7 +48,7 @@ export function OnboardingStep4({
     return (
       <div className="space-y-6 text-center">
         <div className="flex justify-center">
-          <CheckCircle2 className="h-12 w-12 text-emerald-400" />
+          <CheckCircle2 className="h-12 w-12 text-emerald-500" />
         </div>
 
         <div>
@@ -84,17 +80,24 @@ export function OnboardingStep4({
         </h2>
 
         <p className="text-sm text-blue-600">
-          We&apos;ve sent a verification code to {email}
+          We&apos;ve sent a verification code to{" "}
+          <span className="font-semibold text-blue-900">
+            {email}
+          </span>
         </p>
       </div>
 
       <div className="rounded-lg border border-blue-200 bg-blue-100/40 p-4">
-        <p className="mb-2 text-xs text-blue-500">
-          Demo OTP: {generatedOtp}
+        <p className="mb-2 text-xs font-medium text-blue-700">
+          Prototype verification code
         </p>
 
-        <p className="text-xs text-gray-400">
-          For prototype testing, use the code above.
+        <p className="font-mono text-xl font-semibold tracking-widest text-blue-900">
+          {generatedOtp}
+        </p>
+
+        <p className="mt-2 text-xs text-blue-500">
+          Use this code to test the onboarding flow.
         </p>
       </div>
 
@@ -118,6 +121,11 @@ export function OnboardingStep4({
                 .slice(0, 6)
             )
           }
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !loading) {
+              handleVerify();
+            }
+          }}
           placeholder="000000"
           maxLength={6}
           autoComplete="one-time-code"
@@ -126,9 +134,8 @@ export function OnboardingStep4({
       </div>
 
       {error && (
-        <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3.5 py-2.5 text-xs text-red-300">
-          <span className="flex-shrink-0 text-red-400">•</span>
-          <span>{error}</span>
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700">
+          {error}
         </div>
       )}
 
@@ -137,7 +144,7 @@ export function OnboardingStep4({
           type="button"
           onClick={onBack}
           disabled={loading}
-          className="flex-1 rounded-lg border border-blue-200 px-4 py-3 font-semibold text-blue-700 transition-all hover:border-blue-300 disabled:opacity-50"
+          className="flex-1 rounded-lg border border-blue-200 px-4 py-3 font-semibold text-blue-700 transition-all hover:border-blue-300 disabled:cursor-not-allowed disabled:opacity-50"
         >
           Back
         </button>
@@ -145,7 +152,7 @@ export function OnboardingStep4({
         <button
           type="button"
           onClick={handleVerify}
-          disabled={loading}
+          disabled={loading || otp.length !== 6}
           className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-blue-900 px-4 py-3 font-semibold text-white transition-all hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading ? (
