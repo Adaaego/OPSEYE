@@ -4,6 +4,7 @@ import {
   serverTimestamp,
   setDoc,
   updateDoc,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../firebase/firebase";
 import {
@@ -16,6 +17,7 @@ import {
 } from "./types";
 
 const USERS_COLLECTION = "users";
+const ORGANIZATIONS_COLLECTION = "organizations";
 
 // These characters exclude values such as 0, O, 1 and I,
 // which can easily be confused when reading an organization ID.

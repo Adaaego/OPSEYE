@@ -8,6 +8,8 @@ import { OnboardingStep4 } from "./onboarding/onboardingStep4";
 import { createOnboardingData, ORGANIZATION_TYPES } from "../../lib/types";
 import { submitOnboarding } from "../../lib/functions";
 import { useNavigate } from "react-router-dom";
+import { auth } from "../../firebase/firebase";
+
 
 const OnboardingPage = ({ email, onComplete }) => {
   const [step, setStep] = useState(1);
