@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   ORGANIZATION_TYPES,
   MINISTRIES,
+  MINISTRY_DEPARTMENTS,
   SECTORS,
   COUNTRIES,
 } from "../../../lib/types";
@@ -44,16 +45,14 @@ export function OnboardingStep2({
 
   const handleContinue = () => {
     if (isMinistry) {
-      const trimmedDepartment = department.trim();
-
-      if (!ministryName || !trimmedDepartment || !country) {
+      if (!ministryName || !department || !country) {
         alert("Please fill in all fields.");
         return;
       }
 
       onSave({
         ministryName,
-        department: trimmedDepartment,
+        department,
         country,
       });
 
@@ -132,16 +131,27 @@ export function OnboardingStep2({
                 Department
               </label>
 
-              <input
+              <select
                 id="department"
-                type="text"
                 value={department}
                 onChange={(event) =>
                   setDepartment(event.target.value)
                 }
-                placeholder="e.g., Finance Division"
-                className="w-full rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm text-blue-900 placeholder:text-gray-400 focus:border-blue-900/60 focus:outline-none focus:ring-1 focus:ring-blue-900/30"
-              />
+                className="w-full rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm text-blue-900 focus:border-blue-900/60 focus:outline-none focus:ring-1 focus:ring-blue-900/30"
+              >
+                <option value="">Select a department</option>
+
+                {MINISTRY_DEPARTMENTS.map(
+                  (departmentOption) => (
+                    <option
+                      key={departmentOption}
+                      value={departmentOption}
+                    >
+                      {departmentOption}
+                    </option>
+                  )
+                )}
+              </select>
             </div>
           </>
         ) : (
@@ -190,7 +200,7 @@ export function OnboardingStep2({
                 onChange={(event) =>
                   setIndustrySegment(event.target.value)
                 }
-                placeholder="e.g., Upstream Production"
+                placeholder="e.g., Oil and Gas"
                 className="w-full rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm text-blue-900 placeholder:text-gray-400 focus:border-blue-900/60 focus:outline-none focus:ring-1 focus:ring-blue-900/30"
               />
             </div>
@@ -210,7 +220,7 @@ export function OnboardingStep2({
                 onChange={(event) =>
                   setOrganizationName(event.target.value)
                 }
-                placeholder="e.g., Acme Energy Ltd."
+                placeholder="e.g., Shell"
                 className="w-full rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm text-blue-900 placeholder:text-gray-400 focus:border-blue-900/60 focus:outline-none focus:ring-1 focus:ring-blue-900/30"
               />
             </div>
