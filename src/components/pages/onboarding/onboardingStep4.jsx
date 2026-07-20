@@ -6,14 +6,22 @@ export function OnboardingStep4({
   onComplete,
   onBack,
 }) {
+  // Stores the verification code entered by the user.
   const [otp, setOtp] = useState("");
 
+  // Generates one random six-digit code when this step first loads.
+  // The code stays the same while the user remains on this step.
   const [generatedOtp] = useState(() =>
     String(Math.floor(Math.random() * 900000) + 100000)
   );
 
+  // Tracks whether the user entered the correct verification code.
   const [verified, setVerified] = useState(false);
+
+  // Prevents users from clicking buttons repeatedly during verification.
   const [loading, setLoading] = useState(false);
+
+  // Stores any validation or verification error shown to the user.
   const [error, setError] = useState("");
 
   const handleVerify = () => {
@@ -31,6 +39,7 @@ export function OnboardingStep4({
 
     setLoading(true);
 
+    // This delay simulates a real verification request for the prototype.
     setTimeout(() => {
       if (otp === generatedOtp) {
         setVerified(true);
@@ -82,7 +91,7 @@ export function OnboardingStep4({
         <p className="text-sm text-blue-600">
           We&apos;ve sent a verification code to{" "}
           <span className="font-semibold text-blue-900">
-            {email}
+            {email || "your account email"}
           </span>
         </p>
       </div>
@@ -122,7 +131,11 @@ export function OnboardingStep4({
             )
           }
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !loading) {
+            if (
+              event.key === "Enter" &&
+              !loading &&
+              otp.length === 6
+            ) {
               handleVerify();
             }
           }}
