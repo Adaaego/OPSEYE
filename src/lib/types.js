@@ -26,6 +26,28 @@ export const COUNTRIES = [
   "Ghana",
 ];
 
+export const ORGANIZATION_LEVELS = {
+  ENTERPRISE: "enterprise",
+  COUNTRY: "country",
+  REGION: "region",
+  BRANCH: "branch",
+};
+
+export const ORGANIZATION_LEVEL_CODES = {
+  enterprise: "ENT",
+  country: "CTR",
+  region: "REG",
+  branch: "BRN",
+};
+
+export const SECTOR_CODES = {
+  Energy: "ENE",
+};
+
+export const COUNTRY_CODES = {
+  Ghana: "GH",
+};
+
 export const createMinistryDetails = () => ({
   ministryName: "Ministry of Energy",
   department: "",
