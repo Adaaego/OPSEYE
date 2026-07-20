@@ -6,10 +6,16 @@ import { OnboardingStep2 } from "./onboarding/onboardingStep2";
 import { OnboardingStep3 } from "./onboarding/onboardingStep3";
 import { OnboardingStep4 } from "./onboarding/onboardingStep4";
 import { createOnboardingData, ORGANIZATION_TYPES } from "../../lib/types";
+import { submitOnboarding } from "../../lib/functions";
+import { useNavigate } from "react-router-dom";
 
 const OnboardingPage = ({ email, onComplete }) => {
   const [step, setStep] = useState(1);
   const [data, setData] = useState(createOnboardingData());
+  const navigate = useNavigate();
+
+  const [submitting, setSubmitting] = useState(false);
+  const [submissionError, setSubmissionError] = useState("");
 
   const handleOrgTypeSelect = (organizationType) => {
     setData((previousData) => ({
@@ -55,15 +61,40 @@ const OnboardingPage = ({ email, onComplete }) => {
     setStep(4);
   };
 
-  const handleOtpComplete = () => {
-    const completedData = {
-      ...data,
-      otpVerified: true,
-      completedAt: Date.now(),
-    };
+  const handleOnboardingSubmit = async () => {
+    setSubmissionError("");
 
-    setData(completedData);
-    onComplete(completedData);
+    const currentUser = auth.currentUser;
+
+    if (!currentUser?.uid) {
+      setSubmissionError(
+        "We could not find your signed-in account. Please sign in again."
+      );
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+
+      // The submission function validates the data, creates the
+      // organization and updates the existing user document.
+      await submitOnboarding(currentUser.uid, {
+        ...data,
+        otpVerified: true,
+        completedAt: Date.now(),
+      });
+
+      navigate("/energy-dashboard");
+    } catch (error) {
+      console.error("Unable to complete onboarding:", error);
+
+      setSubmissionError(
+        error.message ||
+          "We could not complete your onboarding. Please try again."
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleBack = () => {
@@ -148,8 +179,10 @@ const OnboardingPage = ({ email, onComplete }) => {
             {step === 4 && (
               <OnboardingStep4
                 email={data.userProfile?.workEmail || ""}
-                onComplete={handleOtpComplete}
+                onComplete={handleOnboardingSubmit}
                 onBack={() => setStep(3)}
+                submitting={submitting}
+                submissionError={submissionError}
               />
             )}
           </div>

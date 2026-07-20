@@ -5,6 +5,8 @@ export function OnboardingStep4({
   email,
   onComplete,
   onBack,
+  submitting = false,
+  submissionError = "",
 }) {
   // Stores the verification code entered by the user.
   const [otp, setOtp] = useState("");
@@ -73,9 +75,17 @@ export function OnboardingStep4({
         <button
           type="button"
           onClick={onComplete}
-          className="w-full rounded-lg bg-blue-900 px-4 py-3 font-semibold text-white transition-all hover:bg-blue-800"
+          disabled={submitting}
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-900 px-4 py-3 font-semibold text-white transition-all hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Complete Onboarding
+          {submitting ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Completing Onboarding...
+            </>
+          ) : (
+            "Complete Onboarding"
+          )}
         </button>
       </div>
     );
@@ -124,18 +134,10 @@ export function OnboardingStep4({
           inputMode="numeric"
           value={otp}
           onChange={(event) =>
-            setOtp(
-              event.target.value
-                .replace(/\D/g, "")
-                .slice(0, 6)
-            )
+            setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))
           }
           onKeyDown={(event) => {
-            if (
-              event.key === "Enter" &&
-              !loading &&
-              otp.length === 6
-            ) {
+            if (event.key === "Enter" && !loading && otp.length === 6) {
               handleVerify();
             }
           }}
@@ -177,6 +179,12 @@ export function OnboardingStep4({
             "Verify"
           )}
         </button>
+
+        {submissionError && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700">
+            {submissionError}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -27,6 +27,7 @@ export const COUNTRIES = [
 ];
 
 export const ORGANIZATION_LEVELS = {
+  MINISTRY: "ministry",
   ENTERPRISE: "enterprise",
   COUNTRY: "country",
   REGION: "region",
@@ -34,10 +35,20 @@ export const ORGANIZATION_LEVELS = {
 };
 
 export const ORGANIZATION_LEVEL_CODES = {
+  ministry: "MIN",
   enterprise: "ENT",
   country: "CTR",
   region: "REG",
   branch: "BRN",
+};
+
+export const USER_ROLES = {
+  MINISTRY_ADMIN: "ministry_admin",
+  ENTERPRISE_ADMIN: "enterprise_admin",
+  COUNTRY_ADMIN: "country_admin",
+  REGION_ADMIN: "region_admin",
+  BRANCH_ADMIN: "branch_admin",
+  EMPLOYEE: "employee",
 };
 
 export const SECTOR_CODES = {
@@ -51,6 +62,7 @@ export const COUNTRY_CODES = {
 export const createMinistryDetails = () => ({
   ministryName: "Ministry of Energy",
   department: "",
+  sector: "Energy",
   country: "Ghana",
 });
 

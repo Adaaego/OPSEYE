@@ -9,7 +9,10 @@ import { db } from "../firebase/firebase";
 import {
   COUNTRY_CODES,
   ORGANIZATION_LEVEL_CODES,
+  ORGANIZATION_LEVELS,
+  ORGANIZATION_TYPES,
   SECTOR_CODES,
+  USER_ROLES,
 } from "./types";
 
 const USERS_COLLECTION = "users";
@@ -211,4 +214,242 @@ export const completeUserOnboarding = async (
     onboardingCompleted: true,
     onboardingCompletedAt: serverTimestamp(),
   });
+};
+
+// Checks that every required onboarding field has been completed
+// before any information is submitted to Firestore.
+const validateOnboardingData = (onboardingData) => {
+  if (!onboardingData?.organizationType) {
+    throw new Error("Please select an organization type.");
+  }
+
+  const {
+    ministryDetails,
+    companyDetails,
+    userProfile,
+  } = onboardingData;
+
+  if (
+    !userProfile?.fullName?.trim() ||
+    !userProfile?.jobTitle?.trim() ||
+    !userProfile?.workEmail?.trim()
+  ) {
+    throw new Error(
+      "Please complete all the user profile fields."
+    );
+  }
+
+  const isMinistry =
+    onboardingData.organizationType ===
+    ORGANIZATION_TYPES.MINISTRY;
+
+  if (isMinistry) {
+    if (
+      !ministryDetails?.ministryName?.trim() ||
+      !ministryDetails?.department?.trim() ||
+      !ministryDetails?.country?.trim()
+    ) {
+      throw new Error(
+        "Please complete all the ministry details."
+      );
+    }
+
+    return;
+  }
+
+  if (
+    !companyDetails?.organizationName?.trim() ||
+    !companyDetails?.sector?.trim() ||
+    !companyDetails?.industrySegment?.trim() ||
+    !companyDetails?.country?.trim()
+  ) {
+    throw new Error(
+      "Please complete all the organization details."
+    );
+  }
+};
+
+// Generates an organization ID and checks Firestore to make sure
+// another organization is not already using the same ID.
+const createUniqueOrganizationId = async ({
+  type,
+  sector,
+  country,
+}) => {
+  const maximumAttempts = 5;
+
+  for (
+    let attempt = 1;
+    attempt <= maximumAttempts;
+    attempt += 1
+  ) {
+    const organizationId = generateOrganizationId({
+      type,
+      sector,
+      country,
+    });
+
+    const organizationReference = doc(
+      db,
+      ORGANIZATIONS_COLLECTION,
+      organizationId
+    );
+
+    const organizationSnapshot = await getDoc(
+      organizationReference
+    );
+
+    if (!organizationSnapshot.exists()) {
+      return organizationId;
+    }
+  }
+
+  throw new Error(
+    "We could not generate a unique organization ID. Please try again."
+  );
+};
+
+export const submitOnboarding = async (
+  uid,
+  onboardingData
+) => {
+  if (!uid) {
+    throw new Error(
+      "A signed-in user is required to complete onboarding."
+    );
+  }
+
+  // Stop the submission immediately if any required field is missing.
+  validateOnboardingData(onboardingData);
+
+  const {
+    organizationType,
+    ministryDetails,
+    companyDetails,
+    userProfile,
+  } = onboardingData;
+
+  const isMinistry =
+    organizationType === ORGANIZATION_TYPES.MINISTRY;
+
+  // Companies created through public onboarding begin as enterprises.
+  // Ministries use their own organization type and do not follow
+  // the enterprise, country, region and branch hierarchy.
+  const organizationLevel = isMinistry
+    ? ORGANIZATION_LEVELS.MINISTRY
+    : ORGANIZATION_LEVELS.ENTERPRISE;
+
+  const organizationName = isMinistry
+    ? ministryDetails.ministryName.trim()
+    : companyDetails.organizationName.trim();
+
+  const sector = isMinistry
+    ? ministryDetails.sector || "Energy"
+    : companyDetails.sector;
+
+  const userCountry = isMinistry
+    ? ministryDetails.country
+    : companyDetails.country;
+
+  // Enterprise records represent the company globally, so their
+  // organization IDs do not include a country code.
+  const organizationCountry = isMinistry
+    ? ministryDetails.country
+    : null;
+
+  const organizationId =
+    await createUniqueOrganizationId({
+      type: organizationLevel,
+      sector,
+      country: organizationCountry,
+    });
+
+  const role = isMinistry
+    ? USER_ROLES.MINISTRY_ADMIN
+    : USER_ROLES.ENTERPRISE_ADMIN;
+
+  const organizationReference = doc(
+    db,
+    ORGANIZATIONS_COLLECTION,
+    organizationId
+  );
+
+  const userReference = doc(
+    db,
+    USERS_COLLECTION,
+    uid
+  );
+
+  const batch = writeBatch(db);
+
+  // Create the main organization document.
+  batch.set(organizationReference, {
+    organizationId,
+    name: organizationName,
+    normalizedName: organizationName.toLowerCase(),
+
+    organizationCategory: organizationType,
+    type: organizationLevel,
+
+    parentId: null,
+
+    // The enterprise is the root of its own company hierarchy.
+    // Ministries do not use the company hierarchy.
+    rootEnterpriseId: isMinistry
+      ? null
+      : organizationId,
+
+    ancestorIds: [],
+
+    sector,
+
+    industrySegment: isMinistry
+      ? null
+      : companyDetails.industrySegment.trim(),
+
+    country: organizationCountry,
+    status: "active",
+
+    adminIds: [uid],
+    createdBy: uid,
+
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  // Link the existing user to the organization and complete onboarding.
+  batch.update(userReference, {
+    fullName: userProfile.fullName.trim(),
+    jobTitle: userProfile.jobTitle.trim(),
+
+    organizationId,
+    role,
+    country: userCountry,
+
+    // Department currently applies only to ministry users.
+    department: isMinistry
+      ? ministryDetails.department.trim()
+      : null,
+
+    emailVerified: true,
+    emailVerifiedAt: serverTimestamp(),
+
+    onboardingCompleted: true,
+    onboardingCompletedAt: serverTimestamp(),
+
+    updatedAt: serverTimestamp(),
+  });
+
+  // Both documents are submitted together. If either write fails,
+  // Firestore will not save the other one.
+  await batch.commit();
+
+  return {
+    organizationId,
+    organizationName,
+    organizationType,
+    organizationLevel,
+    role,
+    sector,
+  };
 };
