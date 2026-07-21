@@ -1,137 +1,74 @@
-import { Fragment, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  ArrowUpDown,
   Building2,
   ChevronDown,
   ChevronRight,
   Eye,
-  Search,
 } from "lucide-react";
+import {
+  Card,
+  PageHeader,
+  StatusBadge,
+  Table,
+  EmptyCell,
+  SearchInput,
+  Select,
+} from "../ui/interface";
+import { Button } from "../ui/Button";
 
-// Temporary content used to display the table layout.
-// Replace this with Firestore data when the operator records are ready.
-const OPERATOR_PREVIEW_ROWS = [
-  {
-    id: "operator-1",
-    name: "Atlantic Energy",
-    logoUrl: "",
-    branchCount: 4,
-    productionToday: "24,850 bbl/day",
-    localWorkforce: "82%",
-    submissionsToday: "4 of 4",
-    compliance: "96%",
-    status: "fullySubmitted",
-    branches: [
-      {
-        id: "branch-1",
-        name: "Accra Central",
-        region: "Greater Accra",
-        status: "fullySubmitted",
-        submittedBy: "Ama Mensah",
-        submissionTime: "9:35 AM",
-        production: "8,450",
-      },
-      {
-        id: "branch-2",
-        name: "Tema Industrial",
-        region: "Greater Accra",
-        status: "fullySubmitted",
-        submittedBy: "Kojo Asante",
-        submissionTime: "9:48 AM",
-        production: "6,900",
-      },
-    ],
-  },
-  {
-    id: "operator-2",
-    name: "Coastal Petroleum",
-    logoUrl: "",
-    branchCount: 3,
-    productionToday: "18,420 bbl/day",
-    localWorkforce: "74%",
-    submissionsToday: "2 of 3",
-    compliance: "84%",
-    status: "partial",
-    branches: [
-      {
-        id: "branch-3",
-        name: "Takoradi Branch",
-        region: "Western",
-        status: "fullySubmitted",
-        submittedBy: "Kwame Boakye",
-        submissionTime: "10:05 AM",
-        production: "7,250",
-      },
-      {
-        id: "branch-4",
-        name: "Cape Coast Branch",
-        region: "Central",
-        status: "missing",
-        submittedBy: "",
-        submissionTime: "",
-        production: "",
-      },
-    ],
-  },
-  {
-    id: "operator-3",
-    name: "Volta Resources",
-    logoUrl: "",
-    branchCount: 2,
-    productionToday: "12,100 bbl/day",
-    localWorkforce: "90%",
-    submissionsToday: "0 of 2",
-    compliance: "68%",
-    status: "missing",
-    branches: [
-      {
-        id: "branch-5",
-        name: "Ho Branch",
-        region: "Volta",
-        status: "missing",
-        submittedBy: "",
-        submissionTime: "",
-        production: "",
-      },
-    ],
-  },
-];
+// Displays a placeholder when a numeric value is unavailable.
+const formatNumber = (value) => {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return "—";
+  }
 
-const STATUS_DETAILS = {
-  fullySubmitted: {
-    label: "Fully submitted",
-    className: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
-  },
-  partial: {
-    label: "Partial",
-    className: "bg-amber-50 text-amber-700 ring-amber-600/20",
-  },
-  missing: {
-    label: "Missing",
-    className: "bg-red-50 text-red-700 ring-red-600/20",
-  },
+  return new Intl.NumberFormat("en-US").format(value);
 };
 
-const StatusBadge = ({ status }) => {
-  const statusDetails = STATUS_DETAILS[status] ?? STATUS_DETAILS.missing;
+// Converts a Firestore timestamp or JavaScript date into readable text.
+const formatUpdatedAt = (updatedAt) => {
+  if (!updatedAt) {
+    return "No data loaded";
+  }
 
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${statusDetails.className}`}
-    >
-      {statusDetails.label}
-    </span>
-  );
+  const date =
+    typeof updatedAt?.toDate === "function"
+      ? updatedAt.toDate()
+      : new Date(updatedAt);
+
+  if (Number.isNaN(date.getTime())) {
+    return "No data loaded";
+  }
+
+  const time = date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+
+  const day = date.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+
+  return `Data as of ${time} · ${day}`;
 };
 
 const OperatorAvatar = ({ name, logoUrl }) => {
-  // Displays the operator's logo when available and uses an icon as a fallback.
+  // Displays the operator's logo when available and an icon as a fallback.
   if (logoUrl) {
     return (
       <img
         src={logoUrl}
         alt={`${name} logo`}
-        className="h-10 w-10 rounded-lg border border-slate-200 object-cover"
+        className="h-10 w-10 rounded-lg border border-slate-200 bg-white object-contain p-1"
       />
     );
   }
@@ -146,345 +83,642 @@ const OperatorAvatar = ({ name, logoUrl }) => {
   );
 };
 
-const EmptyCell = ({ value, suffix = "" }) => {
-  if (!value) {
-    return <span className="text-slate-400">—</span>;
-  }
+const SortHeader = ({
+  label,
+  sortKey,
+  activeSortKey,
+  sortDirection,
+  onSort,
+}) => {
+  const isActive = activeSortKey === sortKey;
 
   return (
-    <span>
-      {value}
-      {suffix}
-    </span>
+    <th
+      className="cursor-pointer select-none whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-slate-500 hover:text-navy-700"
+      onClick={() => onSort(sortKey)}
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+
+        <ArrowUpDown
+          className={`h-3 w-3 ${
+            isActive ? "opacity-100" : "opacity-40"
+          } ${
+            isActive && sortDirection === "desc"
+              ? "rotate-180"
+              : ""
+          }`}
+        />
+      </span>
+    </th>
   );
 };
 
-const OperatorsTab = () => {
-  const [searchTerm, setSearchTerm] = useState("");
-  const [regionFilter, setRegionFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+const OperatorsTab = ({
+  operators = [],
+  regions = [],
+  updatedAt = null,
+  complianceThreshold = null,
+  onSelectOperator = () => {},
+}) => {
+  // Stores the values entered in the operator filters.
+  const [search, setSearch] = useState("");
+  const [regionFilter, setRegionFilter] =
+    useState("");
+  const [statusFilter, setStatusFilter] =
+    useState("");
 
-  // Keeps track of the operator currently showing its branch details.
-  const [expandedOperatorId, setExpandedOperatorId] = useState("operator-1");
+  // Stores the operator whose branch information is currently open.
+  const [expandedOperatorId, setExpandedOperatorId] =
+    useState(null);
+
+  // Stores the column and direction currently used to sort the table.
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDirection, setSortDirection] =
+    useState("asc");
+
+  // Uses supplied region names or builds the filter from operator branches.
+  const regionOptions = useMemo(() => {
+    if (regions.length > 0) {
+      return regions
+        .map((region) =>
+          typeof region === "string"
+            ? region
+            : region.name || region.region
+        )
+        .filter(Boolean);
+    }
+
+    return [
+      ...new Set(
+        operators
+          .flatMap((operator) =>
+            Array.isArray(operator.branches)
+              ? operator.branches
+              : []
+          )
+          .map((branch) => branch.region)
+          .filter(Boolean)
+      ),
+    ];
+  }, [operators, regions]);
+
+  // Builds the status filter from the operator records that are available.
+  const statusOptions = useMemo(() => {
+    return [
+      ...new Set(
+        operators
+          .map((operator) => operator.status)
+          .filter(Boolean)
+      ),
+    ];
+  }, [operators]);
+
+  // Filters and sorts a copy without changing the original Firestore records.
+  const filteredOperators = useMemo(() => {
+    const normalizedSearch = search
+      .trim()
+      .toLowerCase();
+
+    const filtered = operators.filter((operator) => {
+      const operatorName =
+        operator.name ||
+        operator.operatorName ||
+        "";
+
+      const operatorBranches = Array.isArray(
+        operator.branches
+      )
+        ? operator.branches
+        : [];
+
+      const matchesSearch =
+        !normalizedSearch ||
+        operatorName
+          .toLowerCase()
+          .includes(normalizedSearch) ||
+        operatorBranches.some((branch) => {
+          const branchName =
+            branch.name || branch.branch || "";
+
+          return branchName
+            .toLowerCase()
+            .includes(normalizedSearch);
+        });
+
+      const matchesRegion =
+        !regionFilter ||
+        operatorBranches.some(
+          (branch) =>
+            branch.region === regionFilter
+        );
+
+      const matchesStatus =
+        !statusFilter ||
+        operator.status === statusFilter;
+
+      return (
+        matchesSearch &&
+        matchesRegion &&
+        matchesStatus
+      );
+    });
+
+    if (!sortKey) {
+      return filtered;
+    }
+
+    return [...filtered].sort(
+      (firstOperator, secondOperator) => {
+        const firstValue =
+          firstOperator[sortKey] ?? "";
+
+        const secondValue =
+          secondOperator[sortKey] ?? "";
+
+        if (
+          typeof firstValue === "number" ||
+          typeof secondValue === "number"
+        ) {
+          const comparison =
+            (Number(firstValue) || 0) -
+            (Number(secondValue) || 0);
+
+          return sortDirection === "asc"
+            ? comparison
+            : -comparison;
+        }
+
+        const comparison = String(firstValue)
+          .toLowerCase()
+          .localeCompare(
+            String(secondValue).toLowerCase()
+          );
+
+        return sortDirection === "asc"
+          ? comparison
+          : -comparison;
+      }
+    );
+  }, [
+    operators,
+    search,
+    regionFilter,
+    statusFilter,
+    sortKey,
+    sortDirection,
+  ]);
+
+  // Identifies operators below the configured compliance threshold.
+  const flaggedOperators = useMemo(() => {
+    if (
+      complianceThreshold === null ||
+      complianceThreshold === undefined
+    ) {
+      return [];
+    }
+
+    return operators.filter((operator) => {
+      const compliance = Number(
+        operator.compliance
+      );
+
+      return (
+        Number.isFinite(compliance) &&
+        compliance < complianceThreshold
+      );
+    });
+  }, [operators, complianceThreshold]);
+
+  const toggleSort = (key) => {
+    if (sortKey === key) {
+      setSortDirection((currentDirection) =>
+        currentDirection === "asc"
+          ? "desc"
+          : "asc"
+      );
+
+      return;
+    }
+
+    setSortKey(key);
+    setSortDirection("asc");
+  };
 
   const toggleOperator = (operatorId) => {
-    setExpandedOperatorId((currentOperatorId) =>
-      currentOperatorId === operatorId ? null : operatorId
+    setExpandedOperatorId(
+      (currentOperatorId) =>
+        currentOperatorId === operatorId
+          ? null
+          : operatorId
     );
   };
 
   return (
-    <section className="min-h-full bg-slate-50 p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto max-w-7xl">
-        <header className="mb-6">
-          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-                Operators
-              </h1>
+    <div>
+      <PageHeader
+        title="Operators"
+        timestamp={formatUpdatedAt(updatedAt)}
+      />
 
-              <p className="mt-1 text-sm text-slate-500">
-                Review operator submissions, production and compliance.
-              </p>
-            </div>
+      {flaggedOperators.length > 0 && (
+        <div className="mb-5 flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
 
-            <p className="text-xs font-medium text-slate-400">
-              Data last updated today
+          <div className="min-w-0 flex-1">
+            <p className="text-sm text-amber-800">
+              <span className="font-semibold">
+                {flaggedOperators.length}{" "}
+                {flaggedOperators.length === 1
+                  ? "operator requires"
+                  : "operators require"}{" "}
+                attention
+              </span>
+
+              {" — "}
+
+              {flaggedOperators
+                .map((operator) => {
+                  const operatorName =
+                    operator.name ||
+                    operator.operatorName ||
+                    "Unnamed operator";
+
+                  return `${operatorName} is at ${operator.compliance}% compliance`;
+                })
+                .join(", ")}
+              .
             </p>
-          </div>
-        </header>
 
-        <div className="mb-5 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
-
-          <div>
-            <p className="text-sm font-semibold text-amber-900">
-              Some operators require attention
-            </p>
-
-            <p className="mt-0.5 text-sm leading-6 text-amber-800">
-              Operators with incomplete submissions or low compliance will be
-              highlighted here.
-            </p>
+            <button
+              type="button"
+              onClick={() =>
+                onSelectOperator(
+                  flaggedOperators[0]
+                )
+              }
+              className="mt-1 text-sm font-medium text-amber-900 underline hover:no-underline"
+            >
+              View details →
+            </button>
           </div>
         </div>
+      )}
 
-        <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center">
-          <div className="relative w-full lg:max-w-sm">
-            <Search
-              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
-              aria-hidden="true"
-            />
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Search operators or branches…"
+        />
 
-            <input
-              type="search"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Search operators or branches"
-              className="h-11 w-full rounded-lg border border-slate-300 bg-white py-2 pl-10 pr-4 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-            />
-          </div>
+        <Select
+          value={regionFilter}
+          onChange={setRegionFilter}
+          options={regionOptions}
+          placeholder="All Regions"
+        />
 
-          <select
-            value={regionFilter}
-            onChange={(event) => setRegionFilter(event.target.value)}
-            className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-          >
-            <option value="">All regions</option>
-            <option value="greater-accra">Greater Accra</option>
-            <option value="western">Western</option>
-            <option value="central">Central</option>
-            <option value="volta">Volta</option>
-          </select>
+        <Select
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={statusOptions}
+          placeholder="All Statuses"
+        />
+      </div>
 
-          <select
-            value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value)}
-            className="h-11 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-          >
-            <option value="">All statuses</option>
-            <option value="fullySubmitted">Fully submitted</option>
-            <option value="partial">Partial</option>
-            <option value="missing">Missing</option>
-          </select>
-        </div>
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1100px]">
+            <thead>
+              <tr className="border-b border-slate-200">
+                <th
+                  className="w-10 px-4 py-3"
+                  aria-label="Expand operator"
+                />
 
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1100px] border-collapse">
-              <thead className="bg-slate-50">
-                <tr className="border-b border-slate-200">
-                  <th
-                    className="w-14 px-4 py-3"
-                    aria-label="Expand operator"
-                  />
+                <SortHeader
+                  label="Operator"
+                  sortKey="name"
+                  activeSortKey={sortKey}
+                  sortDirection={sortDirection}
+                  onSort={toggleSort}
+                />
 
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Operator
-                  </th>
+                <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-slate-500">
+                  Branches
+                </th>
 
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Branches
-                  </th>
+                <SortHeader
+                  label="Today's Production"
+                  sortKey="productionToday"
+                  activeSortKey={sortKey}
+                  sortDirection={sortDirection}
+                  onSort={toggleSort}
+                />
 
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Today&apos;s production
-                  </th>
+                <SortHeader
+                  label="Local Workforce %"
+                  sortKey="localWorkforcePct"
+                  activeSortKey={sortKey}
+                  sortDirection={sortDirection}
+                  onSort={toggleSort}
+                />
 
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Local workforce
-                  </th>
+                <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-slate-500">
+                  Submissions Today
+                </th>
 
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Submissions today
-                  </th>
+                <SortHeader
+                  label="Compliance"
+                  sortKey="compliance"
+                  activeSortKey={sortKey}
+                  sortDirection={sortDirection}
+                  onSort={toggleSort}
+                />
 
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Compliance
-                  </th>
+                <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-slate-500">
+                  Status
+                </th>
 
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Status
-                  </th>
+                <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-slate-500">
+                  Details
+                </th>
+              </tr>
+            </thead>
 
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Details
-                  </th>
-                </tr>
-              </thead>
+            <tbody>
+              {filteredOperators.length > 0 ? (
+                filteredOperators.map((operator) => {
+                  const operatorId =
+                    operator.id ||
+                    operator.operatorId ||
+                    operator.name;
 
-              <tbody>
-                {OPERATOR_PREVIEW_ROWS.map((operator) => {
+                  const operatorName =
+                    operator.name ||
+                    operator.operatorName ||
+                    "Unnamed operator";
+
+                  const operatorBranches =
+                    Array.isArray(
+                      operator.branches
+                    )
+                      ? operator.branches
+                      : [];
+
+                  const branchCount =
+                    operator.branchCount ??
+                    operatorBranches.length;
+
                   const isExpanded =
-                    expandedOperatorId === operator.id;
+                    expandedOperatorId ===
+                    operatorId;
 
                   const requiresAttention =
                     operator.status === "partial" ||
                     operator.status === "missing";
 
                   return (
-                    <Fragment key={operator.id}>
+                    <Fragment key={operatorId}>
                       <tr
-                        className={`border-b border-slate-100 text-sm transition-colors ${
+                        className={`border-b border-slate-100 text-[13px] text-navy-900 transition-colors ${
                           requiresAttention
                             ? "bg-amber-50/40 hover:bg-amber-50/70"
-                            : "hover:bg-slate-50"
+                            : "cursor-pointer hover:bg-slate-50"
                         }`}
+                        onClick={() =>
+                          onSelectOperator(operator)
+                        }
                       >
-                        <td className="px-4 py-4">
+                        <td className="px-4 py-3">
                           <button
                             type="button"
-                            onClick={() => toggleOperator(operator.id)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleOperator(operatorId);
+                            }}
                             aria-expanded={isExpanded}
                             aria-label={
                               isExpanded
-                                ? `Collapse ${operator.name}`
-                                : `Expand ${operator.name}`
+                                ? `Collapse ${operatorName}`
+                                : `Expand ${operatorName}`
                             }
-                            className="rounded-md p-1.5 text-slate-500 transition hover:bg-slate-200 hover:text-slate-800"
+                            className="rounded p-1 transition-colors hover:bg-slate-200"
                           >
                             {isExpanded ? (
-                              <ChevronDown className="h-4 w-4" />
+                              <ChevronDown className="h-4 w-4 text-slate-500" />
                             ) : (
-                              <ChevronRight className="h-4 w-4" />
+                              <ChevronRight className="h-4 w-4 text-slate-500" />
                             )}
                           </button>
                         </td>
 
-                        <td className="px-4 py-4">
+                        <td className="px-4 py-3">
                           <div className="flex items-center gap-3">
                             <OperatorAvatar
-                              name={operator.name}
+                              name={operatorName}
                               logoUrl={operator.logoUrl}
                             />
 
-                            <div>
-                              <p className="font-semibold text-slate-900">
-                                {operator.name}
-                              </p>
-
-                              <p className="mt-0.5 text-xs text-slate-500">
-                                Operator account
-                              </p>
-                            </div>
+                            <span className="whitespace-nowrap font-medium text-navy-900">
+                              {operatorName}
+                            </span>
                           </div>
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-4 text-slate-600">
-                          {operator.branchCount} branches
+                        <td className="whitespace-nowrap px-4 py-3">
+                          {formatNumber(branchCount)}{" "}
+                          {branchCount === 1
+                            ? "branch"
+                            : "branches"}
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-4 font-medium tabular-nums text-slate-700">
-                          {operator.productionToday}
+                        <td className="whitespace-nowrap px-4 py-3 tabular-nums">
+                          {operator.productionToday !==
+                            null &&
+                          operator.productionToday !==
+                            undefined
+                            ? `${formatNumber(
+                                operator.productionToday
+                              )} bbl/day`
+                            : "—"}
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-4 tabular-nums text-slate-600">
-                          {operator.localWorkforce}
+                        <td className="whitespace-nowrap px-4 py-3 tabular-nums">
+                          {operator.localWorkforcePct !==
+                            null &&
+                          operator.localWorkforcePct !==
+                            undefined
+                            ? `${operator.localWorkforcePct}%`
+                            : "—"}
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-4 text-slate-600">
-                          {operator.submissionsToday}
+                        <td className="whitespace-nowrap px-4 py-3">
+                          <EmptyCell
+                            value={
+                              operator.submissionsToday
+                            }
+                          />
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-4 font-medium tabular-nums text-slate-700">
-                          {operator.compliance}
+                        <td className="whitespace-nowrap px-4 py-3 tabular-nums">
+                          {operator.compliance !== null &&
+                          operator.compliance !==
+                            undefined
+                            ? `${operator.compliance}%`
+                            : "—"}
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-4">
-                          <StatusBadge status={operator.status} />
+                        <td className="px-4 py-3">
+                          <StatusBadge
+                            status={operator.status}
+                          />
                         </td>
 
-                        <td className="px-4 py-4 text-right">
-                          <button
-                            type="button"
-                            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+                        <td className="px-4 py-3">
+                          <Button
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onSelectOperator(operator);
+                            }}
                           >
                             <Eye className="h-4 w-4" />
                             View
-                          </button>
+                          </Button>
                         </td>
                       </tr>
 
                       {isExpanded && (
-                        <tr className="border-b border-slate-200 bg-slate-50/70">
-                          <td colSpan={9} className="px-5 py-4">
-                            <div className="ml-10 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                        <tr className="bg-slate-50/60">
+                          <td
+                            colSpan={9}
+                            className="px-4 py-3"
+                          >
+                            <div className="ml-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
                               <div className="border-b border-slate-200 px-4 py-3">
-                                <h2 className="text-sm font-semibold text-slate-900">
+                                <p className="text-sm font-semibold text-navy-900">
                                   Branch submissions
-                                </h2>
+                                </p>
 
                                 <p className="mt-0.5 text-xs text-slate-500">
-                                  Submission details for {operator.name}.
+                                  Submission details for{" "}
+                                  {operatorName}.
                                 </p>
                               </div>
 
-                              <div className="overflow-x-auto">
-                                <table className="w-full min-w-[760px]">
-                                  <thead className="bg-slate-50">
-                                    <tr className="border-b border-slate-200">
-                                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500">
-                                        Branch
-                                      </th>
+                              {operatorBranches.length >
+                              0 ? (
+                                <Table
+                                  headers={[
+                                    "Branch",
+                                    "Region",
+                                    "Status",
+                                    "Submitted By",
+                                    "Time",
+                                    "Production (bbl/day)",
+                                  ]}
+                                  rows={
+                                    operatorBranches
+                                  }
+                                  accentKey="status"
+                                  renderRow={(branch) => (
+                                    <>
+                                      <td className="whitespace-nowrap px-4 py-2.5 font-medium text-navy-900">
+                                        <EmptyCell
+                                          value={
+                                            branch.name ||
+                                            branch.branch
+                                          }
+                                        />
+                                      </td>
 
-                                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500">
-                                        Region
-                                      </th>
+                                      <td className="whitespace-nowrap px-4 py-2.5">
+                                        <EmptyCell
+                                          value={
+                                            branch.region
+                                          }
+                                        />
+                                      </td>
 
-                                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500">
-                                        Status
-                                      </th>
+                                      <td className="px-4 py-2.5">
+                                        <StatusBadge
+                                          status={
+                                            branch.status
+                                          }
+                                        />
+                                      </td>
 
-                                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500">
-                                        Submitted by
-                                      </th>
+                                      <td className="whitespace-nowrap px-4 py-2.5">
+                                        <EmptyCell
+                                          value={
+                                            branch.submittedBy
+                                          }
+                                        />
+                                      </td>
 
-                                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500">
-                                        Time
-                                      </th>
+                                      <td className="whitespace-nowrap px-4 py-2.5">
+                                        <EmptyCell
+                                          value={
+                                            branch.submissionTime ||
+                                            branch.time
+                                          }
+                                        />
+                                      </td>
 
-                                      <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">
-                                        Production
-                                      </th>
-                                    </tr>
-                                  </thead>
-
-                                  <tbody>
-                                    {operator.branches.map((branch) => (
-                                      <tr
-                                        key={branch.id}
-                                        className="border-b border-slate-100 text-sm last:border-0"
-                                      >
-                                        <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-800">
-                                          {branch.name}
-                                        </td>
-
-                                        <td className="whitespace-nowrap px-4 py-3 text-slate-600">
-                                          {branch.region}
-                                        </td>
-
-                                        <td className="whitespace-nowrap px-4 py-3">
-                                          <StatusBadge
-                                            status={branch.status}
-                                          />
-                                        </td>
-
-                                        <td className="whitespace-nowrap px-4 py-3 text-slate-600">
-                                          <EmptyCell
-                                            value={branch.submittedBy}
-                                          />
-                                        </td>
-
-                                        <td className="whitespace-nowrap px-4 py-3 text-slate-600">
-                                          <EmptyCell
-                                            value={branch.submissionTime}
-                                          />
-                                        </td>
-
-                                        <td className="whitespace-nowrap px-4 py-3 text-right font-medium tabular-nums text-slate-700">
-                                          <EmptyCell
-                                            value={branch.production}
-                                            suffix=" bbl/day"
-                                          />
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
+                                      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">
+                                        <EmptyCell
+                                          value={
+                                            branch.production !==
+                                              null &&
+                                            branch.production !==
+                                              undefined
+                                              ? formatNumber(
+                                                  branch.production
+                                                )
+                                              : null
+                                          }
+                                        />
+                                      </td>
+                                    </>
+                                  )}
+                                />
+                              ) : (
+                                <div className="px-4 py-10 text-center">
+                                  <p className="text-sm font-medium text-slate-500">
+                                    No branch records available
+                                  </p>
+                                </div>
+                              )}
                             </div>
                           </td>
                         </tr>
                       )}
                     </Fragment>
                   );
-                })}
-              </tbody>
-            </table>
-          </div>
+                })
+              ) : (
+                <tr>
+                  <td
+                    colSpan={9}
+                    className="px-4 py-14 text-center"
+                  >
+                    <p className="text-sm font-medium text-slate-500">
+                      No operators found
+                    </p>
+
+                    <p className="mt-1 text-xs text-slate-400">
+                      Operator records matching the selected
+                      filters will appear here.
+                    </p>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
-      </div>
-    </section>
+      </Card>
+    </div>
   );
 };
 
