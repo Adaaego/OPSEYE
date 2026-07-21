@@ -19,7 +19,7 @@ import {
   doResetPassword,
   doSignOut,
 } from "../../firebase/authMethods";
-import { createUserDocument,getUserDocument, updateUserDocument } from "../../lib/functions";
+import { createUserDocument,getUserDocument, updateUserDocument, getOrganizationDocument, } from "../../lib/functions";
 import { useNavigate } from "react-router-dom";
 
 
@@ -228,27 +228,51 @@ export default function LandingPage() {
       }
   
       setPassword("");
-  
       if (!userData.onboardingCompleted) {
         navigate("/onboarding", {
           replace: true,
         });
-  
+      
         return;
       }
-  
-      const sector = String(userData.sector || "")
+      
+      if (!userData.organizationId) {
+        setError(
+          "Your account is not linked to an organization."
+        );
+      
+        return;
+      }
+      
+      // Load the organization because sector metadata is stored
+      // there rather than being duplicated in the user document.
+      const organizationData =
+        await getOrganizationDocument(
+          userData.organizationId
+        );
+      
+      if (!organizationData) {
+        setError(
+          "Your organization record could not be found."
+        );
+      
+        return;
+      }
+      
+      const sector = String(
+        organizationData.sector || ""
+      )
         .trim()
         .toLowerCase();
-  
+      
       if (sector === "energy") {
         navigate("/energy-dashboard", {
           replace: true,
         });
-  
+      
         return;
       }
-  
+      
       navigate("/coming-soon", {
         replace: true,
       });

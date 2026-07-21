@@ -72,19 +72,6 @@ const SideBar = ({
   const profile =
     currentUser?.profile ?? currentUser ?? {};
 
-  const organizationName =
-    profile.orgType === "ministry"
-      ? profile.ministry
-      : profile.orgName ||
-        profile.organizationName ||
-        "Organization";
-
-  const organizationDescription =
-    profile.department ||
-    profile.industrySegment ||
-    profile.sector ||
-    "";
-
   const userName =
     profile.fullName ||
     currentUser?.displayName ||
@@ -123,30 +110,23 @@ const SideBar = ({
   }) => {
     return (
       <>
+        {/* OPSEYE branding */}
         <div
           className={`border-b border-navy-800 py-5 ${
             isCollapsed ? "px-2" : "px-4"
           }`}
         >
           <div
-            className={`flex items-center gap-2.5 ${
+            className={`flex items-center gap-3 ${
               isCollapsed ? "justify-center" : ""
             }`}
           >
             <LogoMark />
 
             {!isCollapsed && (
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-white">
-                  {organizationName}
-                </p>
-
-                {organizationDescription && (
-                  <p className="truncate text-[11px] text-navy-400">
-                    {organizationDescription}
-                  </p>
-                )}
-              </div>
+              <span className="text-lg font-bold tracking-wide text-white">
+                OPSEYE
+              </span>
             )}
           </div>
         </div>
@@ -305,23 +285,12 @@ const SideBar = ({
       </aside>
 
       <header className="fixed inset-x-0 top-0 z-40 flex items-center justify-between border-b border-navy-800 bg-navy-950 px-4 py-3 lg:hidden">
-        <div className="flex min-w-0 items-center gap-2.5">
+        <div className="flex items-center gap-3">
           <LogoMark />
 
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-white">
-              {organizationName}
-            </p>
-
-            <p className="truncate text-[11px] text-navy-400">
-              {
-                NAV_ITEMS.find(
-                  (item) =>
-                    item.id === activeTab
-                )?.label
-              }
-            </p>
-          </div>
+          <span className="text-lg font-bold tracking-wide text-white">
+            OPSEYE
+          </span>
         </div>
 
         <button

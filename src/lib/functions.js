@@ -455,3 +455,34 @@ export const submitOnboarding = async (
     sector,
   };
 };
+
+export const getOrganizationDocument = async (
+  organizationId
+) => {
+  if (!organizationId) {
+    throw new Error(
+      "An organization ID is required."
+    );
+  }
+
+  // The organization ID is also used as the Firestore
+  // document ID, which makes the organization easy to find.
+  const organizationReference = doc(
+    db,
+    ORGANIZATIONS_COLLECTION,
+    organizationId
+  );
+
+  const organizationSnapshot = await getDoc(
+    organizationReference
+  );
+
+  if (!organizationSnapshot.exists()) {
+    return null;
+  }
+
+  return {
+    id: organizationSnapshot.id,
+    ...organizationSnapshot.data(),
+  };
+};

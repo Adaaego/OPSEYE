@@ -4,7 +4,7 @@ const ComingSoonPage = () =>{
     return(
        <div>
         <Logo/>
-        <hi>Coming soon...</hi>
+        <h1>Coming soon...</h1>
        </div>
     )
 }
