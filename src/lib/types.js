@@ -1,3 +1,6 @@
+import { COMPANIES, getCompanyById } from "./companies";
+
+
 export const ORGANIZATION_TYPES = {
   MINISTRY: "ministry",
   COMPANY: "company",
@@ -18,8 +21,9 @@ export const SECTORS = [
 ];
 
 export const ENERGY_INDUSTRY_SEGMENTS = [
-  "Oil and Gas",
-  "Petroleum Distribution",
+  // "Upstream",   // Exploration and production (e.g., Tullow, Eni)
+  // "Midstream",  // Storage and bulk transit (e.g., BOST, TOR)
+  "Downstream", // Retail marketing and distribution (e.g., GOIL, Shell, Puma, Star Oil)
 ];
 
 export const COUNTRIES = [
@@ -92,4 +96,30 @@ export const initialAppState = {
   isAuthenticated: false,
   userEmail: null,
   onboarding: createOnboardingData(),
+};
+
+const handleCompanyChange = (event) => {
+  const selectedCompanyId = event.target.value;
+
+  setCompanyId(selectedCompanyId);
+
+  // Load all related company information using the selected ID.
+  const selectedCompany = getCompanyById(
+    selectedCompanyId
+  );
+
+  if (!selectedCompany) {
+    setOrganizationName("");
+    setSector("");
+    setIndustrySegment("");
+    setCompanyLogo("");
+    return;
+  }
+
+  setOrganizationName(selectedCompany.name);
+  setSector(selectedCompany.sector);
+  setIndustrySegment(
+    selectedCompany.industrySegment
+  );
+  setCompanyLogo(selectedCompany.logo);
 };
