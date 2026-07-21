@@ -1,11 +1,16 @@
 import { useState } from "react";
 import {
-  ORGANIZATION_TYPES,
+  COUNTRIES,
+  ENERGY_INDUSTRY_SEGMENTS,
   MINISTRIES,
   MINISTRY_DEPARTMENTS,
+  ORGANIZATION_TYPES,
   SECTORS,
-  COUNTRIES,
 } from "../../../lib/types";
+import {
+  COMPANIES,
+  getCompanyById,
+} from "../../../lib/companies";
 
 export function OnboardingStep2({
   organizationType,
@@ -39,9 +44,62 @@ export function OnboardingStep2({
     companyDetails?.industrySegment || ""
   );
 
-  const [organizationName, setOrganizationName] = useState(
-    companyDetails?.organizationName || ""
+  const [companyId, setCompanyId] = useState(
+    companyDetails?.companyId || ""
   );
+
+  const [organizationName, setOrganizationName] =
+    useState(
+      companyDetails?.organizationName || ""
+    );
+
+  const [companyLogo, setCompanyLogo] = useState(
+    companyDetails?.companyLogo || ""
+  );
+
+  // Only show companies that belong to the selected industry segment.
+  const availableCompanies = industrySegment
+    ? COMPANIES.filter(
+        (company) =>
+          company.industrySegment === industrySegment
+      )
+    : [];
+
+  const handleIndustrySegmentChange = (event) => {
+    const selectedSegment = event.target.value;
+
+    setIndustrySegment(selectedSegment);
+
+    // Reset the selected company when the industry segment changes.
+    // This prevents a company from being saved under the wrong segment.
+    setCompanyId("");
+    setOrganizationName("");
+    setCompanyLogo("");
+  };
+
+  const handleCompanyChange = (event) => {
+    const selectedCompanyId = event.target.value;
+
+    setCompanyId(selectedCompanyId);
+
+    // Load the company metadata linked to the selected company.
+    const selectedCompany = getCompanyById(
+      selectedCompanyId
+    );
+
+    if (!selectedCompany) {
+      setOrganizationName("");
+      setCompanyLogo("");
+      return;
+    }
+
+    setOrganizationName(selectedCompany.name);
+    setSector(selectedCompany.sector);
+    setIndustrySegment(
+      selectedCompany.industrySegment
+    );
+    setCompanyLogo(selectedCompany.logo);
+  };
 
   const handleContinue = () => {
     if (isMinistry) {
@@ -53,19 +111,18 @@ export function OnboardingStep2({
       onSave({
         ministryName,
         department,
+        sector: "Energy",
         country,
       });
 
       return;
     }
 
-    const trimmedIndustrySegment = industrySegment.trim();
-    const trimmedOrganizationName = organizationName.trim();
-
     if (
       !sector ||
-      !trimmedIndustrySegment ||
-      !trimmedOrganizationName ||
+      !industrySegment ||
+      !companyId ||
+      !organizationName ||
       !country
     ) {
       alert("Please fill in all fields.");
@@ -73,9 +130,11 @@ export function OnboardingStep2({
     }
 
     onSave({
+      companyId,
+      organizationName,
       sector,
-      industrySegment: trimmedIndustrySegment,
-      organizationName: trimmedOrganizationName,
+      industrySegment,
+      companyLogo,
       country,
     });
   };
@@ -113,10 +172,15 @@ export function OnboardingStep2({
                 }
                 className="w-full rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm text-blue-900 focus:border-blue-900/60 focus:outline-none focus:ring-1 focus:ring-blue-900/30"
               >
-                <option value="">Select a ministry</option>
+                <option value="">
+                  Select a ministry
+                </option>
 
                 {MINISTRIES.map((ministry) => (
-                  <option key={ministry} value={ministry}>
+                  <option
+                    key={ministry}
+                    value={ministry}
+                  >
                     {ministry}
                   </option>
                 ))}
@@ -139,7 +203,9 @@ export function OnboardingStep2({
                 }
                 className="w-full rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm text-blue-900 focus:border-blue-900/60 focus:outline-none focus:ring-1 focus:ring-blue-900/30"
               >
-                <option value="">Select a department</option>
+                <option value="">
+                  Select a department
+                </option>
 
                 {MINISTRY_DEPARTMENTS.map(
                   (departmentOption) => (
@@ -172,7 +238,9 @@ export function OnboardingStep2({
                 }
                 className="w-full rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm text-blue-900 focus:border-blue-900/60 focus:outline-none focus:ring-1 focus:ring-blue-900/30"
               >
-                <option value="">Select a sector</option>
+                <option value="">
+                  Select a sector
+                </option>
 
                 {SECTORS.map((sectorOption) => (
                   <option
@@ -193,37 +261,86 @@ export function OnboardingStep2({
                 Industry Segment
               </label>
 
-              <input
+              <select
                 id="industrySegment"
-                type="text"
                 value={industrySegment}
-                onChange={(event) =>
-                  setIndustrySegment(event.target.value)
+                onChange={
+                  handleIndustrySegmentChange
                 }
-                placeholder="e.g., Oil and Gas"
-                className="w-full rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm text-blue-900 placeholder:text-gray-400 focus:border-blue-900/60 focus:outline-none focus:ring-1 focus:ring-blue-900/30"
-              />
+                className="w-full rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm text-blue-900 focus:border-blue-900/60 focus:outline-none focus:ring-1 focus:ring-blue-900/30"
+              >
+                <option value="">
+                  Select an industry segment
+                </option>
+
+                {ENERGY_INDUSTRY_SEGMENTS.map(
+                  (segment) => (
+                    <option
+                      key={segment}
+                      value={segment}
+                    >
+                      {segment}
+                    </option>
+                  )
+                )}
+              </select>
             </div>
 
             <div>
               <label
-                htmlFor="organizationName"
+                htmlFor="companyId"
                 className="mb-2 block text-xs font-medium text-blue-700"
               >
-                Organization Name
+                Company
               </label>
 
-              <input
-                id="organizationName"
-                type="text"
-                value={organizationName}
-                onChange={(event) =>
-                  setOrganizationName(event.target.value)
-                }
-                placeholder="e.g., Shell"
-                className="w-full rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm text-blue-900 placeholder:text-gray-400 focus:border-blue-900/60 focus:outline-none focus:ring-1 focus:ring-blue-900/30"
-              />
+              <select
+                id="companyId"
+                value={companyId}
+                onChange={handleCompanyChange}
+                disabled={!industrySegment}
+                className="w-full rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm text-blue-900 focus:border-blue-900/60 focus:outline-none focus:ring-1 focus:ring-blue-900/30 disabled:cursor-not-allowed disabled:bg-blue-50 disabled:text-blue-400"
+              >
+                <option value="">
+                  {industrySegment
+                    ? "Select a company"
+                    : "Select an industry segment first"}
+                </option>
+
+                {availableCompanies.map(
+                  (company) => (
+                    <option
+                      key={company.id}
+                      value={company.id}
+                    >
+                      {company.name}
+                    </option>
+                  )
+                )}
+              </select>
             </div>
+
+            {companyId && (
+              <div className="flex items-center gap-4 rounded-lg border border-blue-100 bg-blue-50 p-4">
+                {companyLogo && (
+                  <img
+                    src={companyLogo}
+                    alt={`${organizationName} logo`}
+                    className="h-12 w-12 object-contain"
+                  />
+                )}
+
+                <div>
+                  <p className="font-semibold text-blue-900">
+                    {organizationName}
+                  </p>
+
+                  <p className="text-xs text-blue-600">
+                    {sector} · {industrySegment}
+                  </p>
+                </div>
+              </div>
+            )}
           </>
         )}
 
@@ -243,7 +360,9 @@ export function OnboardingStep2({
             }
             className="w-full rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm text-blue-900 focus:border-blue-900/60 focus:outline-none focus:ring-1 focus:ring-blue-900/30"
           >
-            <option value="">Select a country</option>
+            <option value="">
+              Select a country
+            </option>
 
             {COUNTRIES.map((countryOption) => (
               <option
