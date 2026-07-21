@@ -3,42 +3,32 @@ import {
   ArrowLeft,
   Award,
   BarChart3,
-  Factory,
   MapPin,
-  Users,
 } from "lucide-react";
 import { CHART_COLORS } from "../../lib/util";
-import { STATUS_STYLES } from "../../lib/status";
+import {
+  Card,
+  KpiCard,
+  PageHeader,
+  SectionHeader,
+  StatusBadge,
+  Table,
+  EmptyCell,
+} from "../ui/interface";
+import { Button } from "../ui/Button";
 
-// Supports CHART_COLORS whether it is exported as an array or an object.
+// Supports CHART_COLORS whether it is stored as an array or an object.
 const COLOR_PALETTE = Array.isArray(CHART_COLORS)
   ? CHART_COLORS
   : Object.values(CHART_COLORS ?? {});
 
+// Returns a colour based on the region's position in the ranking.
 const getChartColor = (index) => {
   if (COLOR_PALETTE.length === 0) {
     return "#1e293b";
   }
 
   return COLOR_PALETTE[index % COLOR_PALETTE.length];
-};
-
-const Card = ({ children, className = "" }) => {
-  return (
-    <div
-      className={`rounded-xl border border-slate-200 bg-white shadow-sm ${className}`}
-    >
-      {children}
-    </div>
-  );
-};
-
-const SectionHeader = ({ children }) => {
-  return (
-    <h2 className="mb-3 text-base font-semibold text-slate-900">
-      {children}
-    </h2>
-  );
 };
 
 const EmptyState = ({ message }) => {
@@ -57,7 +47,7 @@ const EmptyState = ({ message }) => {
   );
 };
 
-// Displays an em dash until a value is available.
+// Displays a placeholder when a value is unavailable.
 const formatNumber = (value) => {
   if (
     value === null ||
@@ -100,7 +90,7 @@ const formatUpdatedAt = (updatedAt) => {
   return `Data as of ${time} · ${day}`;
 };
 
-// Keeps percentage-based bar widths between zero and one hundred.
+// Prevents progress-bar widths from going below zero or above one hundred.
 const clampPercentage = (value) => {
   const percentage = Number(value);
 
@@ -129,55 +119,12 @@ const getComplianceClassName = (value) => {
   return "text-red-600";
 };
 
-const StatusBadge = ({ status }) => {
-  // Uses a neutral style when an unknown status is received.
-  const statusDetails = STATUS_STYLES[status] ?? {
-    label: status || "Not available",
-    className:
-      "bg-slate-100 text-slate-600 ring-slate-500/20",
-  };
-
-  return (
-    <span
-      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${statusDetails.className}`}
-    >
-      {statusDetails.label}
-    </span>
-  );
-};
-
-const KpiCard = ({ label, value, caption, icon: Icon }) => {
-  return (
-    <Card className="p-5">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium text-slate-500">
-            {label}
-          </p>
-
-          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
-            {value}
-          </p>
-        </div>
-
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
-          <Icon className="h-5 w-5" />
-        </div>
-      </div>
-
-      <p className="mt-3 min-h-5 text-xs text-slate-400">
-        {caption || "No data available"}
-      </p>
-    </Card>
-  );
-};
-
 const Regions = ({
   regions = [],
   updatedAt = null,
   onSelectRegion = () => {},
 }) => {
-  // Creates a sorted copy without changing the original Firestore records.
+  // Sorts a copy of the records without modifying the original Firestore data.
   const rankedRegions = useMemo(() => {
     return [...regions].sort(
       (firstRegion, secondRegion) =>
@@ -187,116 +134,113 @@ const Regions = ({
   }, [regions]);
 
   return (
-    <section className="min-h-full bg-slate-50 p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto max-w-7xl">
-        <header className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-              Regions
-            </h1>
+    <div>
+      <PageHeader
+        title="Regions"
+        timestamp={formatUpdatedAt(updatedAt)}
+      />
 
-            <p className="mt-1 text-sm text-slate-500">
-              Compare regional production, compliance and
-              operator activity.
-            </p>
-          </div>
+      <div className="mb-6">
+        <SectionHeader>
+          Regional Output Ranking
+        </SectionHeader>
 
-          <p className="text-xs font-medium text-slate-400">
-            {formatUpdatedAt(updatedAt)}
-          </p>
-        </header>
+        <Card className="p-5">
+          {rankedRegions.length > 0 ? (
+            <div className="space-y-3">
+              {rankedRegions.map((region, index) => {
+                const regionName =
+                  region.name ||
+                  region.region ||
+                  "Unnamed region";
 
-        <div className="mb-8">
-          <SectionHeader>
-            Regional Output Ranking
-          </SectionHeader>
-
-          <Card className="p-5">
-            {rankedRegions.length > 0 ? (
-              <div className="space-y-4">
-                {rankedRegions.map((region, index) => {
-                  const regionName =
-                    region.name || region.region || "Unnamed region";
-
-                  const outputPercentage = clampPercentage(
+                const outputPercentage =
+                  clampPercentage(
                     region.percentageOfNational ??
                       region.pctOfNational
                   );
 
-                  return (
-                    <div
-                      key={region.id || regionName}
-                      className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4"
-                    >
-                      <span className="w-5 shrink-0 font-mono text-sm text-slate-400">
-                        {index + 1}.
-                      </span>
+                return (
+                  <div
+                    key={region.id || regionName}
+                    className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4"
+                  >
+                    <span className="w-5 shrink-0 font-mono text-sm text-slate-400">
+                      {index + 1}.
+                    </span>
 
-                      <span className="w-40 shrink-0 text-sm font-medium text-slate-900">
-                        {regionName}
-                      </span>
+                    <span className="w-40 shrink-0 text-sm font-medium text-navy-900">
+                      {regionName}
+                    </span>
 
-                      <div className="h-7 flex-1 overflow-hidden rounded bg-slate-100">
-                        <div
-                          className="flex h-full min-w-fit items-center justify-end rounded pr-2 text-[10px] font-medium text-white"
-                          style={{
-                            width: `${outputPercentage}%`,
-                            backgroundColor:
-                              getChartColor(index),
-                          }}
-                        >
-                          {outputPercentage > 0
-                            ? `${outputPercentage}%`
-                            : ""}
-                        </div>
+                    <div className="h-6 flex-1 overflow-hidden rounded bg-slate-100">
+                      <div
+                        className="flex h-full items-center justify-end rounded pr-2 text-[10px] font-medium text-white"
+                        style={{
+                          width: `${outputPercentage}%`,
+                          backgroundColor:
+                            getChartColor(index),
+                        }}
+                      >
+                        {outputPercentage > 0
+                          ? `${outputPercentage}%`
+                          : ""}
                       </div>
-
-                      <span className="w-36 shrink-0 text-right text-sm tabular-nums text-slate-500">
-                        {region.productionToday !== null &&
-                        region.productionToday !== undefined
-                          ? `${formatNumber(
-                              region.productionToday
-                            )} bbl/day`
-                          : "—"}
-                      </span>
                     </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <EmptyState message="Regional rankings will appear here" />
-            )}
-          </Card>
-        </div>
 
-        {rankedRegions.length > 0 ? (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {rankedRegions.map((region, index) => {
-              const regionName =
-                region.name || region.region || "Unnamed region";
+                    <span className="w-36 shrink-0 text-right text-sm tabular-nums text-slate-500">
+                      {region.productionToday !== null &&
+                      region.productionToday !== undefined
+                        ? `${formatNumber(
+                            region.productionToday
+                          )} bbl/day`
+                        : "—"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <EmptyState message="Regional rankings will appear here" />
+          )}
+        </Card>
+      </div>
 
-              const outputPercentage =
-                region.percentageOfNational ??
-                region.pctOfNational;
+      {rankedRegions.length > 0 ? (
+        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+          {rankedRegions.map((region, index) => {
+            const regionName =
+              region.name ||
+              region.region ||
+              "Unnamed region";
 
-              const operatorCount = Array.isArray(
-                region.operators
-              )
-                ? region.operators.length
-                : region.operatorCount;
+            const outputPercentage =
+              region.percentageOfNational ??
+              region.pctOfNational;
 
-              const isTopPerforming =
-                region.isTopPerforming ?? index === 0;
+            const operatorCount = Array.isArray(
+              region.operators
+            )
+              ? region.operators.length
+              : region.operatorCount;
 
-              return (
+            const isTopPerforming =
+              region.isTopPerforming ?? index === 0;
+
+            return (
+              <Card
+                key={region.id || regionName}
+                className="relative overflow-hidden p-0 transition-colors hover:border-navy-300"
+              >
                 <button
-                  key={region.id || regionName}
                   type="button"
-                  onClick={() => onSelectRegion(region)}
-                  className="relative rounded-xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-slate-400 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-slate-300"
+                  onClick={() =>
+                    onSelectRegion(region)
+                  }
+                  className="h-full w-full p-5 text-left"
                 >
                   {isTopPerforming && (
-                    <span className="absolute right-4 top-4 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-700">
+                    <span className="absolute right-4 top-4 inline-flex items-center gap-1 rounded-full border border-navy-200 bg-navy-50 px-2 py-0.5 text-[11px] font-medium text-navy-700">
                       <Award className="h-3 w-3" />
                       Top performing
                     </span>
@@ -307,18 +251,18 @@ const Regions = ({
                       <MapPin className="h-5 w-5" />
                     </div>
 
-                    <h3 className="text-base font-semibold text-slate-900">
+                    <h3 className="text-base font-semibold text-navy-950">
                       {regionName}
                     </h3>
                   </div>
 
-                  <div className="mt-5 space-y-3">
+                  <div className="mt-4 space-y-2">
                     <div className="flex items-baseline justify-between gap-4">
                       <span className="text-xs text-slate-500">
                         Production today
                       </span>
 
-                      <span className="text-sm font-medium tabular-nums text-slate-900">
+                      <span className="text-sm font-medium tabular-nums text-navy-900">
                         {region.productionToday !== null &&
                         region.productionToday !== undefined
                           ? `${formatNumber(
@@ -333,7 +277,7 @@ const Regions = ({
                         Share of national output
                       </span>
 
-                      <span className="text-sm font-medium tabular-nums text-slate-900">
+                      <span className="text-sm font-medium tabular-nums text-navy-900">
                         {outputPercentage !== null &&
                         outputPercentage !== undefined
                           ? `${outputPercentage}%`
@@ -363,26 +307,26 @@ const Regions = ({
                         Operators active
                       </span>
 
-                      <span className="text-sm font-medium text-slate-900">
+                      <span className="text-sm font-medium text-navy-900">
                         {formatNumber(operatorCount)}
                       </span>
                     </div>
                   </div>
 
-                  <p className="mt-5 text-xs font-semibold text-slate-600">
+                  <p className="mt-4 text-xs font-medium text-navy-600">
                     View details →
                   </p>
                 </button>
-              );
-            })}
-          </div>
-        ) : (
-          <Card className="p-5">
-            <EmptyState message="Regional information will appear here" />
-          </Card>
-        )}
-      </div>
-    </section>
+              </Card>
+            );
+          })}
+        </div>
+      ) : (
+        <Card className="p-5">
+          <EmptyState message="Regional information will appear here" />
+        </Card>
+      )}
+    </div>
   );
 };
 
@@ -395,49 +339,63 @@ export const RegionDetail = ({
 }) => {
   if (!region) {
     return (
-      <section className="min-h-full bg-slate-50 p-4 sm:p-6 lg:p-8">
-        <div className="mx-auto flex max-w-7xl flex-col items-center justify-center py-20">
-          <MapPin className="mb-3 h-8 w-8 text-slate-400" />
+      <div className="flex flex-col items-center justify-center py-20">
+        <MapPin className="mb-3 h-8 w-8 text-slate-400" />
 
-          <p className="text-sm font-medium text-slate-600">
-            Region not found.
-          </p>
+        <p className="mb-4 text-sm text-slate-500">
+          Region not found.
+        </p>
 
-          <button
-            type="button"
-            onClick={onBack}
-            className="mt-4 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to Regions
-          </button>
-        </div>
-      </section>
+        <Button onClick={onBack}>
+          Back to Regions
+        </Button>
+      </div>
     );
   }
 
   const regionName =
-    region.name || region.region || "Unnamed region";
+    region.name ||
+    region.region ||
+    "Unnamed region";
 
-  const regionOperators = Array.isArray(region.operators)
+  const regionOperators = Array.isArray(
+    region.operators
+  )
     ? region.operators
     : [];
 
-  const localWorkforce = Number(workforce.local) || 0;
-  const expatWorkforce = Number(workforce.expat) || 0;
+  const operatorNames = regionOperators
+    .map((operator) => {
+      if (typeof operator === "string") {
+        return operator;
+      }
+
+      return operator?.name || operator?.operatorName;
+    })
+    .filter(Boolean);
+
+  const localWorkforce =
+    Number(workforce.local) || 0;
+
+  const expatWorkforce =
+    Number(workforce.expat) || 0;
+
   const totalWorkforce =
     localWorkforce + expatWorkforce;
 
-  // Uses a provided percentage first, then calculates one from the totals.
+  // Uses a stored percentage first and calculates one when only totals exist.
   const localWorkforcePercentage =
     workforce.localPercentage !== null &&
     workforce.localPercentage !== undefined
-      ? clampPercentage(workforce.localPercentage)
+      ? clampPercentage(
+          workforce.localPercentage
+        )
       : workforce.localPct !== null &&
           workforce.localPct !== undefined
         ? clampPercentage(workforce.localPct)
         : totalWorkforce > 0
-          ? (localWorkforce / totalWorkforce) * 100
+          ? (localWorkforce / totalWorkforce) *
+            100
           : 0;
 
   const expatWorkforcePercentage =
@@ -445,256 +403,209 @@ export const RegionDetail = ({
       ? 100 - localWorkforcePercentage
       : 0;
 
-  const hasWorkforceData = totalWorkforce > 0;
+  const hasWorkforceData =
+    totalWorkforce > 0;
 
   return (
-    <section className="min-h-full bg-slate-50 p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto max-w-7xl">
-        <button
-          type="button"
-          onClick={onBack}
-          className="mb-4 flex items-center gap-2 text-sm font-medium text-slate-500 transition hover:text-slate-900"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to Regions
-        </button>
+    <div>
+      <button
+        type="button"
+        onClick={onBack}
+        className="mb-4 flex items-center gap-2 text-sm text-slate-500 transition-colors hover:text-navy-900"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Back to Regions
+      </button>
 
-        <header className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-              {regionName}
-            </h1>
+      <PageHeader
+        title={regionName}
+        timestamp={formatUpdatedAt(updatedAt)}
+      />
 
-            <p className="mt-1 text-sm text-slate-500">
-              Review regional production, reporting and
-              workforce information.
-            </p>
+      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <KpiCard
+          label="Production Today"
+          value={
+            region.productionToday !== null &&
+            region.productionToday !== undefined
+              ? `${formatNumber(
+                  region.productionToday
+                )} bbl/day`
+              : "—"
+          }
+          caption={region.productionCaption}
+        />
+
+        <KpiCard
+          label="Compliance Rate"
+          value={
+            region.complianceRate !== null &&
+            region.complianceRate !== undefined
+              ? `${region.complianceRate}%`
+              : "—"
+          }
+          caption={region.complianceCaption}
+        />
+
+        <KpiCard
+          label="Operators Active"
+          value={
+            region.operatorCount !== null &&
+            region.operatorCount !== undefined
+              ? formatNumber(region.operatorCount)
+              : formatNumber(regionOperators.length)
+          }
+          caption={
+            operatorNames.length > 0
+              ? operatorNames.join(", ")
+              : region.operatorsCaption
+          }
+        />
+      </div>
+
+      <div className="mb-8">
+        <SectionHeader>
+          Operator Reporting Status
+        </SectionHeader>
+
+        <Card className="overflow-hidden">
+          <Table
+            headers={[
+              "Operator",
+              "Status",
+              "Submitted By",
+              "Time",
+            ]}
+            rows={submissions}
+            accentKey="status"
+            renderRow={(submission) => (
+              <>
+                <td className="whitespace-nowrap px-4 py-3 font-medium text-navy-900">
+                  <EmptyCell
+                    value={submission.operator}
+                  />
+                </td>
+
+                <td className="px-4 py-3">
+                  <StatusBadge
+                    status={submission.status}
+                  />
+                </td>
+
+                <td className="whitespace-nowrap px-4 py-3">
+                  <EmptyCell
+                    value={submission.submittedBy}
+                  />
+                </td>
+
+                <td className="whitespace-nowrap px-4 py-3">
+                  <EmptyCell
+                    value={
+                      submission.submissionTime ||
+                      submission.time
+                    }
+                  />
+                </td>
+              </>
+            )}
+          />
+        </Card>
+      </div>
+
+      <div>
+        <SectionHeader>Workforce</SectionHeader>
+
+        <Card className="p-5">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
+            <div>
+              <p className="text-xs text-slate-500">
+                Local
+              </p>
+
+              <p className="mt-1 text-2xl font-medium tabular-nums text-navy-950">
+                {hasWorkforceData
+                  ? formatNumber(localWorkforce)
+                  : "—"}
+              </p>
+            </div>
+
+            <div>
+              <p className="text-xs text-slate-500">
+                Expat
+              </p>
+
+              <p className="mt-1 text-2xl font-medium tabular-nums text-navy-950">
+                {hasWorkforceData
+                  ? formatNumber(expatWorkforce)
+                  : "—"}
+              </p>
+            </div>
+
+            <div>
+              <p className="text-xs text-slate-500">
+                Local %
+              </p>
+
+              <p className="mt-1 text-2xl font-medium tabular-nums text-navy-950">
+                {hasWorkforceData
+                  ? `${localWorkforcePercentage.toFixed(
+                      1
+                    )}%`
+                  : "—"}
+              </p>
+            </div>
           </div>
 
-          <p className="text-xs font-medium text-slate-400">
-            {formatUpdatedAt(updatedAt)}
-          </p>
-        </header>
-
-        <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <KpiCard
-            label="Production Today"
-            value={
-              region.productionToday !== null &&
-              region.productionToday !== undefined
-                ? `${formatNumber(
-                    region.productionToday
-                  )} bbl/day`
-                : "—"
-            }
-            caption={region.productionCaption}
-            icon={Factory}
-          />
-
-          <KpiCard
-            label="Compliance Rate"
-            value={
-              region.complianceRate !== null &&
-              region.complianceRate !== undefined
-                ? `${region.complianceRate}%`
-                : "—"
-            }
-            caption={region.complianceCaption}
-            icon={Award}
-          />
-
-          <KpiCard
-            label="Operators Active"
-            value={
-              region.operatorCount !== null &&
-              region.operatorCount !== undefined
-                ? formatNumber(region.operatorCount)
-                : formatNumber(regionOperators.length)
-            }
-            caption={
-              regionOperators.length > 0
-                ? regionOperators
-                    .map(
-                      (operator) =>
-                        operator.name || operator
-                    )
-                    .join(", ")
-                : region.operatorsCaption
-            }
-            icon={Users}
-          />
-        </div>
-
-        <div className="mb-8">
-          <SectionHeader>
-            Operator Reporting Status
-          </SectionHeader>
-
-          <Card className="overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px]">
-                <thead className="bg-slate-50">
-                  <tr className="border-b border-slate-200">
-                    {[
-                      "Operator",
-                      "Status",
-                      "Submitted by",
-                      "Time",
-                    ].map((heading) => (
-                      <th
-                        key={heading}
-                        className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
-                      >
-                        {heading}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {submissions.length > 0 ? (
-                    submissions.map((submission) => (
-                      <tr
-                        key={
-                          submission.id ||
-                          submission.operatorId ||
-                          submission.operator
-                        }
-                        className="border-b border-slate-100 text-sm last:border-0"
-                      >
-                        <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">
-                          {submission.operator || "—"}
-                        </td>
-
-                        <td className="whitespace-nowrap px-4 py-3">
-                          <StatusBadge
-                            status={submission.status}
-                          />
-                        </td>
-
-                        <td className="whitespace-nowrap px-4 py-3 text-slate-600">
-                          {submission.submittedBy || "—"}
-                        </td>
-
-                        <td className="whitespace-nowrap px-4 py-3 text-slate-600">
-                          {submission.submissionTime ||
-                            submission.time ||
-                            "—"}
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td
-                        colSpan={4}
-                        className="px-4 py-12 text-center"
-                      >
-                        <p className="text-sm font-medium text-slate-500">
-                          No submission data available
-                        </p>
-
-                        <p className="mt-1 text-xs text-slate-400">
-                          Operator submissions will appear
-                          here when data becomes available.
-                        </p>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        </div>
-
-        <div>
-          <SectionHeader>Workforce</SectionHeader>
-
-          <Card className="p-5">
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
-              <div>
-                <p className="text-xs text-slate-500">
-                  Local
-                </p>
-
-                <p className="mt-1 text-2xl font-semibold tabular-nums text-slate-900">
-                  {hasWorkforceData
-                    ? formatNumber(localWorkforce)
-                    : "—"}
-                </p>
-              </div>
-
-              <div>
-                <p className="text-xs text-slate-500">
-                  Expat
-                </p>
-
-                <p className="mt-1 text-2xl font-semibold tabular-nums text-slate-900">
-                  {hasWorkforceData
-                    ? formatNumber(expatWorkforce)
-                    : "—"}
-                </p>
-              </div>
-
-              <div>
-                <p className="text-xs text-slate-500">
-                  Local %
-                </p>
-
-                <p className="mt-1 text-2xl font-semibold tabular-nums text-slate-900">
-                  {hasWorkforceData
-                    ? `${localWorkforcePercentage.toFixed(
+          {hasWorkforceData ? (
+            <div className="mt-5">
+              <div className="flex h-8 overflow-hidden rounded bg-slate-100">
+                <div
+                  className="flex items-center justify-center px-2 text-xs font-medium text-white"
+                  style={{
+                    width: `${localWorkforcePercentage}%`,
+                    backgroundColor:
+                      CHART_COLORS?.local ||
+                      getChartColor(0),
+                  }}
+                >
+                  {localWorkforcePercentage >= 20
+                    ? `${formatNumber(
+                        localWorkforce
+                      )} (${localWorkforcePercentage.toFixed(
                         1
-                      )}%`
-                    : "—"}
-                </p>
-              </div>
-            </div>
+                      )}%)`
+                    : ""}
+                </div>
 
-            {hasWorkforceData ? (
-              <div className="mt-5">
-                <div className="flex h-8 overflow-hidden rounded bg-slate-100">
-                  <div
-                    className="flex items-center justify-center bg-slate-900 px-2 text-xs font-medium text-white"
-                    style={{
-                      width: `${localWorkforcePercentage}%`,
-                    }}
-                  >
-                    {localWorkforcePercentage >= 20
-                      ? `${formatNumber(
-                          localWorkforce
-                        )} (${localWorkforcePercentage.toFixed(
-                          1
-                        )}%)`
-                      : ""}
-                  </div>
-
-                  <div
-                    className="flex items-center justify-center bg-slate-300 px-2 text-xs font-medium text-slate-700"
-                    style={{
-                      width: `${expatWorkforcePercentage}%`,
-                    }}
-                  >
-                    {expatWorkforcePercentage >= 20
-                      ? `${formatNumber(
-                          expatWorkforce
-                        )} (${expatWorkforcePercentage.toFixed(
-                          1
-                        )}%)`
-                      : ""}
-                  </div>
+                <div
+                  className="flex items-center justify-center px-2 text-xs font-medium text-slate-600"
+                  style={{
+                    width: `${expatWorkforcePercentage}%`,
+                    backgroundColor:
+                      CHART_COLORS?.expat ||
+                      "#cbd5e1",
+                  }}
+                >
+                  {expatWorkforcePercentage >= 20
+                    ? `${formatNumber(
+                        expatWorkforce
+                      )} (${expatWorkforcePercentage.toFixed(
+                        1
+                      )}%)`
+                    : ""}
                 </div>
               </div>
-            ) : (
-              <div className="mt-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
-                <p className="text-sm font-medium text-slate-500">
-                  No workforce data available
-                </p>
-              </div>
-            )}
-          </Card>
-        </div>
+            </div>
+          ) : (
+            <div className="mt-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+              <p className="text-sm font-medium text-slate-500">
+                No workforce data available
+              </p>
+            </div>
+          )}
+        </Card>
       </div>
-    </section>
+    </div>
   );
 };
 
