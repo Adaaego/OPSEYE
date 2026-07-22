@@ -9,6 +9,7 @@ import {
   Menu,
   X,
   ChevronLeft,
+  Settings,
 } from "lucide-react";
 import { Button } from "../ui/Button";
 
@@ -17,6 +18,7 @@ import Overviews from "./Overview";
 import Regions from "./Regions";
 import Reports from "./Reports";
 import Workforce from "./Workforce";
+import AccountSettings from "./AccountSettings";
 
 const NAV_ITEMS = [
   {
@@ -44,6 +46,13 @@ const NAV_ITEMS = [
     label: "Workforce",
     icon: Users,
   },
+
+  {
+    id: "settings",
+    label: "Settings",
+    icon: Settings,
+  },
+
 ];
 
 const PAGE_COMPONENTS = {
@@ -52,6 +61,7 @@ const PAGE_COMPONENTS = {
   regions: Regions,
   reports: Reports,
   workforce: Workforce,
+  settings: AccountSettings,
 };
 
 const SideBar = ({
