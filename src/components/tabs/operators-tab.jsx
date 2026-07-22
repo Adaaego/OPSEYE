@@ -1,4 +1,9 @@
-import { Fragment, useMemo, useState } from "react";
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   AlertTriangle,
   ArrowUpDown,
@@ -7,6 +12,13 @@ import {
   ChevronRight,
   Eye,
 } from "lucide-react";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+} from "firebase/firestore";
+import { db } from "../../firebase/firebase";
 import {
   Card,
   PageHeader,
@@ -17,8 +29,15 @@ import {
   Select,
 } from "../ui/interface";
 import { Button } from "../ui/Button";
+import OperatorDetail from "./OperatorDetail";
+import { getCompanyByNormalizedName } from "../../lib/companies";
 
-// Displays a placeholder when a numeric value is unavailable.
+const normalizeValue = (value) => {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+};
+
 const formatNumber = (value) => {
   if (
     value === null ||
@@ -28,10 +47,11 @@ const formatNumber = (value) => {
     return "—";
   }
 
-  return new Intl.NumberFormat("en-US").format(value);
+  return new Intl.NumberFormat("en-US").format(
+    value
+  );
 };
 
-// Converts a Firestore timestamp or JavaScript date into readable text.
 const formatUpdatedAt = (updatedAt) => {
   if (!updatedAt) {
     return "No data loaded";
@@ -61,24 +81,71 @@ const formatUpdatedAt = (updatedAt) => {
   return `Data as of ${time} · ${day}`;
 };
 
-const OperatorAvatar = ({ name, logoUrl }) => {
-  // Displays the operator's logo when available and an icon as a fallback.
-  if (logoUrl) {
-    return (
-      <img
-        src={logoUrl}
-        alt={`${name} logo`}
-        className="h-10 w-10 rounded-lg border border-slate-200 bg-white object-contain p-1"
-      />
-    );
+const getOrganizationCategory = (
+  organization
+) => {
+  return normalizeValue(
+    organization?.organizationCategory ||
+      organization?.category ||
+      organization?.orgType
+  );
+};
+
+// Resolves the logo from the same company directory used by Account Settings.
+const getOrganizationLogo = (organization) => {
+  const normalizedName =
+    organization?.normalizedName ||
+    normalizeValue(organization?.name);
+
+  if (!normalizedName) {
+    return "";
   }
 
+  const company =
+    getCompanyByNormalizedName(normalizedName);
+
+  return company?.logo || "";
+};
+
+const isCompany = (organization) => {
   return (
-    <div
-      className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-600"
-      aria-label={`${name} logo placeholder`}
-    >
-      <Building2 className="h-5 w-5" />
+    getOrganizationCategory(organization) ===
+    "company"
+  );
+};
+
+const isMinistry = (organization) => {
+  return (
+    getOrganizationCategory(organization) ===
+    "ministry"
+  );
+};
+
+const CompanyLogo = ({
+  name,
+  logoUrl,
+}) => {
+  const initials = String(name || "Company")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+
+  return (
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white">
+      {logoUrl ? (
+        <img
+          src={logoUrl}
+          alt={`${name} logo`}
+          className="h-full w-full object-contain p-1"
+        />
+      ) : (
+        <span className="text-xs font-semibold text-navy-700">
+          {initials}
+        </span>
+      )}
     </div>
   );
 };
@@ -90,7 +157,8 @@ const SortHeader = ({
   sortDirection,
   onSort,
 }) => {
-  const isActive = activeSortKey === sortKey;
+  const isActive =
+    activeSortKey === sortKey;
 
   return (
     <th
@@ -102,9 +170,12 @@ const SortHeader = ({
 
         <ArrowUpDown
           className={`h-3 w-3 ${
-            isActive ? "opacity-100" : "opacity-40"
+            isActive
+              ? "opacity-100"
+              : "opacity-40"
           } ${
-            isActive && sortDirection === "desc"
+            isActive &&
+            sortDirection === "desc"
               ? "rotate-180"
               : ""
           }`}
@@ -115,43 +186,335 @@ const SortHeader = ({
 };
 
 const OperatorsTab = ({
+  currentUser = null,
+
+  // Future report metrics can be passed here and will be
+  // merged with the matching organization records.
   operators = [],
+
   regions = [],
   updatedAt = null,
   complianceThreshold = null,
   onSelectOperator = () => {},
 }) => {
-  // Stores the values entered in the operator filters.
-  const [search, setSearch] = useState("");
+  const [
+    visibleOrganizations,
+    setVisibleOrganizations,
+  ] = useState([]);
+
+  const [
+    currentOrganization,
+    setCurrentOrganization,
+  ] = useState(null);
+
+  const [organizationsLoadedAt, setOrganizationsLoadedAt] =
+    useState(null);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [loadError, setLoadError] =
+    useState("");
+
+  const [search, setSearch] =
+    useState("");
+
   const [regionFilter, setRegionFilter] =
     useState("");
+
   const [statusFilter, setStatusFilter] =
     useState("");
 
-  // Stores the operator whose branch information is currently open.
-  const [expandedOperatorId, setExpandedOperatorId] =
+  const [
+    expandedOperatorId,
+    setExpandedOperatorId,
+  ] = useState(null);
+
+  const [sortKey, setSortKey] =
     useState(null);
 
-  // Stores the column and direction currently used to sort the table.
-  const [sortKey, setSortKey] = useState(null);
   const [sortDirection, setSortDirection] =
     useState("asc");
 
-  // Uses supplied region names or builds the filter from operator branches.
+  // Stores the operator whose full detail page is currently open.
+  const [selectedOperator, setSelectedOperator] =
+    useState(null);
+
+  useEffect(() => {
+    let requestIsActive = true;
+
+    const loadOrganizations = async () => {
+      try {
+        setLoading(true);
+        setLoadError("");
+
+        if (!currentUser?.uid) {
+          throw new Error(
+            "No signed-in user was found."
+          );
+        }
+
+        /*
+         * The organizationId is normally stored in the
+         * Firestore user profile rather than Firebase Auth.
+         */
+        let organizationId =
+          currentUser?.profile?.organizationId ||
+          currentUser?.organizationId ||
+          "";
+
+        if (!organizationId) {
+          const userSnapshot = await getDoc(
+            doc(db, "users", currentUser.uid)
+          );
+
+          if (userSnapshot.exists()) {
+            organizationId =
+              userSnapshot.data()
+                ?.organizationId || "";
+          }
+        }
+
+        if (!organizationId) {
+          throw new Error(
+            "This user is not linked to an organization."
+          );
+        }
+
+        /*
+         * Load the organization collection once so filtering can
+         * use organizationCategory, sector, industrySegment and
+         * country exactly as they exist in your documents.
+         */
+        const organizationsSnapshot =
+          await getDocs(
+            collection(db, "organizations")
+          );
+
+        const organizations =
+          organizationsSnapshot.docs.map(
+            (organizationDocument) => ({
+              id: organizationDocument.id,
+              ...organizationDocument.data(),
+            })
+          );
+
+        const signedInOrganization =
+          organizations.find(
+            (organization) =>
+              organization.id ===
+                organizationId ||
+              organization.organizationId ===
+                organizationId
+          );
+
+        if (!signedInOrganization) {
+          throw new Error(
+            "The user's organization could not be found."
+          );
+        }
+
+        const organizationSector =
+          normalizeValue(
+            signedInOrganization.sector
+          );
+
+        const organizationSegment =
+          normalizeValue(
+            signedInOrganization.industrySegment
+          );
+
+        const organizationCountry =
+          normalizeValue(
+            signedInOrganization.country
+          );
+
+        let matchingCompanies = [];
+
+        if (
+          isMinistry(signedInOrganization)
+        ) {
+          /*
+           * Ministry users see companies within their sector.
+           * Where the ministry has an industry segment, companies
+           * must also match that segment.
+           */
+          matchingCompanies =
+            organizations.filter(
+              (organization) => {
+                if (!isCompany(organization)) {
+                  return false;
+                }
+
+                const companySector =
+                  normalizeValue(
+                    organization.sector
+                  );
+
+                const companySegment =
+                  normalizeValue(
+                    organization.industrySegment
+                  );
+
+                const matchesSector =
+                  !organizationSector ||
+                  companySector ===
+                    organizationSector;
+
+                const matchesSegment =
+                  !organizationSegment ||
+                  companySegment ===
+                    organizationSegment;
+
+                return (
+                  matchesSector &&
+                  matchesSegment
+                );
+              }
+            );
+        } else if (
+          isCompany(signedInOrganization)
+        ) {
+          /*
+           * Company users see other company organizations
+           * registered in the same country.
+           */
+          matchingCompanies =
+            organizations.filter(
+              (organization) => {
+                if (!isCompany(organization)) {
+                  return false;
+                }
+
+                return (
+                  normalizeValue(
+                    organization.country
+                  ) === organizationCountry
+                );
+              }
+            );
+        } else {
+          throw new Error(
+            "The organization category must be ministry or company."
+          );
+        }
+
+        if (!requestIsActive) {
+          return;
+        }
+
+        setCurrentOrganization(
+          signedInOrganization
+        );
+
+        setVisibleOrganizations(
+          matchingCompanies
+        );
+
+        setOrganizationsLoadedAt(
+          new Date()
+        );
+      } catch (error) {
+        console.error(
+          "Error loading organizations for Operators:",
+          error
+        );
+
+        if (requestIsActive) {
+          setVisibleOrganizations([]);
+          setCurrentOrganization(null);
+
+          setLoadError(
+            error?.message ||
+              "Organizations could not be loaded."
+          );
+        }
+      } finally {
+        if (requestIsActive) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadOrganizations();
+
+    return () => {
+      requestIsActive = false;
+    };
+  }, [currentUser]);
+
+  /*
+   * Organization identity and logos come from the organizations
+   * collection. Report metrics can later be merged from the
+   * operators prop using organizationId.
+   */
+  const mergedOperators = useMemo(() => {
+    return visibleOrganizations.map(
+      (organization) => {
+        const matchingMetrics =
+          operators.find((operator) => {
+            const operatorOrganizationId =
+              operator.organizationId ||
+              operator.operatorId ||
+              operator.id;
+
+            return (
+              operatorOrganizationId ===
+                organization.organizationId ||
+              operatorOrganizationId ===
+                organization.id ||
+              normalizeValue(
+                operator.name ||
+                  operator.operatorName
+              ) ===
+                normalizeValue(
+                  organization.name
+                )
+            );
+          }) || {};
+
+        return {
+          ...organization,
+          ...matchingMetrics,
+
+          // Keep organization identity fields from Firestore.
+          id: organization.id,
+          organizationId:
+            organization.organizationId,
+          name: organization.name,
+          country: organization.country,
+          sector: organization.sector,
+          industrySegment:
+            organization.industrySegment,
+          logoUrl:
+            getOrganizationLogo(
+              organization
+            ),
+          organizationStatus:
+            organization.status,
+        };
+      }
+    );
+  }, [
+    visibleOrganizations,
+    operators,
+  ]);
+
   const regionOptions = useMemo(() => {
     if (regions.length > 0) {
       return regions
         .map((region) =>
           typeof region === "string"
             ? region
-            : region.name || region.region
+            : region.name ||
+              region.region
         )
         .filter(Boolean);
     }
 
     return [
       ...new Set(
-        operators
+        mergedOperators
           .flatMap((operator) =>
             Array.isArray(operator.branches)
               ? operator.branches
@@ -161,75 +524,100 @@ const OperatorsTab = ({
           .filter(Boolean)
       ),
     ];
-  }, [operators, regions]);
+  }, [mergedOperators, regions]);
 
-  // Builds the status filter from the operator records that are available.
   const statusOptions = useMemo(() => {
     return [
       ...new Set(
-        operators
-          .map((operator) => operator.status)
+        mergedOperators
+          .map(
+            (operator) =>
+              operator.status ||
+              operator.organizationStatus
+          )
           .filter(Boolean)
       ),
     ];
-  }, [operators]);
+  }, [mergedOperators]);
 
-  // Filters and sorts a copy without changing the original Firestore records.
   const filteredOperators = useMemo(() => {
-    const normalizedSearch = search
-      .trim()
-      .toLowerCase();
+    const normalizedSearch =
+      normalizeValue(search);
 
-    const filtered = operators.filter((operator) => {
-      const operatorName =
-        operator.name ||
-        operator.operatorName ||
-        "";
+    const filtered =
+      mergedOperators.filter(
+        (operator) => {
+          const operatorName =
+            operator.name ||
+            operator.operatorName ||
+            "";
 
-      const operatorBranches = Array.isArray(
-        operator.branches
-      )
-        ? operator.branches
-        : [];
+          const operatorBranches =
+            Array.isArray(operator.branches)
+              ? operator.branches
+              : [];
 
-      const matchesSearch =
-        !normalizedSearch ||
-        operatorName
-          .toLowerCase()
-          .includes(normalizedSearch) ||
-        operatorBranches.some((branch) => {
-          const branchName =
-            branch.name || branch.branch || "";
+          const matchesSearch =
+            !normalizedSearch ||
+            [
+              operatorName,
+              operator.country,
+              operator.sector,
+              operator.industrySegment,
+            ].some((value) =>
+              normalizeValue(value).includes(
+                normalizedSearch
+              )
+            ) ||
+            operatorBranches.some(
+              (branch) => {
+                const branchName =
+                  branch.name ||
+                  branch.branch ||
+                  "";
 
-          return branchName
-            .toLowerCase()
-            .includes(normalizedSearch);
-        });
+                return normalizeValue(
+                  branchName
+                ).includes(
+                  normalizedSearch
+                );
+              }
+            );
 
-      const matchesRegion =
-        !regionFilter ||
-        operatorBranches.some(
-          (branch) =>
-            branch.region === regionFilter
-        );
+          const matchesRegion =
+            !regionFilter ||
+            operatorBranches.some(
+              (branch) =>
+                branch.region ===
+                regionFilter
+            );
 
-      const matchesStatus =
-        !statusFilter ||
-        operator.status === statusFilter;
+          const operatorStatus =
+            operator.status ||
+            operator.organizationStatus;
 
-      return (
-        matchesSearch &&
-        matchesRegion &&
-        matchesStatus
+          const matchesStatus =
+            !statusFilter ||
+            operatorStatus ===
+              statusFilter;
+
+          return (
+            matchesSearch &&
+            matchesRegion &&
+            matchesStatus
+          );
+        }
       );
-    });
 
     if (!sortKey) {
       return filtered;
     }
 
     return [...filtered].sort(
-      (firstOperator, secondOperator) => {
+      (
+        firstOperator,
+        secondOperator
+      ) => {
         const firstValue =
           firstOperator[sortKey] ?? "";
 
@@ -249,10 +637,14 @@ const OperatorsTab = ({
             : -comparison;
         }
 
-        const comparison = String(firstValue)
+        const comparison = String(
+          firstValue
+        )
           .toLowerCase()
           .localeCompare(
-            String(secondValue).toLowerCase()
+            String(
+              secondValue
+            ).toLowerCase()
           );
 
         return sortDirection === "asc"
@@ -261,7 +653,7 @@ const OperatorsTab = ({
       }
     );
   }, [
-    operators,
+    mergedOperators,
     search,
     regionFilter,
     statusFilter,
@@ -269,7 +661,6 @@ const OperatorsTab = ({
     sortDirection,
   ]);
 
-  // Identifies operators below the configured compliance threshold.
   const flaggedOperators = useMemo(() => {
     if (
       complianceThreshold === null ||
@@ -278,24 +669,61 @@ const OperatorsTab = ({
       return [];
     }
 
-    return operators.filter((operator) => {
-      const compliance = Number(
-        operator.compliance
-      );
+    return mergedOperators.filter(
+      (operator) => {
+        const compliance = Number(
+          operator.compliance
+        );
 
-      return (
-        Number.isFinite(compliance) &&
-        compliance < complianceThreshold
-      );
-    });
-  }, [operators, complianceThreshold]);
+        return (
+          Number.isFinite(compliance) &&
+          compliance <
+            complianceThreshold
+        );
+      }
+    );
+  }, [
+    mergedOperators,
+    complianceThreshold,
+  ]);
+
+  const scopeDescription = useMemo(() => {
+    if (!currentOrganization) {
+      return "";
+    }
+
+    if (isMinistry(currentOrganization)) {
+      const sector =
+        currentOrganization.sector;
+
+      const segment =
+        currentOrganization.industrySegment;
+
+      if (sector && segment) {
+        return `Showing ${segment} companies in the ${sector} sector.`;
+      }
+
+      if (sector) {
+        return `Showing companies in the ${sector} sector.`;
+      }
+    }
+
+    if (isCompany(currentOrganization)) {
+      return currentOrganization.country
+        ? `Showing companies registered in ${currentOrganization.country}.`
+        : "";
+    }
+
+    return "";
+  }, [currentOrganization]);
 
   const toggleSort = (key) => {
     if (sortKey === key) {
-      setSortDirection((currentDirection) =>
-        currentDirection === "asc"
-          ? "desc"
-          : "asc"
+      setSortDirection(
+        (currentDirection) =>
+          currentDirection === "asc"
+            ? "desc"
+            : "asc"
       );
 
       return;
@@ -305,7 +733,9 @@ const OperatorsTab = ({
     setSortDirection("asc");
   };
 
-  const toggleOperator = (operatorId) => {
+  const toggleOperator = (
+    operatorId
+  ) => {
     setExpandedOperatorId(
       (currentOperatorId) =>
         currentOperatorId === operatorId
@@ -314,12 +744,81 @@ const OperatorsTab = ({
     );
   };
 
+  const handleSelectOperator = (operator) => {
+    setSelectedOperator(operator);
+    onSelectOperator?.(operator);
+  };
+
+  /*
+   * OperatorDetail replaces the list inside the Operators tab.
+   * The back action restores the operator table without changing
+   * the active sidebar page.
+   */
+  if (selectedOperator) {
+    const selectedBranches = Array.isArray(
+      selectedOperator.branches
+    )
+      ? selectedOperator.branches
+      : [];
+
+    const selectedWorkforce =
+      selectedOperator.workforce || {
+        local:
+          selectedOperator.localWorkforce ??
+          selectedOperator.localWorkforceCount,
+        expat:
+          selectedOperator.expatWorkforce ??
+          selectedOperator.expatWorkforceCount,
+        localPercentage:
+          selectedOperator.localWorkforcePct,
+      };
+
+    return (
+      <OperatorDetail
+        operator={selectedOperator}
+        production7Day={
+          selectedOperator.production7Day || []
+        }
+        production6Month={
+          selectedOperator.production6Month || []
+        }
+        reportingHistory={
+          selectedOperator.reportingHistory || []
+        }
+        branches={selectedBranches}
+        regions={regions}
+        workforce={selectedWorkforce}
+        updatedAt={
+          updatedAt || organizationsLoadedAt
+        }
+        onBack={() => setSelectedOperator(null)}
+      />
+    );
+  }
+
   return (
     <div>
       <PageHeader
         title="Operators"
-        timestamp={formatUpdatedAt(updatedAt)}
+        timestamp={formatUpdatedAt(
+          updatedAt ||
+            organizationsLoadedAt
+        )}
       />
+
+      {scopeDescription && (
+        <p className="-mt-4 mb-5 text-sm text-slate-500">
+          {scopeDescription}
+        </p>
+      )}
+
+      {loadError && (
+        <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+          <p className="text-sm font-medium text-red-700">
+            {loadError}
+          </p>
+        </div>
+      )}
 
       {flaggedOperators.length > 0 && (
         <div className="mb-5 flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
@@ -353,7 +852,7 @@ const OperatorsTab = ({
             <button
               type="button"
               onClick={() =>
-                onSelectOperator(
+                handleSelectOperator(
                   flaggedOperators[0]
                 )
               }
@@ -448,274 +947,290 @@ const OperatorsTab = ({
             </thead>
 
             <tbody>
-              {filteredOperators.length > 0 ? (
-                filteredOperators.map((operator) => {
-                  const operatorId =
-                    operator.id ||
-                    operator.operatorId ||
-                    operator.name;
+              {loading ? (
+                <tr>
+                  <td
+                    colSpan={9}
+                    className="px-4 py-14 text-center"
+                  >
+                    <span className="mx-auto block h-6 w-6 animate-spin rounded-full border-2 border-navy-200 border-t-navy-700" />
 
-                  const operatorName =
-                    operator.name ||
-                    operator.operatorName ||
-                    "Unnamed operator";
+                    <p className="mt-3 text-sm text-slate-500">
+                      Loading operators...
+                    </p>
+                  </td>
+                </tr>
+              ) : filteredOperators.length >
+                0 ? (
+                filteredOperators.map(
+                  (operator) => {
+                    const operatorId =
+                      operator.organizationId ||
+                      operator.id ||
+                      operator.operatorId ||
+                      operator.name;
 
-                  const operatorBranches =
-                    Array.isArray(
-                      operator.branches
-                    )
-                      ? operator.branches
-                      : [];
+                    const operatorName =
+                      operator.name ||
+                      operator.operatorName ||
+                      "Unnamed operator";
 
-                  const branchCount =
-                    operator.branchCount ??
-                    operatorBranches.length;
+                    const operatorBranches =
+                      Array.isArray(
+                        operator.branches
+                      )
+                        ? operator.branches
+                        : [];
 
-                  const isExpanded =
-                    expandedOperatorId ===
-                    operatorId;
+                    const branchCount =
+                      operator.branchCount ??
+                      operatorBranches.length;
 
-                  const requiresAttention =
-                    operator.status === "partial" ||
-                    operator.status === "missing";
+                    const isExpanded =
+                      expandedOperatorId ===
+                      operatorId;
 
-                  return (
-                    <Fragment key={operatorId}>
-                      <tr
-                        className={`border-b border-slate-100 text-[13px] text-navy-900 transition-colors ${
-                          requiresAttention
-                            ? "bg-amber-50/40 hover:bg-amber-50/70"
-                            : "cursor-pointer hover:bg-slate-50"
-                        }`}
-                        onClick={() =>
-                          onSelectOperator(operator)
-                        }
-                      >
-                        <td className="px-4 py-3">
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              toggleOperator(operatorId);
-                            }}
-                            aria-expanded={isExpanded}
-                            aria-label={
-                              isExpanded
-                                ? `Collapse ${operatorName}`
-                                : `Expand ${operatorName}`
-                            }
-                            className="rounded p-1 transition-colors hover:bg-slate-200"
-                          >
-                            {isExpanded ? (
-                              <ChevronDown className="h-4 w-4 text-slate-500" />
-                            ) : (
-                              <ChevronRight className="h-4 w-4 text-slate-500" />
-                            )}
-                          </button>
-                        </td>
+                    const displayStatus =
+                      operator.status ||
+                      operator.organizationStatus;
 
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-3">
-                            <OperatorAvatar
-                              name={operatorName}
-                              logoUrl={operator.logoUrl}
-                            />
+                    const requiresAttention =
+                      displayStatus ===
+                        "partial" ||
+                      displayStatus ===
+                        "missing";
 
-                            <span className="whitespace-nowrap font-medium text-navy-900">
-                              {operatorName}
-                            </span>
-                          </div>
-                        </td>
+                    return (
+                      <Fragment key={operatorId}>
+                        <tr
+                          className={`border-b border-slate-100 text-[13px] text-navy-900 transition-colors ${
+                            requiresAttention
+                              ? "bg-amber-50/40 hover:bg-amber-50/70"
+                              : "cursor-pointer hover:bg-slate-50"
+                          }`}
+                          onClick={() => handleSelectOperator(operator)}
+                        >
+                          <td className="px-4 py-3">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
 
-                        <td className="whitespace-nowrap px-4 py-3">
-                          {formatNumber(branchCount)}{" "}
-                          {branchCount === 1
-                            ? "branch"
-                            : "branches"}
-                        </td>
-
-                        <td className="whitespace-nowrap px-4 py-3 tabular-nums">
-                          {operator.productionToday !==
-                            null &&
-                          operator.productionToday !==
-                            undefined
-                            ? `${formatNumber(
-                                operator.productionToday
-                              )} bbl/day`
-                            : "—"}
-                        </td>
-
-                        <td className="whitespace-nowrap px-4 py-3 tabular-nums">
-                          {operator.localWorkforcePct !==
-                            null &&
-                          operator.localWorkforcePct !==
-                            undefined
-                            ? `${operator.localWorkforcePct}%`
-                            : "—"}
-                        </td>
-
-                        <td className="whitespace-nowrap px-4 py-3">
-                          <EmptyCell
-                            value={
-                              operator.submissionsToday
-                            }
-                          />
-                        </td>
-
-                        <td className="whitespace-nowrap px-4 py-3 tabular-nums">
-                          {operator.compliance !== null &&
-                          operator.compliance !==
-                            undefined
-                            ? `${operator.compliance}%`
-                            : "—"}
-                        </td>
-
-                        <td className="px-4 py-3">
-                          <StatusBadge
-                            status={operator.status}
-                          />
-                        </td>
-
-                        <td className="px-4 py-3">
-                          <Button
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onSelectOperator(operator);
-                            }}
-                          >
-                            <Eye className="h-4 w-4" />
-                            View
-                          </Button>
-                        </td>
-                      </tr>
-
-                      {isExpanded && (
-                        <tr className="bg-slate-50/60">
-                          <td
-                            colSpan={9}
-                            className="px-4 py-3"
-                          >
-                            <div className="ml-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
-                              <div className="border-b border-slate-200 px-4 py-3">
-                                <p className="text-sm font-semibold text-navy-900">
-                                  Branch submissions
-                                </p>
-
-                                <p className="mt-0.5 text-xs text-slate-500">
-                                  Submission details for{" "}
-                                  {operatorName}.
-                                </p>
-                              </div>
-
-                              {operatorBranches.length >
-                              0 ? (
-                                <Table
-                                  headers={[
-                                    "Branch",
-                                    "Region",
-                                    "Status",
-                                    "Submitted By",
-                                    "Time",
-                                    "Production (bbl/day)",
-                                  ]}
-                                  rows={
-                                    operatorBranches
-                                  }
-                                  accentKey="status"
-                                  renderRow={(branch) => (
-                                    <>
-                                      <td className="whitespace-nowrap px-4 py-2.5 font-medium text-navy-900">
-                                        <EmptyCell
-                                          value={
-                                            branch.name ||
-                                            branch.branch
-                                          }
-                                        />
-                                      </td>
-
-                                      <td className="whitespace-nowrap px-4 py-2.5">
-                                        <EmptyCell
-                                          value={
-                                            branch.region
-                                          }
-                                        />
-                                      </td>
-
-                                      <td className="px-4 py-2.5">
-                                        <StatusBadge
-                                          status={
-                                            branch.status
-                                          }
-                                        />
-                                      </td>
-
-                                      <td className="whitespace-nowrap px-4 py-2.5">
-                                        <EmptyCell
-                                          value={
-                                            branch.submittedBy
-                                          }
-                                        />
-                                      </td>
-
-                                      <td className="whitespace-nowrap px-4 py-2.5">
-                                        <EmptyCell
-                                          value={
-                                            branch.submissionTime ||
-                                            branch.time
-                                          }
-                                        />
-                                      </td>
-
-                                      <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">
-                                        <EmptyCell
-                                          value={
-                                            branch.production !==
-                                              null &&
-                                            branch.production !==
-                                              undefined
-                                              ? formatNumber(
-                                                  branch.production
-                                                )
-                                              : null
-                                          }
-                                        />
-                                      </td>
-                                    </>
-                                  )}
-                                />
+                                toggleOperator(operatorId);
+                              }}
+                              aria-expanded={isExpanded}
+                              aria-label={
+                                isExpanded
+                                  ? `Collapse ${operatorName}`
+                                  : `Expand ${operatorName}`
+                              }
+                              className="rounded p-1 transition-colors hover:bg-slate-200"
+                            >
+                              {isExpanded ? (
+                                <ChevronDown className="h-4 w-4 text-slate-500" />
                               ) : (
-                                <div className="px-4 py-10 text-center">
-                                  <p className="text-sm font-medium text-slate-500">
-                                    No branch records available
-                                  </p>
-                                </div>
+                                <ChevronRight className="h-4 w-4 text-slate-500" />
                               )}
+                            </button>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-3">
+                              <CompanyLogo
+                                name={operatorName}
+                                logoUrl={operator.logoUrl}
+                              />
+                              <div className="min-w-0">
+                                <p className="whitespace-nowrap font-medium text-navy-900">
+                                  {operatorName}
+                                </p>
+
+                                {(operator.country ||
+                                  operator.industrySegment) && (
+                                  <p className="mt-0.5 whitespace-nowrap text-xs text-slate-400">
+                                    {[
+                                      operator.country,
+                                      operator.industrySegment,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" · ")}
+                                  </p>
+                                )}
+                              </div>
                             </div>
                           </td>
+
+                          <td className="whitespace-nowrap px-4 py-3">
+                            {formatNumber(branchCount)}{" "}
+                            {branchCount === 1 ? "branch" : "branches"}
+                          </td>
+
+                          <td className="whitespace-nowrap px-4 py-3 tabular-nums">
+                            {operator.productionToday !== null &&
+                            operator.productionToday !== undefined
+                              ? `${formatNumber(
+                                  operator.productionToday
+                                )} bbl/day`
+                              : "—"}
+                          </td>
+
+                          <td className="whitespace-nowrap px-4 py-3 tabular-nums">
+                            {operator.localWorkforcePct !== null &&
+                            operator.localWorkforcePct !== undefined
+                              ? `${operator.localWorkforcePct}%`
+                              : "—"}
+                          </td>
+
+                          <td className="whitespace-nowrap px-4 py-3">
+                            <EmptyCell value={operator.submissionsToday} />
+                          </td>
+
+                          <td className="whitespace-nowrap px-4 py-3 tabular-nums">
+                            {operator.compliance !== null &&
+                            operator.compliance !== undefined
+                              ? `${operator.compliance}%`
+                              : "—"}
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <StatusBadge status={displayStatus} />
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-slate-600 hover:bg-slate-100 hover:text-navy-950"
+                              onClick={(event) => {
+                                event.stopPropagation();
+
+                                handleSelectOperator(operator);
+                              }}
+                            >
+                              <Eye className="h-4 w-4" />
+                              View
+                            </Button>
+                          </td>
                         </tr>
-                      )}
-                    </Fragment>
-                  );
-                })
+
+                        {isExpanded && (
+                          <tr className="bg-slate-50/60">
+                            <td colSpan={9} className="px-4 py-3">
+                              <div className="ml-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                                <div className="border-b border-slate-200 px-4 py-3">
+                                  <p className="text-sm font-semibold text-navy-900">
+                                    Branch submissions
+                                  </p>
+
+                                  <p className="mt-0.5 text-xs text-slate-500">
+                                    Submission details for {operatorName}.
+                                  </p>
+                                </div>
+
+                                {operatorBranches.length > 0 ? (
+                                  <Table
+                                    headers={[
+                                      "Branch",
+                                      "Region",
+                                      "Status",
+                                      "Submitted By",
+                                      "Time",
+                                      "Production (bbl/day)",
+                                    ]}
+                                    rows={operatorBranches}
+                                    accentKey="status"
+                                    renderRow={(branch) => (
+                                      <>
+                                        <td className="whitespace-nowrap px-4 py-2.5 font-medium text-navy-900">
+                                          <EmptyCell
+                                            value={branch.name || branch.branch}
+                                          />
+                                        </td>
+
+                                        <td className="whitespace-nowrap px-4 py-2.5">
+                                          <EmptyCell value={branch.region} />
+                                        </td>
+
+                                        <td className="px-4 py-2.5">
+                                          <StatusBadge status={branch.status} />
+                                        </td>
+
+                                        <td className="whitespace-nowrap px-4 py-2.5">
+                                          <EmptyCell
+                                            value={branch.submittedBy}
+                                          />
+                                        </td>
+
+                                        <td className="whitespace-nowrap px-4 py-2.5">
+                                          <EmptyCell
+                                            value={
+                                              branch.submissionTime ||
+                                              branch.time
+                                            }
+                                          />
+                                        </td>
+
+                                        <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">
+                                          <EmptyCell
+                                            value={
+                                              branch.production !== null &&
+                                              branch.production !== undefined
+                                                ? formatNumber(
+                                                    branch.production
+                                                  )
+                                                : null
+                                            }
+                                          />
+                                        </td>
+                                      </>
+                                    )}
+                                  />
+                                ) : (
+                                  <div className="px-4 py-10 text-center">
+                                    <p className="text-sm font-medium text-slate-500">
+                                      No branch records available
+                                    </p>
+
+                                    <p className="mt-1 text-xs text-slate-400">
+                                      Branch submissions will appear here once
+                                      reports are submitted.
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  }
+                )
               ) : (
                 <tr>
                   <td
                     colSpan={9}
                     className="px-4 py-14 text-center"
                   >
-                    <p className="text-sm font-medium text-slate-500">
+                    <Building2 className="mx-auto h-8 w-8 text-slate-300" />
+
+                    <p className="mt-3 text-sm font-medium text-slate-500">
                       No operators found
                     </p>
 
                     <p className="mt-1 text-xs text-slate-400">
-                      Operator records matching the selected
-                      filters will appear here.
+                      No company organizations
+                      match your sector or country.
                     </p>
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
+        </div>
+
+        <div className="border-t border-slate-200 px-4 py-3 text-xs text-slate-500">
+          Showing {filteredOperators.length} of{" "}
+          {mergedOperators.length} operators
         </div>
       </Card>
     </div>

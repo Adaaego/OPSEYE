@@ -4,6 +4,7 @@ import {
   Building2,
   MapPin,
   FileText,
+  FileSpreadsheet,
   Users,
   LogOut,
   Menu,
@@ -19,6 +20,7 @@ import Regions from "./Regions";
 import Reports from "./Reports";
 import Workforce from "./Workforce";
 import AccountSettings from "./AccountSettings";
+import Forms from "./Forms";
 
 const NAV_ITEMS = [
   {
@@ -42,24 +44,29 @@ const NAV_ITEMS = [
     icon: FileText,
   },
   {
+    id: "forms",
+    label: "Forms",
+    icon: FileSpreadsheet,
+  },
+  {
     id: "workforce",
     label: "Workforce",
     icon: Users,
   },
-
   {
     id: "settings",
     label: "Settings",
     icon: Settings,
   },
-
 ];
 
+// Maps each sidebar item to the page shown in the dashboard content area.
 const PAGE_COMPONENTS = {
   overview: Overviews,
   operators: OperatorsTab,
   regions: Regions,
   reports: Reports,
+  forms: Forms,
   workforce: Workforce,
   settings: AccountSettings,
 };
@@ -289,9 +296,7 @@ const SideBar = ({
           collapsed ? "w-16" : "w-60"
         }`}
       >
-        <NavContent
-          isCollapsed={collapsed}
-        />
+        <NavContent isCollapsed={collapsed} />
       </aside>
 
       <header className="fixed inset-x-0 top-0 z-40 flex items-center justify-between border-b border-navy-800 bg-navy-950 px-4 py-3 lg:hidden">
@@ -305,9 +310,7 @@ const SideBar = ({
 
         <button
           type="button"
-          onClick={() =>
-            setMobileOpen(true)
-          }
+          onClick={() => setMobileOpen(true)}
           className="rounded-lg p-2 text-navy-300 transition-colors hover:bg-navy-800 hover:text-white"
           aria-label="Open menu"
         >
@@ -320,43 +323,33 @@ const SideBar = ({
           <button
             type="button"
             aria-label="Close menu"
-            onClick={() =>
-              setMobileOpen(false)
-            }
+            onClick={() => setMobileOpen(false)}
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
           />
 
           <aside className="absolute inset-y-0 left-0 flex w-60 flex-col border-r border-navy-800 bg-navy-950">
             <button
               type="button"
-              onClick={() =>
-                setMobileOpen(false)
-              }
+              onClick={() => setMobileOpen(false)}
               className="absolute right-4 top-4 z-10 rounded-lg p-1.5 text-navy-300 transition-colors hover:bg-navy-800 hover:text-white"
               aria-label="Close menu"
             >
               <X className="h-5 w-5" />
             </button>
 
-            <NavContent
-              isCollapsed={false}
-              isMobile
-            />
+            <NavContent isCollapsed={false} isMobile />
           </aside>
         </div>
       )}
 
       <main
         className={`pt-16 transition-all duration-200 lg:pt-0 ${
-          collapsed
-            ? "lg:ml-16"
-            : "lg:ml-60"
+          collapsed ? "lg:ml-16" : "lg:ml-60"
         }`}
       >
         <div className="mx-auto max-w-[1800px] px-4 py-6 sm:px-6 lg:px-10 lg:py-8">
-          <ActivePage
-            {...activePageProps}
-          />
+          {/* Pages that query organization data need access to the signed-in user. */}
+          <ActivePage {...activePageProps} currentUser={currentUser} />
         </div>
       </main>
     </div>
