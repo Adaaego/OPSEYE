@@ -19,7 +19,7 @@ import {
   StatusBadge,
 } from "../ui/interface";
 import { Button } from "../ui/Button";
-import ReportViewer from "./ReportViewer";
+import ReportViewier from "./ReportsViewer";
 
 const SEGMENT_LABELS = {
   downstream: "Downstream",
