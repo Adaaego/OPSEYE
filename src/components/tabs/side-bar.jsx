@@ -21,6 +21,7 @@ import Reports from "./Reports";
 import Workforce from "./Workforce";
 import AccountSettings from "./AccountSettings";
 import Forms from "./Forms";
+import OperatorsReports from "./OperatorReports";
 
 const NAV_ITEMS = [
   {
