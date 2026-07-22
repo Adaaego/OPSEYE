@@ -8,25 +8,35 @@ import {
     Bell,
     Briefcase,
     Building2,
-    Camera,
     Check,
     ChevronRight,
     Globe,
+    Loader2,
     Lock,
     Mail,
     MapPin,
-    Phone,
     Plus,
     Store,
     User,
   } from "lucide-react";
+  
+  import { auth } from "../../firebase/firebase";
+  import {
+    getOrganizationDocument,
+    getOrganizationUsers,
+    getUserDocument,
+    updateUserDocument,
+  } from "../../lib/functions";
+  import {
+    getCompanyByNormalizedName,
+  } from "../../lib/companies";
+  
   import {
     Card,
     EmptyCell,
     PageHeader,
     SectionHeader,
     Select,
-    StatusBadge,
     Table,
   } from "../ui/interface";
   import { Button } from "../ui/Button";
@@ -50,7 +60,6 @@ import {
     fullName: profile.fullName || "",
     email: profile.email || "",
     jobTitle: profile.jobTitle || "",
-    phone: profile.phone || "",
     twoFactor: Boolean(profile.twoFactor),
     loginAlert: Boolean(profile.loginAlert),
   });
@@ -74,43 +83,45 @@ import {
     }
   };
   
-  const getHierarchyAccent = (level) => {
-    switch (String(level).toLowerCase()) {
-      case "enterprise":
-        return "bg-navy-950 text-white";
-  
-      case "country":
-        return "bg-blue-600 text-white";
-  
-      case "region":
-        return "bg-amber-500 text-white";
-  
-      case "branch":
-        return "bg-emerald-600 text-white";
-  
-      default:
-        return "bg-slate-600 text-white";
-    }
-  };
-  
-  const normalizeStatus = (status) => {
-    return String(status || "")
-      .trim()
-      .toLowerCase();
+  // Converts values such as branch_admin into Branch Admin.
+  const formatRole = (role) => {
+    return String(role || "")
+      .split("_")
+      .filter(Boolean)
+      .map(
+        (word) =>
+          word.charAt(0).toUpperCase() +
+          word.slice(1)
+      )
+      .join(" ");
   };
   
   const AccountSettings = ({
-    profile = {},
-    teamMembers = [],
-    hierarchyLevels = [],
     roles = [],
-    onSave = null,
     onInvite = null,
     onCreateLevel = null,
-    onAvatarChange = null,
   }) => {
     const [activeTab, setActiveTab] =
       useState("account");
+  
+    const [profile, setProfile] = useState({});
+    const [organization, setOrganization] =
+      useState(null);
+  
+    const [teamMembers, setTeamMembers] =
+      useState([]);
+  
+    const [hierarchyLevels, setHierarchyLevels] =
+      useState([]);
+  
+    const [organizationLogo, setOrganizationLogo] =
+      useState("");
+  
+    const [loadingPage, setLoadingPage] =
+      useState(true);
+  
+    const [pageError, setPageError] =
+      useState("");
   
     const [isEditing, setIsEditing] =
       useState(false);
@@ -130,16 +141,206 @@ import {
     const [inviteRole, setInviteRole] =
       useState("");
   
-    const [formData, setFormData] = useState(() =>
-      createProfileForm(profile)
+    const [formData, setFormData] = useState(
+      createProfileForm()
     );
   
-    // Updates the form when the user's Firestore profile finishes loading.
     useEffect(() => {
-      setFormData(createProfileForm(profile));
+      const loadAccountData = async () => {
+        setLoadingPage(true);
+        setPageError("");
+  
+        try {
+          const currentUser = auth.currentUser;
+  
+          if (!currentUser?.uid) {
+            throw new Error(
+              "We could not find the signed-in user."
+            );
+          }
+  
+          // Load the Firestore profile linked to the current
+          // Firebase Authentication account.
+          const userDocument = await getUserDocument(
+            currentUser.uid
+          );
+  
+          if (!userDocument) {
+            throw new Error(
+              "Your user profile could not be found."
+            );
+          }
+  
+          const loadedProfile = {
+            ...userDocument,
+            email:
+              userDocument.email ||
+              currentUser.email ||
+              "",
+          };
+  
+          setProfile(loadedProfile);
+          setFormData(
+            createProfileForm(loadedProfile)
+          );
+  
+          if (!userDocument.organizationId) {
+            throw new Error(
+              "Your account is not linked to an organization."
+            );
+          }
+  
+          // The organization document contains the company name,
+          // hierarchy level, sector and hierarchy relationships.
+          const currentOrganization =
+            await getOrganizationDocument(
+              userDocument.organizationId
+            );
+  
+          if (!currentOrganization) {
+            throw new Error(
+              "Your organization record could not be found."
+            );
+          }
+  
+          setOrganization(currentOrganization);
+  
+          // Match the organization name with the approved company
+          // metadata stored locally so we can display its logo.
+          const company =
+            getCompanyByNormalizedName(
+              currentOrganization.normalizedName
+            );
+  
+          setOrganizationLogo(
+            company?.logo || ""
+          );
+  
+          // For Prototype 1, every user with the same organizationId
+          // belongs to the same organization team.
+          const organizationUsers =
+            await getOrganizationUsers(
+              currentOrganization.organizationId
+            );
+  
+          setTeamMembers(
+            organizationUsers.map((member) => ({
+              ...member,
+              hierarchyLevel:
+                currentOrganization.type,
+              status:
+                member.status || "active",
+            }))
+          );
+  
+          // The current organization already stores all parent
+          // organization IDs in ancestorIds.
+          const hierarchyIds = [
+            ...(currentOrganization.ancestorIds || []),
+            currentOrganization.organizationId,
+          ];
+  
+          const hierarchyOrganizations =
+            await Promise.all(
+              hierarchyIds.map((organizationId) =>
+                getOrganizationDocument(
+                  organizationId
+                )
+              )
+            );
+  
+          const validOrganizations =
+            hierarchyOrganizations.filter(Boolean);
+  
+          // Load the first administrator listed for each
+          // organization level so their name can be shown.
+          const hierarchyWithAdmins =
+            await Promise.all(
+              validOrganizations.map(
+                async (organizationItem, index) => {
+                  const primaryAdminId =
+                    organizationItem.adminIds?.[0];
+  
+                  let administrator = null;
+  
+                  if (primaryAdminId) {
+                    administrator =
+                      await getUserDocument(
+                        primaryAdminId
+                      );
+                  }
+  
+                  // The root enterprise logo is reused for every
+                  // level belonging to the same company hierarchy.
+                  const hierarchyCompany =
+                    getCompanyByNormalizedName(
+                      validOrganizations[0]
+                        ?.normalizedName
+                    );
+  
+                  return {
+                    id:
+                      organizationItem.organizationId,
+  
+                    level:
+                      organizationItem.type,
+  
+                    name:
+                      organizationItem.name,
+  
+                    parent:
+                      index > 0
+                        ? validOrganizations[
+                            index - 1
+                          ]?.name
+                        : "",
+  
+                    adminName:
+                      administrator?.fullName ||
+                      administrator?.email ||
+                      "",
+  
+                    adminRole:
+                      formatRole(
+                        administrator?.role
+                      ),
+  
+                    logo:
+                      hierarchyCompany?.logo ||
+                      company?.logo ||
+                      "",
+                  };
+                }
+              )
+            );
+  
+          setHierarchyLevels(
+            hierarchyWithAdmins
+          );
+        } catch (error) {
+          console.error(
+            "Unable to load account settings:",
+            error
+          );
+  
+          setPageError(
+            error.message ||
+              "We could not load your account information."
+          );
+        } finally {
+          setLoadingPage(false);
+        }
+      };
+  
+      loadAccountData();
+    }, []);
+  
+    useEffect(() => {
+      setFormData(
+        createProfileForm(profile)
+      );
     }, [profile]);
   
-    // Converts role records into values that can be used by the shared Select.
     const roleOptions = useMemo(() => {
       return roles
         .map((role) => {
@@ -156,7 +357,6 @@ import {
         .filter(Boolean);
     }, [roles]);
   
-    // Selects the first available role when the role list is loaded.
     useEffect(() => {
       if (
         !inviteRole &&
@@ -184,11 +384,6 @@ import {
       formData.email,
     ]);
   
-    const avatarUrl =
-      profile.avatarUrl ||
-      profile.photoURL ||
-      "";
-  
     const handleFieldChange = (event) => {
       const { name, value } = event.target;
   
@@ -209,17 +404,71 @@ import {
     };
   
     const handleCancelEditing = () => {
-      setFormData(createProfileForm(profile));
+      setFormData(
+        createProfileForm(profile)
+      );
+  
       setIsEditing(false);
     };
   
     const handleSave = async () => {
+      const currentUser = auth.currentUser;
+  
+      if (!currentUser?.uid) {
+        setPageError(
+          "We could not find the signed-in user."
+        );
+        return;
+      }
+  
+      const fullName =
+        formData.fullName.trim();
+  
+      const jobTitle =
+        formData.jobTitle.trim();
+  
+      if (!fullName || !jobTitle) {
+        setPageError(
+          "Please complete your full name and job title."
+        );
+        return;
+      }
+  
       try {
         setIsSaving(true);
+        setPageError("");
   
-        if (onSave) {
-          await onSave(formData);
-        }
+        // Email is not edited here because it belongs to
+        // the Firebase Authentication account.
+        const profileUpdates = {
+          fullName,
+          jobTitle,
+          twoFactor: formData.twoFactor,
+          loginAlert: formData.loginAlert,
+        };
+  
+        await updateUserDocument(
+          currentUser.uid,
+          profileUpdates
+        );
+  
+        setProfile((currentProfile) => ({
+          ...currentProfile,
+          ...profileUpdates,
+        }));
+  
+        // Keep the current user's name updated in the Team tab
+        // without needing to reload the entire page.
+        setTeamMembers((currentMembers) =>
+          currentMembers.map((member) =>
+            member.uid === currentUser.uid
+              ? {
+                  ...member,
+                  ...profileUpdates,
+                }
+              : member
+          )
+        );
   
         setIsEditing(false);
       } catch (error) {
@@ -227,13 +476,20 @@ import {
           "Error saving account settings:",
           error
         );
+  
+        setPageError(
+          error.message ||
+            "We could not save your changes."
+        );
       } finally {
         setIsSaving(false);
       }
     };
   
     const handleInvite = async () => {
-      const email = inviteEmail.trim();
+      const email = inviteEmail
+        .trim()
+        .toLowerCase();
   
       if (!email) {
         return;
@@ -246,11 +502,16 @@ import {
           await onInvite({
             email,
             role: inviteRole,
+            organizationId:
+              organization?.organizationId,
           });
         }
   
         setInviteEmail("");
-        setInviteRole(roleOptions[0] || "");
+        setInviteRole(
+          roleOptions[0] || ""
+        );
+  
         setShowInviteForm(false);
       } catch (error) {
         console.error(
@@ -261,6 +522,17 @@ import {
         setIsInviting(false);
       }
     };
+  
+    if (loadingPage) {
+      return (
+        <div className="flex min-h-[400px] items-center justify-center">
+          <div className="flex items-center gap-2 text-sm text-slate-500">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            Loading account settings...
+          </div>
+        </div>
+      );
+    }
   
     return (
       <div>
@@ -282,6 +554,12 @@ import {
           Manage your profile, team members and
           organization structure.
         </p>
+  
+        {pageError && (
+          <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {pageError}
+          </div>
+        )}
   
         <div className="mb-8">
           <div className="flex gap-1 rounded-xl bg-slate-100 p-1 sm:gap-2">
@@ -320,7 +598,7 @@ import {
   
                   <p className="mt-0.5 text-sm text-slate-500">
                     Update your personal details and
-                    contact information.
+                    account information.
                   </p>
                 </div>
   
@@ -368,50 +646,21 @@ import {
   
               <div className="px-6 py-6">
                 <div className="mb-8 flex items-center gap-5 border-b border-slate-100 pb-6">
-                  <div className="relative">
-                    {avatarUrl ? (
-                      <img
-                        src={avatarUrl}
-                        alt="Profile"
-                        className="h-16 w-16 rounded-2xl border border-slate-200 object-cover"
-                      />
-                    ) : (
-                      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-navy-950 text-lg font-semibold text-white">
-                        {initials}
-                      </div>
-                    )}
+                  {organizationLogo ? (
+                    <img
+                      src={organizationLogo}
+                      alt="Organization logo"
+                      className="h-16 w-16 rounded-2xl border border-slate-200 bg-white object-contain p-1.5"
+                    />
+                  ) : (
+                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-navy-950 text-lg font-semibold text-white">
+                      {initials}
+                    </div>
+                  )}
   
-                    {isEditing &&
-                      onAvatarChange && (
-                        <label className="absolute -bottom-1.5 -right-1.5 flex h-7 w-7 cursor-pointer items-center justify-center rounded-full border-2 border-white bg-navy-950 text-white shadow-sm transition hover:bg-navy-800">
-                          <Camera className="h-3.5 w-3.5" />
-  
-                          <input
-                            type="file"
-                            accept="image/png,image/jpeg"
-                            className="hidden"
-                            onChange={(event) =>
-                              onAvatarChange(
-                                event.target.files?.[0] ||
-                                  null
-                              )
-                            }
-                          />
-                        </label>
-                      )}
-                  </div>
-  
-                  <div>
-                    <p className="text-sm font-medium text-navy-950">
-                      Profile Photo
-                    </p>
-  
-                    <p className="text-sm text-slate-500">
-                      JPG or PNG. Maximum size
-                      determined by your upload
-                      settings.
-                    </p>
-                  </div>
+                  <p className="text-lg font-semibold text-navy-950">
+                    Organization Logo
+                  </p>
                 </div>
   
                 <div className="grid grid-cols-1 gap-x-6 gap-y-5 sm:grid-cols-2">
@@ -433,6 +682,7 @@ import {
                     type="email"
                     value={formData.email}
                     isEditing={isEditing}
+                    editable={false}
                     onChange={
                       handleFieldChange
                     }
@@ -443,18 +693,6 @@ import {
                     icon={Briefcase}
                     name="jobTitle"
                     value={formData.jobTitle}
-                    isEditing={isEditing}
-                    onChange={
-                      handleFieldChange
-                    }
-                  />
-  
-                  <FormField
-                    label="Phone Number"
-                    icon={Phone}
-                    name="phone"
-                    type="tel"
-                    value={formData.phone}
                     isEditing={isEditing}
                     onChange={
                       handleFieldChange
@@ -514,7 +752,7 @@ import {
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <SectionHeader>
-                  Team Members
+                  {organization?.name || "Organization"} Team
                 </SectionHeader>
   
                 <p className="-mt-2 text-sm text-slate-500">
@@ -522,7 +760,7 @@ import {
                   {teamMembers.length === 1
                     ? "member"
                     : "members"}{" "}
-                  in your organization
+                  linked to this organization
                 </p>
               </div>
   
@@ -623,16 +861,15 @@ import {
                 <Table
                   headers={[
                     "Member",
+                    "Job Title",
                     "Role",
-                    "Hierarchy",
-                    "Status",
+                    "Organization Level",
                   ]}
                   rows={teamMembers}
-                  accentKey="status"
                   renderRow={(member) => {
                     const memberName =
-                      member.name ||
                       member.fullName ||
+                      member.email ||
                       "";
   
                     const memberInitials =
@@ -647,52 +884,44 @@ import {
                     return (
                       <>
                         <td className="px-5 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-navy-100 text-xs font-semibold text-navy-700">
-                              {memberInitials ||
-                                "U"}
-                            </div>
+  <div className="flex items-center gap-3">
+    {/* Team members use their initials as a personal avatar.
+        The company logo is reserved for organization-level displays. */}
+    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-xs font-semibold text-blue-700">
+      {memberInitials || "U"}
+    </div>
+
+    <div className="min-w-0">
+      <p className="font-semibold text-navy-950">
+        <EmptyCell value={memberName} />
+      </p>
+
+      <p className="truncate text-xs font-medium text-slate-600">
+        <EmptyCell value={member.email} />
+      </p>
+    </div>
+  </div>
+</td>
   
-                            <div className="min-w-0">
-                              <p className="font-medium text-navy-950">
-                                <EmptyCell
-                                  value={
-                                    memberName
-                                  }
-                                />
-                              </p>
-  
-                              <p className="truncate text-xs text-slate-500">
-                                <EmptyCell
-                                  value={
-                                    member.email
-                                  }
-                                />
-                              </p>
-                            </div>
-                          </div>
-                        </td>
-  
-                        <td className="whitespace-nowrap px-5 py-4">
+                        <td className="whitespace-nowrap px-5 py-4 font-medium text-slate-700">
                           <EmptyCell
-                            value={member.role}
+                            value={member.jobTitle}
                           />
                         </td>
   
-                        <td className="whitespace-nowrap px-5 py-4">
+                        <td className="whitespace-nowrap px-5 py-4 font-medium text-slate-700">
+                          <EmptyCell
+                            value={formatRole(
+                              member.role
+                            )}
+                          />
+                        </td>
+  
+                        <td className="whitespace-nowrap px-5 py-4 font-medium capitalize text-slate-700">
                           <EmptyCell
                             value={
-                              member.hierarchyLevel ||
-                              member.hierarchy
+                              member.hierarchyLevel
                             }
-                          />
-                        </td>
-  
-                        <td className="px-5 py-4">
-                          <StatusBadge
-                            status={normalizeStatus(
-                              member.status
-                            )}
                           />
                         </td>
                       </>
@@ -717,8 +946,8 @@ import {
   
               <p className="-mt-2 text-sm text-slate-500">
                 Review your organizational structure
-                from the highest level to individual
-                branches.
+                from the highest level to your current
+                organization.
               </p>
             </div>
   
@@ -726,7 +955,7 @@ import {
               <div className="space-y-1">
                 {hierarchyLevels.map(
                   (item, index) => {
-                    const Icon =
+                    const FallbackIcon =
                       getHierarchyIcon(
                         item.level
                       );
@@ -741,45 +970,39 @@ import {
                         <Card className="group p-5 transition hover:border-navy-300 hover:shadow-md">
                           <div className="flex items-center justify-between gap-4">
                             <div className="flex min-w-0 items-start gap-4">
-                              <div
-                                className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${getHierarchyAccent(
-                                  item.level
-                                )}`}
-                              >
-                                <Icon className="h-5 w-5" />
-                              </div>
+                              {item.logo ? (
+                                <img
+                                  src={item.logo}
+                                  alt={`${item.name} logo`}
+                                  className="h-11 w-11 shrink-0 rounded-xl border border-slate-200 bg-white object-contain p-1"
+                                />
+                              ) : (
+                                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-navy-950 text-white">
+                                  <FallbackIcon className="h-5 w-5" />
+                                </div>
+                              )}
   
                               <div className="min-w-0">
-                                <div className="mb-1 flex flex-wrap items-center gap-2">
-                                  <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
-                                    {item.level ||
-                                      "Level"}
-                                  </span>
+                                <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold capitalize text-slate-700">
+                                  {item.level ||
+                                    "Level"}
+                                </span>
   
-                                  <StatusBadge
-                                    status={normalizeStatus(
-                                      item.status
-                                    )}
-                                  />
-                                </div>
-  
-                                <p className="truncate text-sm font-semibold text-navy-950">
+                                <p className="mt-2 truncate text-base font-semibold text-navy-950">
                                   <EmptyCell
                                     value={item.name}
                                   />
                                 </p>
   
-                                <p className="mt-0.5 text-xs text-slate-500">
+                                <p className="mt-1 text-xs text-slate-500">
                                   {item.parent && (
                                     <span className="text-slate-400">
-                                      {
-                                        item.parent
-                                      }{" "}
+                                      {item.parent}{" "}
                                       →{" "}
                                     </span>
                                   )}
   
-                                  <span className="font-medium text-slate-600">
+                                  <span className="font-semibold text-slate-700">
                                     {item.adminName ||
                                       "No admin assigned"}
                                   </span>
@@ -790,7 +1013,7 @@ import {
                               </div>
                             </div>
   
-                            <ChevronRight className="h-5 w-5 shrink-0 text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-navy-500" />
+                            <ChevronRight className="h-5 w-5 shrink-0 text-slate-300" />
                           </div>
                         </Card>
   
@@ -812,11 +1035,6 @@ import {
   
                 <p className="mt-3 text-sm font-medium text-slate-600">
                   No organization levels available
-                </p>
-  
-                <p className="mt-1 text-xs text-slate-400">
-                  Your organization hierarchy will
-                  appear here.
                 </p>
               </Card>
             )}
@@ -844,20 +1062,21 @@ import {
     value,
     type = "text",
     isEditing,
+    editable = true,
     onChange,
   }) => {
     return (
       <div>
         <label
           htmlFor={name}
-          className="mb-1.5 block text-sm font-medium text-slate-700"
+          className="mb-1.5 block text-sm font-semibold text-slate-800"
         >
           {label}
         </label>
   
-        {isEditing ? (
+        {isEditing && editable ? (
           <div className="relative">
-            <Icon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Icon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
   
             <input
               id={name}
@@ -865,14 +1084,14 @@ import {
               name={name}
               value={value}
               onChange={onChange}
-              className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+              className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-10 pr-3 text-sm font-medium text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
             />
           </div>
         ) : (
           <div className="flex items-center gap-2 rounded-lg px-3 py-2.5">
-            <Icon className="h-4 w-4 text-slate-400" />
+            <Icon className="h-4 w-4 text-slate-500" />
   
-            <span className="text-sm text-slate-700">
+            <span className="text-sm font-semibold text-slate-800">
               <EmptyCell value={value} />
             </span>
           </div>

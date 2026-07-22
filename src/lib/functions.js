@@ -1,9 +1,13 @@
 import {
+  collection,
   doc,
   getDoc,
+  getDocs,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
   writeBatch,
 } from "firebase/firestore";
 import { db } from "../firebase/firebase";
@@ -485,4 +489,35 @@ export const getOrganizationDocument = async (
     id: organizationSnapshot.id,
     ...organizationSnapshot.data(),
   };
+};
+
+// Loads every active user linked to the selected organization.
+// For Prototype 1, users with the same organizationId are treated
+// as members of the same organization team.
+export const getOrganizationUsers = async (
+  organizationId
+) => {
+  if (!organizationId) {
+    throw new Error(
+      "An organization ID is required."
+    );
+  }
+
+  const usersQuery = query(
+    collection(db, USERS_COLLECTION),
+    where(
+      "organizationId",
+      "==",
+      organizationId
+    )
+  );
+
+  const usersSnapshot = await getDocs(usersQuery);
+
+  return usersSnapshot.docs.map(
+    (userDocument) => ({
+      id: userDocument.id,
+      ...userDocument.data(),
+    })
+  );
 };
