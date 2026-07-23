@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clock,
   Globe,
+  History,
   Lock,
   MapPin,
   Save,
@@ -19,6 +20,14 @@ import { Button } from "../ui/Button";
 import {
   getCompanyByNormalizedName,
 } from "../../lib/companies";
+
+import {
+  auth,
+} from "../../firebase/firebase";
+
+import {
+  changes,
+} from "../../lib/form-handlers";
 
 const normalizeStatus = (value) => {
   return String(value ?? "")
@@ -35,6 +44,30 @@ const formatFieldType = (type) => {
     );
 };
 
+
+const formatAuditTimestamp = (value) => {
+  if (!value) {
+    return "Time unavailable";
+  }
+
+  const date =
+    typeof value?.toDate === "function"
+      ? value.toDate()
+      : new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Time unavailable";
+  }
+
+  return new Intl.DateTimeFormat(
+    "en-GB",
+    {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }
+  ).format(date);
+};
+
 const ReportViewer = ({
   report,
   onClose = () => {},
@@ -48,9 +81,22 @@ const ReportViewer = ({
   const [errors, setErrors] =
     useState({});
 
+  const [submitting, setSubmitting] =
+    useState(false);
+
+  const [submitError, setSubmitError] =
+    useState("");
+
   const reportFields =
     Array.isArray(report?.fields)
       ? report.fields
+      : [];
+
+  const workflowHistory =
+    Array.isArray(
+      report?.workflowHistory
+    )
+      ? report.workflowHistory
       : [];
 
   const workflowStages =
@@ -168,6 +214,8 @@ const ReportViewer = ({
       [fieldId]: value,
     }));
 
+    setSubmitError("");
+
     if (errors[fieldId]) {
       setErrors((currentErrors) => ({
         ...currentErrors,
@@ -206,34 +254,58 @@ const ReportViewer = ({
     });
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!validateFields()) {
       return;
     }
 
-    const lastStageIndex =
-      Math.max(
-        workflowStages.length - 1,
-        0
+    setSubmitting(true);
+    setSubmitError("");
+
+    try {
+      const updatedReport =
+        await changes.submitReportHandler({
+          report,
+          fieldValues: values,
+          currentUser:
+            auth.currentUser,
+
+            userProfile: {
+                role:
+                  report?.assignedRole,
+              
+                fullName:
+                  report?.assignedUserName ||
+                  "Unknown user",
+              
+                email:
+                  report?.assignedUserEmail ||
+                  auth.currentUser?.email ||
+                  "",
+              
+                organizationId:
+                  report?.organizationId,
+              
+                country:
+                  report?.country,
+              },
+        });
+
+      onUpdate(updatedReport);
+      onClose();
+    } catch (error) {
+      console.error(
+        "Unable to submit report:",
+        error
       );
 
-    const nextStageIndex =
-      Math.min(
-        currentStageIndex + 1,
-        lastStageIndex
+      setSubmitError(
+        error.message ||
+          "The report could not be submitted."
       );
-
-    onUpdate({
-      ...report,
-      fieldValues: values,
-      status:
-        nextStageIndex ===
-        lastStageIndex
-          ? "submitted"
-          : "under_review",
-      currentStageIndex:
-        nextStageIndex,
-    });
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const renderEditableField = (
@@ -687,7 +759,97 @@ const ReportViewer = ({
               </div>
             )}
           </section>
+
+          <section className="border-t border-slate-200 px-6 py-5">
+            <div className="mb-4 flex items-center gap-2">
+              <History className="h-4 w-4 text-navy-700" />
+
+              <div>
+
+                <h3 className="mt-1 text-lg font-bold text-navy-950">
+                  Report activity
+                </h3>
+              </div>
+            </div>
+
+            {workflowHistory.length ? (
+              <div className="space-y-0">
+                {[...workflowHistory]
+                  .sort((firstEntry, secondEntry) => {
+                    const firstDate =
+                      typeof firstEntry?.timestamp?.toDate === "function"
+                        ? firstEntry.timestamp.toDate()
+                        : new Date(firstEntry?.timestamp || 0);
+
+                    const secondDate =
+                      typeof secondEntry?.timestamp?.toDate === "function"
+                        ? secondEntry.timestamp.toDate()
+                        : new Date(secondEntry?.timestamp || 0);
+
+                    return secondDate - firstDate;
+                  })
+                  .map((entry, index) => (
+                    <div
+                      key={`${entry.userId || "user"}-${entry.action || "action"}-${index}`}
+                      className="relative flex gap-3 pb-5 last:pb-0"
+                    >
+                      {index < workflowHistory.length - 1 && (
+                        <div className="absolute left-[17px] top-9 h-[calc(100%-1.25rem)] w-px bg-slate-200" />
+                      )}
+
+                      <div className="relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                      </div>
+
+                      <div className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                        <p className="text-sm font-semibold text-slate-900">
+                          {entry.userName || "Unknown user"}
+                        </p>
+
+                        <p className="mt-1 text-xs font-medium capitalize text-slate-600">
+                          {String(
+                            entry.role ||
+                              entry.stageLabel ||
+                              "Unknown role"
+                          ).replace(/_/g, " ")}
+                        </p>
+
+                        {entry.userEmail && (
+                          <p className="mt-1 text-xs text-slate-500">
+                            {entry.userEmail}
+                          </p>
+                        )}
+
+                        <p className="mt-2 text-xs font-medium capitalize text-slate-600">
+                          {String(
+                            entry.action ||
+                              "updated"
+                          ).replace(/_/g, " ")}
+                        </p>
+
+                        <p className="mt-1 text-xs text-slate-500">
+                          {formatAuditTimestamp(entry.timestamp)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            ) : (
+              <div className="rounded-xl border-2 border-dashed border-slate-200 py-8 text-center">
+                <p className="text-sm font-medium text-slate-500">
+                  No report activity has been recorded yet.
+                </p>
+              </div>
+            )}
+          </section>
+
         </div>
+
+        {submitError && (
+          <div className="border-t border-red-200 bg-red-50 px-6 py-3 text-sm font-medium text-red-700">
+            {submitError}
+          </div>
+        )}
 
         <div className="flex items-center justify-end gap-3 border-t border-slate-200 bg-slate-50 px-6 py-4">
           {isReadOnly ? (
@@ -704,6 +866,7 @@ const ReportViewer = ({
                 onClick={
                   handleSaveDraft
                 }
+                disabled={submitting}
               >
                 <Save className="h-4 w-4" />
                 Save Draft
@@ -713,10 +876,16 @@ const ReportViewer = ({
                 onClick={
                   handleSubmit
                 }
-                className="!bg-navy-950 !text-white shadow-sm hover:!bg-navy-900"
+                disabled={
+                  submitting
+                }
+                className="!bg-navy-950 !text-white shadow-sm hover:!bg-navy-900 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Send className="h-4 w-4" />
-                Submit Report
+
+                {submitting
+                  ? "Submitting..."
+                  : "Submit Report"}
               </Button>
             </>
           )}

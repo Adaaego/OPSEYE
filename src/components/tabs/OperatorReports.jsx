@@ -8,8 +8,10 @@ import {
   ChevronsUpDown,
   Clock3,
   ExternalLink,
+  Eye,
   FileText,
 } from "lucide-react";
+
 import {
   Card,
   EmptyCell,
@@ -18,6 +20,7 @@ import {
   Select,
   StatusBadge,
 } from "../ui/interface";
+
 import { Button } from "../ui/Button";
 
 import {
@@ -36,8 +39,8 @@ import {
   auth,
   db,
 } from "../../firebase/firebase";
-import ReportViewer from "./ReportsViewer";
 
+import ReportViewer from "./ReportsViewer";
 
 const SEGMENT_LABELS = {
   downstream: "Downstream",
@@ -66,26 +69,18 @@ const normalizeStatus = (value) => {
     .replace(/[\s-]+/g, "_");
 };
 
-const getSegmentLabel = (segment) => {
-  return (
-    SEGMENT_LABELS[normalizeValue(segment)] ||
-    segment ||
-    ""
-  );
-};
-
-const ROLE_LABELS = {
-  employee: "Employee",
-  branch_admin: "Branch Admin",
-  region_admin: "Region Admin",
-  country_admin: "Country Admin",
-  enterprise_admin: "Enterprise Admin",
-  ministry: "Ministry",
-};
-
 const getRoleLabel = (role) => {
+  const roleLabels = {
+    employee: "Employee",
+    branch_admin: "Branch Admin",
+    region_admin: "Region Admin",
+    country_admin: "Country Admin",
+    enterprise_admin: "Enterprise Admin",
+    ministry: "Ministry",
+  };
+
   return (
-    ROLE_LABELS[normalizeValue(role)] ||
+    roleLabels[normalizeValue(role)] ||
     role ||
     ""
   );
@@ -284,16 +279,32 @@ const getWorkflowStageLabel = (report) => {
     return "Not Started";
   }
 
-  const workflowStages = Array.isArray(
-    report.workflowStages
-  )
-    ? report.workflowStages
-    : [];
+  const workflowStages =
+    Array.isArray(
+      report.workflowStages
+    )
+      ? report.workflowStages
+      : [];
 
   return (
     workflowStages[
       report.currentStageIndex
-    ]?.label || "—"
+    ]?.label ||
+    getRoleLabel(
+      report.currentStageRole
+    ) ||
+    "—"
+  );
+};
+
+const isReadOnlyReport = (status) => {
+  return [
+    "submitted",
+    "under_review",
+    "approved",
+    "rejected",
+  ].includes(
+    normalizeStatus(status)
   );
 };
 
@@ -368,19 +379,302 @@ const OperatorsReports = ({
   const today = getDateKey(new Date());
 
   /*
-   * Listen for active Ministry form templates and show only
-   * the forms assigned to the signed-in user's organization
-   * and submitter role.
+   * Active form templates provide new reporting tasks.
+   * Saved report submissions provide submitted answers,
+   * workflow progress and the complete audit history.
    */
   useEffect(() => {
     let unsubscribeUser = null;
     let unsubscribeOrganization = null;
     let unsubscribeTemplates = null;
+    let unsubscribeSubmissions = null;
+
+    let activeTemplates = [];
+    let savedSubmissions = [];
+    let activeUserRecord = null;
+    let activeOrganization = null;
+    let activeCurrentUser = null;
 
     const stopListening = () => {
       unsubscribeUser?.();
       unsubscribeOrganization?.();
       unsubscribeTemplates?.();
+      unsubscribeSubmissions?.();
+    };
+
+    const buildReports = () => {
+      if (
+        !activeUserRecord ||
+        !activeOrganization ||
+        !activeCurrentUser
+      ) {
+        return;
+      }
+
+      const eligibleTemplates =
+        activeTemplates.filter(
+          (formTemplate) =>
+            templateMatchesOrganization(
+              formTemplate,
+              activeUserRecord,
+              activeOrganization
+            ) &&
+            templateMatchesSubmitter(
+              formTemplate,
+              activeUserRecord
+            )
+        );
+
+      const templateMap = new Map(
+        eligibleTemplates.map(
+          (template) => [
+            template.id,
+            template,
+          ]
+        )
+      );
+
+      const submittedReports =
+        savedSubmissions
+          .filter((submission) =>
+            templateMap.has(
+              submission.formTemplateId
+            )
+          )
+          .map((submission) => {
+            const formTemplate =
+              templateMap.get(
+                submission.formTemplateId
+              );
+
+            const workflowRoles =
+              formTemplate
+                ?.approvalWorkflow
+                ?.roles || [];
+
+            const workflowStages =
+              Array.isArray(
+                submission.workflowStages
+              ) &&
+              submission.workflowStages.length
+                ? submission.workflowStages
+                : workflowRoles.map(
+                    (role) => ({
+                      role,
+                      label:
+                        getRoleLabel(role),
+                    })
+                  );
+
+            const currentStageIndex =
+              Number.isInteger(
+                submission.currentStageIndex
+              )
+                ? submission.currentStageIndex
+                : 0;
+
+            const currentStageRole =
+              submission.currentStageRole ||
+              workflowStages[
+                currentStageIndex
+              ]?.role ||
+              "";
+
+            return {
+              ...formTemplate,
+              ...submission,
+              id: submission.id,
+              reportSubmissionId:
+                submission.id,
+              submissionId:
+                submission.id,
+              formTemplateId:
+                submission.formTemplateId,
+              reportName:
+                submission.reportName ||
+                formTemplate?.name ||
+                "",
+              fields:
+                Array.isArray(
+                  submission.fields
+                ) &&
+                submission.fields.length
+                  ? submission.fields
+                  : formTemplate?.fields ||
+                    [],
+              workflowStages,
+              currentStageIndex,
+              currentStageRole,
+              assignedRole:
+                currentStageRole,
+              assignedTo:
+                submission.assignedTo ||
+                getRoleLabel(
+                  currentStageRole
+                ) ||
+                "—",
+              operatorName:
+                submission.operatorName ||
+                activeOrganization.name ||
+                activeUserRecord.organizationName ||
+                "",
+              organizationId:
+                submission.organizationId ||
+                activeOrganization.id,
+              organizationNormalizedName:
+                submission.organizationNormalizedName ||
+                submission.normalizedName ||
+                activeOrganization.normalizedName ||
+                activeOrganization.companyNormalizedName ||
+                activeOrganization.name,
+              branchName:
+                submission.branchName ||
+                activeOrganization.branchName ||
+                activeOrganization.locationName ||
+                (
+                  normalizeValue(
+                    activeOrganization.type ||
+                      activeOrganization.organizationType
+                  ) === "branch"
+                    ? activeOrganization.name
+                    : ""
+                ),
+              regionName:
+                submission.regionName ||
+                activeOrganization.regionName ||
+                activeOrganization.region ||
+                activeOrganization.parentRegionName ||
+                "",
+              country:
+                submission.country ||
+                activeOrganization.country ||
+                activeUserRecord.country ||
+                "",
+              dueTime:
+                submission.dueTime ||
+                formTemplate
+                  ?.submissionDeadline
+                  ?.time ||
+                "",
+            };
+          });
+
+      const existingSubmissionKeys =
+        new Set(
+          submittedReports.map(
+            (report) =>
+              `${report.formTemplateId}-${getDateKey(
+                report.reportingDate
+              )}`
+          )
+        );
+
+      const pendingReports =
+        eligibleTemplates
+          .filter(
+            (formTemplate) =>
+              !existingSubmissionKeys.has(
+                `${formTemplate.id}-${today}`
+              )
+          )
+          .map((formTemplate) => {
+            const workflowRoles =
+              formTemplate
+                .approvalWorkflow
+                ?.roles || [];
+
+            return {
+              ...formTemplate,
+              formTemplateId:
+                formTemplate.id,
+              reportName:
+                formTemplate.name,
+              operatorName:
+                activeOrganization.name ||
+                activeUserRecord.organizationName ||
+                "",
+              organizationId:
+                activeOrganization.id,
+              organizationNormalizedName:
+                activeOrganization.normalizedName ||
+                activeOrganization.companyNormalizedName ||
+                activeOrganization.name,
+              branchName:
+                activeOrganization.branchName ||
+                activeOrganization.locationName ||
+                (
+                  normalizeValue(
+                    activeOrganization.type ||
+                      activeOrganization.organizationType
+                  ) === "branch"
+                    ? activeOrganization.name
+                    : ""
+                ),
+              regionName:
+                activeOrganization.regionName ||
+                activeOrganization.region ||
+                activeOrganization.parentRegionName ||
+                "",
+              country:
+                activeOrganization.country ||
+                activeUserRecord.country ||
+                "",
+              reportingDate: today,
+              dueTime:
+                formTemplate
+                  .submissionDeadline
+                  ?.time || "",
+                  assignedUserName:
+                  userRecord.fullName ||
+                  userRecord.name ||
+                  currentUser.displayName ||
+                  "Unknown user",
+                
+                assignedUserEmail:
+                  userRecord.email ||
+                  currentUser.email ||
+                  "",
+                
+                assignedTo:
+                  userRecord.fullName ||
+                  userRecord.name ||
+                  currentUser.displayName ||
+                  getRoleLabel(
+                    userRecord.role ||
+                      userRecord.userRole
+                  ),
+              assignedRole:
+                normalizeValue(
+                  activeUserRecord.role ||
+                    activeUserRecord.userRole
+                ),
+              currentStageRole:
+                normalizeValue(
+                  workflowRoles[0]
+                ),
+              status:
+                "Pending Submission",
+              currentStageIndex: 0,
+              workflowStages:
+                workflowRoles.map(
+                  (role) => ({
+                    role,
+                    label:
+                      getRoleLabel(role),
+                  })
+                ),
+              workflowHistory: [],
+              fieldValues: {},
+            };
+          });
+
+      setReports([
+        ...pendingReports,
+        ...submittedReports,
+      ]);
+
+      setReportsLoading(false);
+      setReportsError("");
     };
 
     const unsubscribeAuth =
@@ -388,6 +682,9 @@ const OperatorsReports = ({
         auth,
         (currentUser) => {
           stopListening();
+
+          activeCurrentUser =
+            currentUser;
 
           if (!currentUser?.uid) {
             setCurrentUserRole("");
@@ -420,9 +717,13 @@ const OperatorsReports = ({
                 }
 
                 const userRecord = {
-                  id: userSnapshot.id,
+                  id:
+                    userSnapshot.id,
                   ...userSnapshot.data(),
                 };
+
+                activeUserRecord =
+                  userRecord;
 
                 setCurrentUserRole(
                   normalizeValue(
@@ -448,6 +749,7 @@ const OperatorsReports = ({
 
                 unsubscribeOrganization?.();
                 unsubscribeTemplates?.();
+                unsubscribeSubmissions?.();
 
                 unsubscribeOrganization =
                   onSnapshot(
@@ -474,122 +776,36 @@ const OperatorsReports = ({
                         ...organizationSnapshot.data(),
                       };
 
-                      unsubscribeTemplates?.();
+                      activeOrganization =
+                        organization;
 
-                      const templatesQuery =
-                        query(
-                          collection(
-                            db,
-                            "formTemplates"
-                          ),
-                          where(
-                            "status",
-                            "==",
-                            "active"
-                          )
-                        );
+                      unsubscribeTemplates?.();
+                      unsubscribeSubmissions?.();
 
                       unsubscribeTemplates =
                         onSnapshot(
-                          templatesQuery,
+                          query(
+                            collection(
+                              db,
+                              "formTemplates"
+                            ),
+                            where(
+                              "status",
+                              "==",
+                              "active"
+                            )
+                          ),
                           (templatesSnapshot) => {
-                            const assignedReports =
-                              templatesSnapshot.docs
-                                .map(
-                                  (templateDocument) => ({
-                                    id:
-                                      templateDocument.id,
-                                    ...templateDocument.data(),
-                                  })
-                                )
-                                .filter(
-                                  (formTemplate) =>
-                                    templateMatchesOrganization(
-                                      formTemplate,
-                                      userRecord,
-                                      organization
-                                    ) &&
-                                    templateMatchesSubmitter(
-                                      formTemplate,
-                                      userRecord
-                                    )
-                                )
-                                .map(
-                                  (formTemplate) => {
-                                    const workflowRoles =
-                                      formTemplate
-                                        .approvalWorkflow
-                                        ?.roles || [];
+                            activeTemplates =
+                              templatesSnapshot.docs.map(
+                                (templateDocument) => ({
+                                  id:
+                                    templateDocument.id,
+                                  ...templateDocument.data(),
+                                })
+                              );
 
-                                    return {
-                                      ...formTemplate,
-                                      formTemplateId:
-                                        formTemplate.id,
-                                      reportName:
-                                        formTemplate.name,
-                                      operatorName:
-                                        organization.name ||
-                                        userRecord.organizationName ||
-                                        "",
-                                      organizationId:
-                                        organization.id,
-                                      branchName:
-                                        organization.branchName ||
-                                        organization.locationName ||
-                                        (
-                                          normalizeValue(
-                                            organization.type ||
-                                              organization.organizationType
-                                          ) === "branch"
-                                            ? organization.name
-                                            : ""
-                                        ),
-                                      regionName:
-                                        organization.regionName ||
-                                        organization.region ||
-                                        organization.parentRegionName ||
-                                        "",
-                                      reportingDate:
-                                        today,
-                                      dueTime:
-                                        formTemplate
-                                          .submissionDeadline
-                                          ?.time || "",
-                                      assignedTo:
-                                        currentUser.displayName ||
-                                        currentUser.email ||
-                                        getRoleLabel(
-                                          userRecord.role ||
-                                            userRecord.userRole
-                                        ),
-                                      assignedRole:
-                                        normalizeValue(
-                                          userRecord.role ||
-                                            userRecord.userRole
-                                        ),
-                                      status:
-                                        "Pending Submission",
-                                      currentStageIndex:
-                                        0,
-                                      workflowStages:
-                                        workflowRoles.map(
-                                          (role) => ({
-                                            role,
-                                            label:
-                                              getRoleLabel(
-                                                role
-                                              ),
-                                          })
-                                        ),
-                                    };
-                                  }
-                                );
-
-                            setReports(
-                              assignedReports
-                            );
-                            setReportsLoading(false);
-                            setReportsError("");
+                            buildReports();
                           },
                           (templatesError) => {
                             console.error(
@@ -603,6 +819,42 @@ const OperatorsReports = ({
                               templatesError.message ||
                                 "Assigned forms could not be loaded."
                             );
+                          }
+                        );
+
+                      unsubscribeSubmissions =
+                        onSnapshot(
+                          query(
+                            collection(
+                              db,
+                              "reportSubmissions"
+                            ),
+                            where(
+                              "organizationId",
+                              "==",
+                              organization.id
+                            )
+                          ),
+                          (submissionsSnapshot) => {
+                            savedSubmissions =
+                              submissionsSnapshot.docs.map(
+                                (submissionDocument) => ({
+                                  id:
+                                    submissionDocument.id,
+                                  ...submissionDocument.data(),
+                                })
+                              );
+
+                            buildReports();
+                          },
+                          (submissionsError) => {
+                            console.error(
+                              "Unable to load report submissions:",
+                              submissionsError
+                            );
+
+                            savedSubmissions = [];
+                            buildReports();
                           }
                         );
                     },
@@ -644,6 +896,46 @@ const OperatorsReports = ({
     };
   }, [today]);
 
+  /*
+   * Keep an open preview synchronized when Firestore updates
+   * its workflow stage, status or audit history.
+   */
+  useEffect(() => {
+    if (!openReport) {
+      return;
+    }
+
+    const matchingReport =
+      reports.find((report) => {
+        if (
+          openReport.reportSubmissionId &&
+          report.reportSubmissionId
+        ) {
+          return (
+            openReport.reportSubmissionId ===
+            report.reportSubmissionId
+          );
+        }
+
+        return (
+          report.formTemplateId ===
+            openReport.formTemplateId &&
+          getDateKey(
+            report.reportingDate
+          ) ===
+            getDateKey(
+              openReport.reportingDate
+            )
+        );
+      });
+
+    if (matchingReport) {
+      setOpenReport(
+        matchingReport
+      );
+    }
+  }, [reports, openReport]);
+
   const summaryCards = useMemo(() => {
     const reportsDueToday =
       reports.filter((report) => {
@@ -666,7 +958,8 @@ const OperatorsReports = ({
       reports.filter(
         (report) =>
           getDateKey(
-            report.submissionTime
+            report.submittedAt ||
+              report.submissionTime
           ) === today
       ).length;
 
@@ -676,7 +969,9 @@ const OperatorsReports = ({
           "submitted",
           "under_review",
         ].includes(
-          normalizeStatus(report.status)
+          normalizeStatus(
+            report.status
+          )
         )
       ).length;
 
@@ -693,7 +988,8 @@ const OperatorsReports = ({
         label: "Reports Due Today",
         value: reportsDueToday,
         icon: CalendarClock,
-        iconClassName: "text-navy-600",
+        iconClassName:
+          "text-navy-600",
         wrapperClassName:
           "bg-navy-50 ring-navy-200",
       },
@@ -710,7 +1006,8 @@ const OperatorsReports = ({
         label: "Pending Review",
         value: pendingReview,
         icon: Clock3,
-        iconClassName: "text-amber-600",
+        iconClassName:
+          "text-amber-600",
         wrapperClassName:
           "bg-amber-50 ring-amber-200",
       },
@@ -718,14 +1015,14 @@ const OperatorsReports = ({
         label: "Overdue Reports",
         value: overdueReports,
         icon: AlertTriangle,
-        iconClassName: "text-red-600",
+        iconClassName:
+          "text-red-600",
         wrapperClassName:
           "bg-red-50 ring-red-200",
       },
     ];
   }, [reports, today]);
 
-  // Filters and sorts a copy so the original report records remain unchanged.
   const visibleReports = useMemo(() => {
     const normalizedSearch =
       normalizeValue(search);
@@ -765,22 +1062,33 @@ const OperatorsReports = ({
       });
 
     return [...filteredReports].sort(
-      (firstReport, secondReport) => {
-        const getSortValue = (report) => {
-          if (sortKey === "status") {
+      (
+        firstReport,
+        secondReport
+      ) => {
+        const getSortValue = (
+          report
+        ) => {
+          if (
+            sortKey === "status"
+          ) {
             return normalizeStatus(
               report.status
             );
           }
 
-          return report[sortKey] || "";
+          return (
+            report[sortKey] || ""
+          );
         };
 
         const comparison = String(
           getSortValue(firstReport)
         ).localeCompare(
           String(
-            getSortValue(secondReport)
+            getSortValue(
+              secondReport
+            )
           ),
           undefined,
           {
@@ -802,7 +1110,9 @@ const OperatorsReports = ({
     sortDirection,
   ]);
 
-  const handleSort = (column) => {
+  const handleSort = (
+    column
+  ) => {
     if (sortKey === column) {
       setSortDirection(
         (currentDirection) =>
@@ -821,18 +1131,67 @@ const OperatorsReports = ({
   const handleReportUpdate = (
     updatedReport
   ) => {
-    setOpenReport(updatedReport);
+    setReports((currentReports) => {
+      const updatedId =
+        updatedReport.reportSubmissionId ||
+        updatedReport.id;
+
+      const existingIndex =
+        currentReports.findIndex(
+          (report) => {
+            const reportId =
+              report.reportSubmissionId ||
+              report.id;
+
+            if (
+              updatedId &&
+              reportId === updatedId
+            ) {
+              return true;
+            }
+
+            return (
+              report.formTemplateId ===
+                updatedReport.formTemplateId &&
+              getDateKey(
+                report.reportingDate
+              ) ===
+                getDateKey(
+                  updatedReport.reportingDate
+                )
+            );
+          }
+        );
+
+      if (existingIndex === -1) {
+        return [
+          updatedReport,
+          ...currentReports,
+        ];
+      }
+
+      const nextReports = [
+        ...currentReports,
+      ];
+
+      nextReports[
+        existingIndex
+      ] = updatedReport;
+
+      return nextReports;
+    });
+
+    setOpenReport(
+      updatedReport
+    );
 
     if (onUpdateReport) {
-      onUpdateReport(updatedReport);
+      onUpdateReport(
+        updatedReport
+      );
     }
   };
 
-  /*
-   * Location columns change based on the signed-in user's role.
-   * Branch admins already work within one branch, so repeating
-   * that branch in every row adds no useful context.
-   */
   const showBranchColumn = [
     "employee",
     "region_admin",
@@ -846,7 +1205,7 @@ const OperatorsReports = ({
   ].includes(currentUserRole);
 
   const tableColumnCount =
-    6 +
+    7 +
     (showBranchColumn ? 1 : 0) +
     (showRegionColumn ? 1 : 0);
 
@@ -857,12 +1216,11 @@ const OperatorsReports = ({
 
         <p className="-mt-4 mb-6 max-w-2xl text-sm font-medium text-slate-700">
           View reporting tasks assigned by the
-          ministry and complete them before their
-          submission deadlines.
+          ministry and track submitted reports
+          through their approval workflow.
         </p>
 
         <div className="space-y-6">
-          {/* Report summary */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {summaryCards.map(
               ({
@@ -901,7 +1259,6 @@ const OperatorsReports = ({
           </div>
 
           <Card className="overflow-hidden">
-            {/* Search and status filter */}
             <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center">
               <SearchInput
                 value={search}
@@ -1019,11 +1376,17 @@ const OperatorsReports = ({
                           reportStatus ===
                           "overdue";
 
+                        const previewOnly =
+                          isReadOnlyReport(
+                            report.status
+                          );
+
                         return (
                           <tr
                             key={
+                              report.reportSubmissionId ||
                               report.id ||
-                              `${report.reportName}-${report.reportingDate}`
+                              `${report.formTemplateId}-${report.reportingDate}`
                             }
                             className={`border-b border-slate-100 transition-colors last:border-0 hover:bg-slate-50/60 ${
                               isOverdue
@@ -1039,7 +1402,6 @@ const OperatorsReports = ({
                                   }
                                 />
                               </p>
-
                             </td>
 
                             <td className="whitespace-nowrap px-5 py-4 text-sm font-medium text-slate-800">
@@ -1111,8 +1473,15 @@ const OperatorsReports = ({
                                 }
                                 className="!border-navy-950 !bg-navy-950 !text-white shadow-sm hover:!bg-navy-900"
                               >
-                                <ExternalLink className="h-3.5 w-3.5" />
-                                Open Report
+                                {previewOnly ? (
+                                  <Eye className="h-3.5 w-3.5" />
+                                ) : (
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                )}
+
+                                {previewOnly
+                                  ? "Preview Report"
+                                  : "Open Report"}
                               </Button>
                             </td>
                           </tr>
@@ -1122,7 +1491,9 @@ const OperatorsReports = ({
                   ) : (
                     <tr>
                       <td
-                        colSpan={tableColumnCount}
+                        colSpan={
+                          tableColumnCount
+                        }
                         className="px-5 py-14 text-center"
                       >
                         <FileText className="mx-auto h-8 w-8 text-slate-300" />
@@ -1154,7 +1525,8 @@ const OperatorsReports = ({
 
             <div className="flex flex-col gap-3 border-t border-slate-200 px-5 py-3 text-xs font-medium text-slate-700 sm:flex-row sm:items-center sm:justify-between">
               <span>
-                Showing {visibleReports.length} of{" "}
+                Showing{" "}
+                {visibleReports.length} of{" "}
                 {reports.length} reports
               </span>
 

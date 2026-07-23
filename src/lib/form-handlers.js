@@ -1,9 +1,12 @@
 import {
     addDoc,
+    arrayUnion,
     collection,
     deleteDoc,
     doc,
     serverTimestamp,
+    setDoc,
+    Timestamp,
     updateDoc,
   } from "firebase/firestore";
   import { db } from "../firebase/firebase";
@@ -11,6 +14,9 @@ import {
   
   const FORM_TEMPLATES_COLLECTION =
     "formTemplates";
+
+  const REPORT_SUBMISSIONS_COLLECTION =
+    "reportSubmissions";
   
   const createId = () => {
     return v4();
@@ -1001,6 +1007,356 @@ import {
   };
 
   /*
+   * Checks that every required Ministry field has been completed.
+   */
+  const validateReportResponses = (
+    report,
+    fieldValues
+  ) => {
+    const reportFields =
+      Array.isArray(report?.fields)
+        ? report.fields
+        : [];
+
+    const missingRequiredField =
+      reportFields.find((field) => {
+        if (!field.required) {
+          return false;
+        }
+
+        const value =
+          fieldValues?.[field.id];
+
+        return (
+          value === undefined ||
+          value === null ||
+          String(value).trim() === ""
+        );
+      });
+
+    if (missingRequiredField) {
+      throw new Error(
+        `${missingRequiredField.label || "A required field"} must be completed.`
+      );
+    }
+  };
+
+  /*
+   * Saves only answers that belong to fields in the Ministry's
+   * original form template.
+   */
+  const cleanReportResponses = (
+    report,
+    fieldValues
+  ) => {
+    const reportFields =
+      Array.isArray(report?.fields)
+        ? report.fields
+        : [];
+
+    return reportFields.reduce(
+      (responses, field) => {
+        responses[field.id] =
+          fieldValues?.[field.id] ?? "";
+
+        return responses;
+      },
+      {}
+    );
+  };
+
+  /*
+   * Creates the first operator submission or updates an existing
+   * report submission before moving it to the next workflow role.
+   *
+   * Every submission adds an immutable history entry containing
+   * the submitter, role, stage and exact action time.
+   */
+  const submitReportHandler = async ({
+    report,
+    fieldValues,
+    currentUser,
+    userProfile,
+  }) => {
+    if (!currentUser?.uid) {
+      throw new Error(
+        "A signed-in user is required."
+      );
+    }
+
+    const formTemplateId =
+      report?.formTemplateId ||
+      report?.templateId ||
+      report?.id;
+
+    if (!formTemplateId) {
+      throw new Error(
+        "A form template ID is required."
+      );
+    }
+
+    const workflowStages =
+      Array.isArray(report?.workflowStages)
+        ? report.workflowStages
+        : [];
+
+    if (!workflowStages.length) {
+      throw new Error(
+        "This report does not have a valid workflow."
+      );
+    }
+
+    const currentStageIndex =
+      Number.isInteger(
+        report?.currentStageIndex
+      )
+        ? report.currentStageIndex
+        : 0;
+
+    const currentStage =
+      workflowStages[
+        currentStageIndex
+      ];
+
+    const currentUserRole =
+      String(
+        userProfile?.role ||
+          userProfile?.userRole ||
+          report?.assignedRole ||
+          ""
+      )
+        .trim()
+        .toLowerCase();
+
+    const currentStageRole =
+      String(
+        currentStage?.role || ""
+      )
+        .trim()
+        .toLowerCase();
+
+    if (
+      !currentUserRole ||
+      currentUserRole !==
+        currentStageRole
+    ) {
+      throw new Error(
+        "You are not the person currently assigned to submit this report."
+      );
+    }
+
+    validateReportResponses(
+      report,
+      fieldValues
+    );
+
+    const cleanedResponses =
+      cleanReportResponses(
+        report,
+        fieldValues
+      );
+
+    const lastStageIndex =
+      workflowStages.length - 1;
+
+    const nextStageIndex =
+      Math.min(
+        currentStageIndex + 1,
+        lastStageIndex
+      );
+
+    const nextStage =
+      workflowStages[
+        nextStageIndex
+      ];
+
+    const submittedAt =
+      Timestamp.now();
+
+      const submitterName =
+      userProfile?.fullName ||
+      userProfile?.name ||
+      currentUser.displayName ||
+      "Unknown user";
+    
+    const submitterEmail =
+      userProfile?.email ||
+      currentUser.email ||
+      "";
+
+      const historyEntry = {
+        action: "submitted",
+      
+        userId:
+          currentUser.uid,
+      
+        userName:
+          submitterName,
+      
+        userEmail:
+          submitterEmail,
+      
+        role:
+          currentUserRole,
+      
+        stageIndex:
+          currentStageIndex,
+      
+        stageLabel:
+          currentStage?.label ||
+          currentStageRole,
+      
+        timestamp:
+          submittedAt,
+      };
+
+    const submissionId =
+      report?.reportSubmissionId ||
+      report?.submissionId ||
+      "";
+
+    const submissionReference =
+      submissionId
+        ? doc(
+            db,
+            REPORT_SUBMISSIONS_COLLECTION,
+            submissionId
+          )
+        : doc(
+            collection(
+              db,
+              REPORT_SUBMISSIONS_COLLECTION
+            )
+          );
+
+    const sharedSubmissionData = {
+      formTemplateId,
+      reportName:
+        report?.reportName ||
+        report?.name ||
+        "",
+      description:
+        report?.description || "",
+      fields:
+        Array.isArray(report?.fields)
+          ? report.fields
+          : [],
+      fieldValues:
+        cleanedResponses,
+
+      organizationId:
+        report?.organizationId ||
+        userProfile?.organizationId ||
+        "",
+      operatorName:
+        report?.operatorName ||
+        report?.organizationName ||
+        "",
+      normalizedName:
+        report?.normalizedName ||
+        report?.companyNormalizedName ||
+        report?.organizationNormalizedName ||
+        "",
+      branchName:
+        report?.branchName ||
+        report?.branch ||
+        "",
+      regionName:
+        report?.regionName ||
+        report?.region ||
+        "",
+      country:
+        report?.country ||
+        userProfile?.country ||
+        "",
+
+      reportingDate:
+        report?.reportingDate || "",
+      dueTime:
+        report?.dueTime || "",
+
+      workflowStages,
+      currentStageIndex:
+        nextStageIndex,
+      currentStageRole:
+        nextStage?.role || "",
+      assignedRole:
+        nextStage?.role || "",
+
+      status:
+        nextStageIndex ===
+        lastStageIndex
+          ? "submitted"
+          : "under_review",
+
+          submittedBy:
+          currentUser.uid,
+        
+        submittedByName:
+          submitterName,
+        
+        submittedByEmail:
+          submitterEmail,
+        
+        submittedByRole:
+          currentUserRole,
+      submittedAt:
+        serverTimestamp(),
+
+      updatedBy:
+        currentUser.uid,
+      updatedAt:
+        serverTimestamp(),
+    };
+
+    if (submissionId) {
+      await updateDoc(
+        submissionReference,
+        {
+          ...sharedSubmissionData,
+          workflowHistory:
+            arrayUnion(
+              historyEntry
+            ),
+        }
+      );
+    } else {
+      await setDoc(
+        submissionReference,
+        {
+          ...sharedSubmissionData,
+          createdBy:
+            currentUser.uid,
+          createdAt:
+            serverTimestamp(),
+          workflowHistory: [
+            historyEntry,
+          ],
+        }
+      );
+    }
+
+    return {
+      ...report,
+      ...sharedSubmissionData,
+      id:
+        submissionReference.id,
+      reportSubmissionId:
+        submissionReference.id,
+      submissionId:
+        submissionReference.id,
+      workflowHistory: [
+        ...(Array.isArray(
+          report?.workflowHistory
+        )
+          ? report.workflowHistory
+          : []),
+        historyEntry,
+      ],
+    };
+  };
+
+  /*
    * All form builder utilities are exposed through one object
    * so components can continue importing:
    *
@@ -1041,4 +1397,5 @@ import {
     createFormHandler,
     updateFormHandler,
     deleteFormHandler,
+    submitReportHandler,
   };
