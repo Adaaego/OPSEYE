@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   Building2,
@@ -26,8 +26,21 @@ import {
 } from "../../lib/types";
 
 import {
+  collection,
+  onSnapshot,
+} from "firebase/firestore";
+
+import {
+  db,
+} from "../../firebase/firebase";
+
+import {
   changes,
 } from "../../lib/form-handlers";
+
+import {
+  getCompanyByNormalizedName,
+} from "../../lib/companies";
 
 /*
  * Each approval role receives a readable label and icon.
@@ -61,6 +74,12 @@ const WORKFLOW_ROLE_DETAILS = {
 };
 
 
+const normalizeValue = (value) => {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+};
+
 const FormBuilder = ({
   initialData = null,
   organizations = [],
@@ -72,6 +91,15 @@ const FormBuilder = ({
     useState("general");
 
   const [error, setError] =
+    useState("");
+
+  const [backendOrganizations, setBackendOrganizations] =
+    useState([]);
+
+  const [organizationsLoading, setOrganizationsLoading] =
+    useState(true);
+
+  const [organizationsError, setOrganizationsError] =
     useState("");
 
   /*
@@ -127,6 +155,51 @@ const FormBuilder = ({
     });
 
   /*
+   * Load organizations directly from Firestore so the target
+   * audience list does not depend on a parent component prop.
+   */
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(
+        db,
+        "organizations"
+      ),
+      (snapshot) => {
+        const organizationRecords =
+          snapshot.docs.map(
+            (organizationDocument) => ({
+              id:
+                organizationDocument.id,
+              ...organizationDocument.data(),
+            })
+          );
+
+        setBackendOrganizations(
+          organizationRecords
+        );
+        setOrganizationsLoading(false);
+        setOrganizationsError("");
+      },
+      (loadError) => {
+        console.error(
+          "Unable to load organizations:",
+          loadError
+        );
+
+        setOrganizationsLoading(false);
+        setOrganizationsError(
+          loadError.message ||
+            "Organizations could not be loaded."
+        );
+      }
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  /*
    * Specific-audience forms can be sent to company-level
    * organizations or individual branches.
    *
@@ -135,36 +208,107 @@ const FormBuilder = ({
    */
   const targetOrganizations =
     useMemo(() => {
-      return organizations
-        .filter((organization) => {
-          const type = String(
-            organization.type || ""
-          )
-            .trim()
-            .toLowerCase();
+      /*
+       * Prefer Firestore records. The prop remains a fallback
+       * while the backend subscription is loading.
+       */
+      const availableOrganizations =
+        backendOrganizations.length
+          ? backendOrganizations
+          : organizations;
 
-          const category = String(
-            organization.organizationCategory || ""
-          )
-            .trim()
-            .toLowerCase();
+      const selectedSector =
+        normalizeValue(
+          formData.sector
+        );
+
+      const selectedSegment =
+        normalizeValue(
+          formData.industrySegment
+        );
+
+      return availableOrganizations
+        .filter((organization) => {
+          const organizationType =
+            normalizeValue(
+              organization.type ||
+                organization.organizationType
+            );
+
+          const organizationCategory =
+            normalizeValue(
+              organization.organizationCategory
+            );
+
+          const organizationSector =
+            normalizeValue(
+              organization.sector
+            );
+
+          const organizationSegments = [
+            organization.industrySegment,
+            organization.industry,
+            organization.segment,
+            ...(Array.isArray(
+              organization.industrySegments
+            )
+              ? organization.industrySegments
+              : []),
+          ]
+            .map(normalizeValue)
+            .filter(Boolean);
+
+          const isCompanyOrBranch =
+            organizationType ===
+              "enterprise" ||
+            organizationType ===
+              "company" ||
+            organizationType ===
+              "branch" ||
+            organizationCategory ===
+              "company";
+
+          const matchesSector =
+            !selectedSector ||
+            !organizationSector ||
+            organizationSector ===
+              selectedSector;
+
+          const matchesSegment =
+            !selectedSegment ||
+            organizationSegments.includes(
+              selectedSegment
+            );
 
           return (
-            type === "enterprise" ||
-            type === "branch" ||
-            category === "company"
+            isCompanyOrBranch &&
+            matchesSector &&
+            matchesSegment
           );
         })
-        .sort((firstOrganization, secondOrganization) =>
-          String(firstOrganization.name || "").localeCompare(
-            String(secondOrganization.name || ""),
-            undefined,
-            {
-              sensitivity: "base",
-            }
-          )
+        .sort(
+          (
+            firstOrganization,
+            secondOrganization
+          ) =>
+            String(
+              firstOrganization.name || ""
+            ).localeCompare(
+              String(
+                secondOrganization.name || ""
+              ),
+              undefined,
+              {
+                sensitivity: "base",
+              }
+            )
         );
-    }, [organizations]);
+    }, [
+      backendOrganizations,
+      organizations,
+      formData.sector,
+      formData.industrySegment,
+    ]);
 
   /*
    * Adds or removes a role from the workflow.
@@ -580,18 +724,48 @@ const FormBuilder = ({
                                   }
                                 />
 
-                                <div>
-                                  <p className="text-sm font-medium text-slate-700">
-                                    {
-                                      organization.name
-                                    }
-                                  </p>
+                                <div className="flex min-w-0 items-center gap-3">
+                                  {/*
+                                   * Organization logos are stored in the local
+                                   * company metadata file, not in Firestore.
+                                   *
+                                   * normalizedName is used first because it is
+                                   * the stable value shared with Firestore.
+                                   */}
+                                  {(() => {
+                                    const company =
+                                      getCompanyByNormalizedName(
+                                        organization.normalizedName ||
+                                          organization.companyNormalizedName ||
+                                          organization.name
+                                      );
 
-                                  <p className="text-xs capitalize text-slate-400">
-                                    {
-                                      organization.type
-                                    }
-                                  </p>
+                                    return (
+                                      <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white">
+                                        {company?.logo ? (
+                                          <img
+                                            src={company.logo}
+                                            alt={`${organization.name || company.name} logo`}
+                                            className="h-full w-full object-contain p-1"
+                                          />
+                                        ) : (
+                                          <Building2 className="h-4 w-4 text-slate-400" />
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
+
+                                  <div className="min-w-0">
+                                    <p className="truncate text-sm font-medium text-slate-700">
+                                      {organization.name}
+                                    </p>
+
+                                    <p className="text-xs capitalize text-slate-400">
+                                      {organization.type ||
+                                        organization.organizationType ||
+                                        "Company"}
+                                    </p>
+                                  </div>
                                 </div>
                               </label>
                             );
@@ -600,8 +774,15 @@ const FormBuilder = ({
 
                         {!targetOrganizations.length && (
                           <p className="text-xs text-slate-500">
-                            No companies or
-                            branches are available.
+                            {organizationsLoading
+                              ? "Loading companies and branches..."
+                              : organizationsError
+                                ? organizationsError
+                                : `No companies or branches were found for ${
+                                    formData.industrySegment ||
+                                    formData.sector ||
+                                    "the selected category"
+                                  }.`}
                           </p>
                         )}
                       </div>
