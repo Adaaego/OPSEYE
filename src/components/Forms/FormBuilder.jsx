@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ArrowLeft,
-  ArrowRight,
   Building2,
+  Camera,
   ChevronRight,
   Globe,
   GripVertical,
@@ -14,66 +14,56 @@ import {
   Send,
   Settings2,
   Trash2,
+  User,
   X,
 } from "lucide-react";
+
 import { Button } from "../ui/Button";
 
-const FIELD_TYPE_LABELS = {
-  short_text: "Short Text",
-  long_text: "Long Text",
-  number: "Number",
-  dropdown: "Dropdown",
-  date: "Date",
-  yes_no: "Yes / No",
-  file_upload: "File Upload",
+import {
+  ENERGY_INDUSTRY_SEGMENTS,
+  SECTORS,
+} from "../../lib/types";
+
+import {
+  changes,
+} from "../../lib/form-handlers";
+
+/*
+ * Each approval role receives a readable label and icon.
+ * These values are used by the circular workflow display.
+ */
+const WORKFLOW_ROLE_DETAILS = {
+  enterprise_admin: {
+    label: "Enterprise Admin",
+    icon: Building2,
+  },
+  country_admin: {
+    label: "Country Admin",
+    icon: Globe,
+  },
+  region_admin: {
+    label: "Region Admin",
+    icon: MapPin,
+  },
+  branch_admin: {
+    label: "Branch Admin",
+    icon: Landmark,
+  },
+  employee: {
+    label: "Employee",
+    icon: User,
+  },
+  ministry: {
+    label: "Ministry",
+    icon: Landmark,
+  },
 };
 
-const FIELD_TYPES = [
-  "short_text",
-  "long_text",
-  "number",
-  "dropdown",
-  "date",
-  "yes_no",
-  "file_upload",
-];
-
-// These are UI configuration options rather than form submission data.
-const WORKFLOW_PRESETS = [
-  {
-    label: "Branch → Region → Country → Ministry",
-    nodes: [
-      { label: "Branch" },
-      { label: "Region" },
-      { label: "Country" },
-      { label: "Ministry" },
-    ],
-  },
-  {
-    label: "Branch → Ministry",
-    nodes: [
-      { label: "Branch" },
-      { label: "Ministry" },
-    ],
-  },
-  {
-    label: "Branch → Region → Ministry",
-    nodes: [
-      { label: "Branch" },
-      { label: "Region" },
-      { label: "Ministry" },
-    ],
-  },
-];
-
-const NODE_ICONS = {
-  Branch: Building2,
-  Region: MapPin,
-  Country: Globe,
-  Ministry: Landmark,
-};
 
 const FormBuilder = ({
+  initialData = null,
+  organizations = [],
   onClose = () => {},
   onSaveDraft = () => {},
   onPublish = () => {},
@@ -81,53 +71,152 @@ const FormBuilder = ({
   const [activeTab, setActiveTab] =
     useState("general");
 
-  const [workflowNodes, setWorkflowNodes] =
-    useState([]);
+  const [error, setError] =
+    useState("");
 
-  const [fields, setFields] = useState([]);
+  /*
+   * All form information now lives in one state object.
+   *
+   * This is important because the same object is passed to
+   * createFormHandler or updateFormHandler when the Ministry
+   * saves or publishes the form.
+   */
+  const [formData, setFormData] =
+    useState(() => {
+      const emptyForm =
+        changes.createInitialFormData();
 
-  // Adds a blank field card without introducing mock form data.
-  const addField = () => {
-    const newField = {
-      id: `field-${Date.now()}`,
-      label: "",
-      type: "short_text",
-      required: false,
-      placeholder: "",
-      helpText: "",
-    };
+      if (!initialData) {
+        return emptyForm;
+      }
 
-    setFields((currentFields) => [
-      ...currentFields,
-      newField,
-    ]);
-  };
+      return {
+        ...emptyForm,
+        ...initialData,
 
-  const updateField = (fieldId, changes) => {
-    setFields((currentFields) =>
-      currentFields.map((field) =>
-        field.id === fieldId
-          ? {
-              ...field,
-              ...changes,
+        targetAudience: {
+          ...emptyForm.targetAudience,
+          ...initialData.targetAudience,
+        },
+
+        reportingFrequency: {
+          ...emptyForm.reportingFrequency,
+          ...initialData.reportingFrequency,
+        },
+
+        sendSchedule: {
+          ...emptyForm.sendSchedule,
+          ...initialData.sendSchedule,
+        },
+
+        submissionDeadline: {
+          ...emptyForm.submissionDeadline,
+          ...initialData.submissionDeadline,
+        },
+
+        approvalWorkflow: {
+          ...emptyForm.approvalWorkflow,
+          ...initialData.approvalWorkflow,
+        },
+
+        fields:
+          initialData.fields?.length
+            ? initialData.fields
+            : emptyForm.fields,
+      };
+    });
+
+  /*
+   * Specific-audience forms can be sent to company-level
+   * organizations or individual branches.
+   *
+   * Enterprise records represent the companies themselves,
+   * while branch records represent individual locations.
+   */
+  const targetOrganizations =
+    useMemo(() => {
+      return organizations
+        .filter((organization) => {
+          const type = String(
+            organization.type || ""
+          )
+            .trim()
+            .toLowerCase();
+
+          const category = String(
+            organization.organizationCategory || ""
+          )
+            .trim()
+            .toLowerCase();
+
+          return (
+            type === "enterprise" ||
+            type === "branch" ||
+            category === "company"
+          );
+        })
+        .sort((firstOrganization, secondOrganization) =>
+          String(firstOrganization.name || "").localeCompare(
+            String(secondOrganization.name || ""),
+            undefined,
+            {
+              sensitivity: "base",
             }
-          : field
-      )
+          )
+        );
+    }, [organizations]);
+
+  /*
+   * Adds or removes a role from the workflow.
+   *
+   * The shared form handler automatically places selected roles
+   * in the correct employee-to-ministry hierarchy. Ministry is
+   * always retained as the final destination of the submission.
+   */
+  const handleWorkflowRoleToggle = (role) => {
+    if (role === "ministry") {
+      return;
+    }
+
+    const currentRoles =
+      formData.approvalWorkflow.roles || [];
+
+    const roleIsSelected =
+      currentRoles.includes(role);
+
+    const updatedRoles = roleIsSelected
+      ? currentRoles.filter(
+          (currentRole) =>
+            currentRole !== role
+        )
+      : [
+          ...currentRoles,
+          role,
+        ];
+
+    changes.setApprovalRoles(
+      [
+        ...updatedRoles.filter(
+          (currentRole) =>
+            currentRole !== "ministry"
+        ),
+        "ministry",
+      ],
+      setFormData
     );
   };
 
-  const removeField = (fieldId) => {
-    setFields((currentFields) =>
-      currentFields.filter(
-        (field) => field.id !== fieldId
-      )
-    );
-  };
-
-  // Reorders fields without modifying the existing state array.
-  const moveField = (index, direction) => {
-    setFields((currentFields) => {
-      const updatedFields = [...currentFields];
+  /*
+   * Reorders fields while keeping the current state immutable.
+   */
+  const moveField = (
+    index,
+    direction
+  ) => {
+    setFormData((currentForm) => {
+      const updatedFields = [
+        ...currentForm.fields,
+      ];
 
       const targetIndex =
         direction === "up"
@@ -136,9 +225,10 @@ const FormBuilder = ({
 
       if (
         targetIndex < 0 ||
-        targetIndex >= updatedFields.length
+        targetIndex >=
+          updatedFields.length
       ) {
-        return currentFields;
+        return currentForm;
       }
 
       [
@@ -149,96 +239,43 @@ const FormBuilder = ({
         updatedFields[index],
       ];
 
-      return updatedFields;
+      return {
+        ...currentForm,
+        fields: updatedFields,
+      };
     });
   };
 
-  const addWorkflowNode = () => {
-    const newNode = {
-      id: `workflow-${Date.now()}`,
-      label: "New Stage",
-    };
+  /*
+   * Sends the full form state back to the Forms page.
+   *
+   * The Forms page decides whether this is a new form
+   * or an existing form being edited.
+   */
+  const handleSaveDraft = async () => {
+    setError("");
 
-    setWorkflowNodes((currentNodes) => [
-      ...currentNodes,
-      newNode,
-    ]);
-  };
-
-  const updateWorkflowNode = (
-    nodeId,
-    label
-  ) => {
-    setWorkflowNodes((currentNodes) =>
-      currentNodes.map((node) =>
-        node.id === nodeId
-          ? {
-              ...node,
-              label,
-            }
-          : node
-      )
-    );
-  };
-
-  const removeWorkflowNode = (nodeId) => {
-    setWorkflowNodes((currentNodes) =>
-      currentNodes.filter(
-        (node) => node.id !== nodeId
-      )
-    );
-  };
-
-  // Reorders workflow stages while keeping the original state immutable.
-  const moveWorkflowNode = (
-    index,
-    direction
-  ) => {
-    setWorkflowNodes((currentNodes) => {
-      const updatedNodes = [...currentNodes];
-
-      const targetIndex =
-        direction === "left"
-          ? index - 1
-          : index + 1;
-
-      if (
-        targetIndex < 0 ||
-        targetIndex >= updatedNodes.length
-      ) {
-        return currentNodes;
-      }
-
-      [
-        updatedNodes[index],
-        updatedNodes[targetIndex],
-      ] = [
-        updatedNodes[targetIndex],
-        updatedNodes[index],
-      ];
-
-      return updatedNodes;
-    });
-  };
-
-  // Applies a preset only to the visible workflow builder.
-  const applyPreset = (presetIndex) => {
-    const selectedPreset =
-      WORKFLOW_PRESETS[presetIndex];
-
-    if (!selectedPreset) {
-      return;
-    }
-
-    const presetNodes =
-      selectedPreset.nodes.map(
-        (node, index) => ({
-          id: `workflow-${Date.now()}-${index}`,
-          label: node.label,
-        })
+    try {
+      await onSaveDraft(formData);
+    } catch (saveError) {
+      setError(
+        saveError.message ||
+          "The draft could not be saved."
       );
+    }
+  };
 
-    setWorkflowNodes(presetNodes);
+  const handlePublish = async () => {
+    setError("");
+
+    try {
+      await onPublish(formData);
+    } catch (publishError) {
+      setError(
+        publishError.message ||
+          "The form could not be published."
+      );
+    }
   };
 
   return (
@@ -255,12 +292,14 @@ const FormBuilder = ({
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
           <div>
             <h2 className="text-lg font-bold text-navy-950">
-              Create New Form
+              {initialData
+                ? "Edit Form"
+                : "Create New Form"}
             </h2>
 
             <p className="mt-0.5 text-xs text-slate-500">
-              Configure the form details,
-              approval workflow and fields.
+              Configure the reporting details,
+              workflow and fields.
             </p>
           </div>
 
@@ -307,13 +346,19 @@ const FormBuilder = ({
             Form Fields
 
             <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs font-semibold text-slate-600">
-              {fields.length}
+              {formData.fields.length}
             </span>
           </button>
         </div>
 
         {/* Scrollable body */}
         <div className="flex-1 space-y-6 overflow-y-auto px-6 py-5">
+          {error && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
           {activeTab === "general" && (
             <>
               <section>
@@ -324,7 +369,7 @@ const FormBuilder = ({
                 <div className="space-y-4">
                   <div>
                     <label
-                      htmlFor="formName"
+                      htmlFor="name"
                       className="mb-1.5 block text-xs font-medium text-slate-700"
                     >
                       Form Name{" "}
@@ -334,8 +379,16 @@ const FormBuilder = ({
                     </label>
 
                     <input
-                      id="formName"
+                      id="name"
+                      name="name"
                       type="text"
+                      value={formData.name}
+                      onChange={(event) =>
+                        changes.handleInputChange(
+                          event,
+                          setFormData
+                        )
+                      }
                       placeholder="e.g. Daily Operations Report"
                       className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
                     />
@@ -343,16 +396,26 @@ const FormBuilder = ({
 
                   <div>
                     <label
-                      htmlFor="formDescription"
+                      htmlFor="description"
                       className="mb-1.5 block text-xs font-medium text-slate-700"
                     >
                       Description
                     </label>
 
                     <textarea
-                      id="formDescription"
+                      id="description"
+                      name="description"
                       rows={3}
-                      placeholder="Briefly describe what this form collects and who it is for…"
+                      value={
+                        formData.description
+                      }
+                      onChange={(event) =>
+                        changes.handleInputChange(
+                          event,
+                          setFormData
+                        )
+                      }
+                      placeholder="Briefly describe what this form collects and who it is for."
                       className="w-full resize-none rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
                     />
                   </div>
@@ -368,311 +431,485 @@ const FormBuilder = ({
 
                       <select
                         id="sector"
-                        defaultValue=""
+                        name="sector"
+                        value={formData.sector}
+                        onChange={(event) =>
+                          changes.handleInputChange(
+                            event,
+                            setFormData
+                          )
+                        }
                         className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
                       >
-                        <option
-                          value=""
-                          disabled
-                        >
+                        <option value="">
                           Select sector
                         </option>
 
-                        <option value="Energy">
-                          Energy
-                        </option>
-
-                        <option value="Mining">
-                          Mining
-                        </option>
-
-                        <option value="Utilities">
-                          Utilities
-                        </option>
+                        {SECTORS.map(
+                          (sector) => (
+                            <option
+                              key={sector}
+                              value={sector}
+                            >
+                              {sector}
+                            </option>
+                          )
+                        )}
                       </select>
                     </div>
 
                     <div>
                       <label
-                        htmlFor="segment"
+                        htmlFor="industrySegment"
                         className="mb-1.5 block text-xs font-medium text-slate-700"
                       >
-                        Segment
+                        Industry Segment
                       </label>
 
                       <select
-                        id="segment"
-                        defaultValue=""
+                        id="industrySegment"
+                        name="industrySegment"
+                        value={
+                          formData.industrySegment
+                        }
+                        onChange={(event) =>
+                          changes.handleInputChange(
+                            event,
+                            setFormData
+                          )
+                        }
                         className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
                       >
-                        <option
-                          value=""
-                          disabled
-                        >
+                        <option value="">
                           Select segment
                         </option>
 
-                        <option value="downstream">
-                          Downstream
-                        </option>
-
-                        <option value="midstream">
-                          Midstream
-                        </option>
-
-                        <option value="upstream">
-                          Upstream
-                        </option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div>
-                      <label
-                        htmlFor="targetAudience"
-                        className="mb-1.5 block text-xs font-medium text-slate-700"
-                      >
-                        Target Audience
-                      </label>
-
-                      <select
-                        id="targetAudience"
-                        defaultValue=""
-                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
-                      >
-                        <option
-                          value=""
-                          disabled
-                        >
-                          Select audience
-                        </option>
-
-                        <option value="Operators">
-                          Operators
-                        </option>
-
-                        <option value="Regions">
-                          Regions
-                        </option>
-
-                        <option value="Specific Companies">
-                          Specific Companies /
-                          Branches
-                        </option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label
-                        htmlFor="frequency"
-                        className="mb-1.5 block text-xs font-medium text-slate-700"
-                      >
-                        Reporting Frequency
-                      </label>
-
-                      <select
-                        id="frequency"
-                        defaultValue=""
-                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
-                      >
-                        <option
-                          value=""
-                          disabled
-                        >
-                          Select frequency
-                        </option>
-
-                        <option value="daily">
-                          Daily
-                        </option>
-
-                        <option value="weekly">
-                          Weekly
-                        </option>
-
-                        <option value="monthly">
-                          Monthly
-                        </option>
-
-                        <option value="quarterly">
-                          Quarterly
-                        </option>
-
-                        <option value="annual">
-                          Annual
-                        </option>
-
-                        <option value="one-time">
-                          One-Time
-                        </option>
+                        {ENERGY_INDUSTRY_SEGMENTS.map(
+                          (segment) => (
+                            <option
+                              key={segment}
+                              value={segment}
+                            >
+                              {segment}
+                            </option>
+                          )
+                        )}
                       </select>
                     </div>
                   </div>
 
                   <div>
                     <label
-                      htmlFor="submissionDeadline"
+                      htmlFor="targetAudience"
                       className="mb-1.5 block text-xs font-medium text-slate-700"
                     >
-                      Submission Deadline
+                      Target Audience
                     </label>
 
-                    <input
-                      id="submissionDeadline"
-                      type="text"
-                      placeholder="e.g. 23:59 or 5th of each month"
-                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
-                    />
+                    <select
+                      id="targetAudience"
+                      value={
+                        formData.targetAudience
+                          .type
+                      }
+                      onChange={(event) =>
+                        changes.handleTargetAudienceChange(
+                          event.target.value,
+                          setFormData
+                        )
+                      }
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+                    >
+                      {changes.TARGET_AUDIENCE_TYPES.map(
+                        (audience) => (
+                          <option
+                            key={
+                              audience.value
+                            }
+                            value={
+                              audience.value
+                            }
+                          >
+                            {
+                              audience.label
+                            }
+                          </option>
+                        )
+                      )}
+                    </select>
                   </div>
+
+                  {formData.targetAudience
+                    .type ===
+                    "specific_organizations" && (
+                    <div>
+                      <p className="mb-2 text-xs font-medium text-slate-700">
+                        Select Companies or
+                        Branches
+                      </p>
+
+                      <div className="max-h-48 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-3">
+                        {targetOrganizations.map(
+                          (organization) => {
+                            const organizationId =
+                              organization.organizationId ||
+                              organization.id;
+
+                            const checked =
+                              formData.targetAudience.organizationIds.includes(
+                                organizationId
+                              );
+
+                            return (
+                              <label
+                                key={
+                                  organizationId
+                                }
+                                className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 hover:bg-slate-50"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={
+                                    checked
+                                  }
+                                  onChange={() =>
+                                    changes.toggleTargetOrganization(
+                                      organizationId,
+                                      setFormData
+                                    )
+                                  }
+                                />
+
+                                <div>
+                                  <p className="text-sm font-medium text-slate-700">
+                                    {
+                                      organization.name
+                                    }
+                                  </p>
+
+                                  <p className="text-xs capitalize text-slate-400">
+                                    {
+                                      organization.type
+                                    }
+                                  </p>
+                                </div>
+                              </label>
+                            );
+                          }
+                        )}
+
+                        {!targetOrganizations.length && (
+                          <p className="text-xs text-slate-500">
+                            No companies or
+                            branches are available.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label
+                        htmlFor="reportingFrequency"
+                        className="mb-1.5 block text-xs font-medium text-slate-700"
+                      >
+                        Reporting Frequency
+                      </label>
+
+                      <select
+                        id="reportingFrequency"
+                        value={
+                          formData.reportingFrequency
+                            .type
+                        }
+                        onChange={(event) =>
+                          changes.handleNestedInputChange(
+                            "reportingFrequency",
+                            "type",
+                            event.target.value,
+                            setFormData
+                          )
+                        }
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+                      >
+                        {changes.REPORTING_FREQUENCIES.map(
+                          (frequency) => (
+                            <option
+                              key={frequency.value}
+                              value={frequency.value}
+                            >
+                              {frequency.label}
+                            </option>
+                          )
+                        )}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="sendTime"
+                        className="mb-1.5 block text-xs font-medium text-slate-700"
+                      >
+                        Send Time
+                      </label>
+
+                      <input
+                        id="sendTime"
+                        type="time"
+                        value={
+                          formData.sendSchedule
+                            ?.time || ""
+                        }
+                        onChange={(event) =>
+                          changes.handleNestedInputChange(
+                            "sendSchedule",
+                            "time",
+                            event.target.value,
+                            setFormData
+                          )
+                        }
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+                      />
+
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        The system will send the form at this time for each reporting period.
+                      </p>
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label
+                        htmlFor="submissionDeadline"
+                        className="mb-1.5 block text-xs font-medium text-slate-700"
+                      >
+                        Submission Closing Time
+                      </label>
+
+                      <input
+                        id="submissionDeadline"
+                        type="time"
+                        value={
+                          formData.submissionDeadline
+                            .time
+                        }
+                        onChange={(event) =>
+                          changes.handleNestedInputChange(
+                            "submissionDeadline",
+                            "time",
+                            event.target.value,
+                            setFormData
+                          )
+                        }
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+                      />
+
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Submissions will close at this time for each reporting period.
+                      </p>
+                    </div>
+                  </div>
+
+                  {formData.reportingFrequency
+                    .type === "weekly" && (
+                    <div>
+                      <label
+                        htmlFor="dayOfWeek"
+                        className="mb-1.5 block text-xs font-medium text-slate-700"
+                      >
+                        Reporting Day
+                      </label>
+
+                      <select
+                        id="dayOfWeek"
+                        value={
+                          formData.reportingFrequency
+                            .dayOfWeek || ""
+                        }
+                        onChange={(event) =>
+                          changes.handleNestedInputChange(
+                            "reportingFrequency",
+                            "dayOfWeek",
+                            event.target.value,
+                            setFormData
+                          )
+                        }
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
+                      >
+                        <option value="">
+                          Select day
+                        </option>
+
+                        {changes.WEEK_DAYS.map(
+                          (day) => (
+                            <option
+                              key={day.value}
+                              value={day.value}
+                            >
+                              {day.label}
+                            </option>
+                          )
+                        )}
+                      </select>
+                    </div>
+                  )}
+
+                  {formData.reportingFrequency
+                    .type === "monthly" && (
+                    <div>
+                      <label
+                        htmlFor="dayOfMonth"
+                        className="mb-1.5 block text-xs font-medium text-slate-700"
+                      >
+                        Day of Month
+                      </label>
+
+                      <input
+                        id="dayOfMonth"
+                        type="number"
+                        min="1"
+                        max="31"
+                        value={
+                          formData.reportingFrequency
+                            .dayOfMonth || ""
+                        }
+                        onChange={(event) =>
+                          changes.handleNestedInputChange(
+                            "reportingFrequency",
+                            "dayOfMonth",
+                            event.target.value,
+                            setFormData
+                          )
+                        }
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none"
+                      />
+                    </div>
+                  )}
                 </div>
               </section>
 
               <section className="border-t border-slate-200 pt-5">
-                <div className="mb-1 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <h3 className="text-sm font-semibold text-navy-950">
-                    Approval Workflow
-                  </h3>
+                <h3 className="text-sm font-semibold text-navy-950">
+                  Approval Workflow
+                </h3>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    {WORKFLOW_PRESETS.map(
-                      (preset, index) => (
-                        <button
-                          key={preset.label}
-                          type="button"
-                          onClick={() =>
-                            applyPreset(index)
-                          }
-                          title={preset.label}
-                          className="rounded-md border border-slate-300 px-2.5 py-1 text-xs text-slate-600 transition hover:border-navy-300 hover:bg-navy-50 hover:text-navy-800"
-                        >
-                          Preset {index + 1}
-                        </button>
-                      )
-                    )}
-                  </div>
-                </div>
-
-                <p className="mb-4 text-xs text-slate-500">
-                  Define how submitted reports
-                  move through the organization
-                  for approval.
+                <p className="mb-4 mt-1 text-xs text-slate-500">
+                  Select the roles the submission should pass through.
+                  Roles are automatically arranged from the person who
+                  fills the form up to the Ministry.
                 </p>
 
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
-                  <div className="flex flex-wrap items-center gap-2">
-                    {workflowNodes.map(
-                      (node, index) => {
+                {/* Role selection */}
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {changes.FORM_SUBMISSION_ROLES.map(
+                    (role) => {
+                      const isSelected =
+                        formData.approvalWorkflow.roles.includes(
+                          role.value
+                        );
+
+                      const isMinistry =
+                        role.value === "ministry";
+
+                      return (
+                        <label
+                          key={role.value}
+                          className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 transition ${
+                            isSelected
+                              ? "border-navy-300 bg-navy-50"
+                              : "border-slate-200 bg-white hover:border-slate-300"
+                          } ${
+                            isMinistry
+                              ? "cursor-not-allowed"
+                              : "cursor-pointer"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            disabled={isMinistry}
+                            onChange={() =>
+                              handleWorkflowRoleToggle(
+                                role.value
+                              )
+                            }
+                            className="h-4 w-4 rounded border-slate-300 text-navy-950 focus:ring-navy-300"
+                          />
+
+                          <span className="text-sm font-medium text-slate-700">
+                            {role.label}
+                          </span>
+
+                          {isMinistry && (
+                            <span className="ml-auto text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                              Required
+                            </span>
+                          )}
+                        </label>
+                      );
+                    }
+                  )}
+                </div>
+
+                {/* Circular approval flow */}
+                <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-5">
+                  <div className="flex flex-wrap items-start gap-2">
+                    {formData.approvalWorkflow.roles.map(
+                      (role, index) => {
+                        const roleDetails =
+                          WORKFLOW_ROLE_DETAILS[role] || {
+                            label: role,
+                            icon: Building2,
+                          };
+
                         const Icon =
-                          NODE_ICONS[
-                            node.label
-                          ] || Building2;
+                          roleDetails.icon;
+
+                        const isSubmitter =
+                          index === 0;
 
                         return (
                           <div
-                            key={node.id}
+                            key={role}
                             className="flex items-center gap-2"
                           >
-                            <div className="group relative flex flex-col items-center gap-1">
-                              <div className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-slate-300 bg-white shadow-sm transition hover:border-navy-400">
+                            <div className="flex flex-col items-center gap-2">
+                              <div
+                                className={`flex h-16 w-16 items-center justify-center rounded-full border-2 bg-white shadow-sm ${
+                                  isSubmitter
+                                    ? "border-emerald-500 ring-4 ring-emerald-100"
+                                    : "border-slate-300"
+                                }`}
+                              >
                                 <Icon className="h-6 w-6 text-navy-700" />
                               </div>
 
-                              <input
-                                type="text"
-                                value={node.label}
-                                onChange={(
-                                  event
-                                ) =>
-                                  updateWorkflowNode(
-                                    node.id,
-                                    event.target
-                                      .value
-                                  )
-                                }
-                                className="w-20 rounded border-none bg-transparent px-1 text-center text-xs font-medium text-slate-700 outline-none focus:bg-white focus:ring-1 focus:ring-navy-300"
-                              />
+                              <p className="max-w-24 text-center text-xs font-semibold text-slate-700">
+                                {roleDetails.label}
+                              </p>
 
-                              <div className="absolute -right-2 -top-2 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    moveWorkflowNode(
-                                      index,
-                                      "left"
-                                    )
-                                  }
-                                  disabled={
-                                    index === 0
-                                  }
-                                  title="Move left"
-                                  className="flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 hover:text-navy-950 disabled:opacity-30"
-                                >
-                                  <ArrowLeft className="h-3 w-3" />
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    moveWorkflowNode(
-                                      index,
-                                      "right"
-                                    )
-                                  }
-                                  disabled={
-                                    index ===
-                                    workflowNodes.length -
-                                      1
-                                  }
-                                  title="Move right"
-                                  className="flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 hover:text-navy-950 disabled:opacity-30"
-                                >
-                                  <ArrowRight className="h-3 w-3" />
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    removeWorkflowNode(
-                                      node.id
-                                    )
-                                  }
-                                  disabled={
-                                    workflowNodes.length <=
-                                    1
-                                  }
-                                  title="Remove stage"
-                                  className="flex h-5 w-5 items-center justify-center rounded-full border border-red-200 bg-white text-red-500 hover:text-red-700 disabled:opacity-30"
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
-                              </div>
+                              {isSubmitter && (
+                                <span className="rounded-full bg-emerald-100 px-2 py-1 text-center text-[10px] font-semibold text-emerald-700">
+                                  Fills and submits
+                                </span>
+                              )}
                             </div>
 
                             {index <
-                              workflowNodes.length -
+                              formData.approvalWorkflow.roles
+                                .length -
                                 1 && (
-                              <ChevronRight className="h-5 w-5 shrink-0 text-slate-400" />
+                              <ChevronRight className="mt-5 h-5 w-5 shrink-0 text-slate-400" />
                             )}
                           </div>
                         );
                       }
                     )}
-
-                    <button
-                      type="button"
-                      onClick={addWorkflowNode}
-                      title="Add stage"
-                      className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-dashed border-slate-300 text-slate-400 transition hover:border-navy-400 hover:bg-navy-50 hover:text-navy-700"
-                    >
-                      <Plus className="h-5 w-5" />
-                    </button>
                   </div>
 
-                  {workflowNodes.length === 0 && (
-                    <p className="mt-4 text-xs text-slate-400">
-                      Add a stage or apply a preset
-                      to build the approval workflow.
+                  {!formData.approvalWorkflow.roles
+                    .length && (
+                    <p className="text-center text-xs text-slate-400">
+                      Select at least one submitting role. Ministry will remain the final destination.
                     </p>
                   )}
                 </div>
@@ -682,23 +919,25 @@ const FormBuilder = ({
 
           {activeTab === "fields" && (
             <section>
-              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="mb-4 flex items-center justify-between gap-4">
                 <div>
                   <h3 className="text-sm font-semibold text-navy-950">
                     Form Fields
                   </h3>
 
                   <p className="mt-0.5 text-xs text-slate-500">
-                    Add, edit, remove and reorder
-                    the fields operators will
-                    complete.
+                    Add and configure the fields
+                    operators will complete.
                   </p>
                 </div>
 
                 <Button
                   variant="outline"
-                  onClick={addField}
-                  className="border-slate-300 text-slate-700 hover:border-navy-300 hover:bg-navy-50 hover:text-navy-800"
+                  onClick={() =>
+                    changes.addFormField(
+                      setFormData
+                    )
+                  }
                 >
                   <Plus className="h-4 w-4" />
                   Add Field
@@ -706,14 +945,14 @@ const FormBuilder = ({
               </div>
 
               <div className="space-y-3">
-                {fields.map(
+                {formData.fields.map(
                   (field, index) => (
                     <div
                       key={field.id}
                       className="rounded-lg border border-slate-200 bg-white p-4 transition hover:border-navy-300"
                     >
                       <div className="mb-3 flex items-center gap-2">
-                        <GripVertical className="h-4 w-4 shrink-0 text-slate-300" />
+                        <GripVertical className="h-4 w-4 text-slate-300" />
 
                         <span className="text-xs font-semibold text-slate-400">
                           Field {index + 1}
@@ -732,8 +971,7 @@ const FormBuilder = ({
                           disabled={
                             index === 0
                           }
-                          title="Move up"
-                          className="rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-navy-800 disabled:opacity-30"
+                          className="rounded p-1 text-slate-400 hover:bg-slate-100 disabled:opacity-30"
                         >
                           <ArrowLeft className="h-3.5 w-3.5 rotate-90" />
                         </button>
@@ -748,10 +986,10 @@ const FormBuilder = ({
                           }
                           disabled={
                             index ===
-                            fields.length - 1
+                            formData.fields.length -
+                              1
                           }
-                          title="Move down"
-                          className="rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-navy-800 disabled:opacity-30"
+                          className="rounded p-1 text-slate-400 hover:bg-slate-100 disabled:opacity-30"
                         >
                           <ArrowLeft className="h-3.5 w-3.5 -rotate-90" />
                         </button>
@@ -759,12 +997,12 @@ const FormBuilder = ({
                         <button
                           type="button"
                           onClick={() =>
-                            removeField(
-                              field.id
+                            changes.removeFormField(
+                              field.id,
+                              setFormData
                             )
                           }
-                          title="Remove field"
-                          className="rounded p-1 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                          className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -775,25 +1013,19 @@ const FormBuilder = ({
                           <label className="mb-1 block text-xs font-medium text-slate-600">
                             Field Label
                           </label>
-
                           <input
                             type="text"
-                            value={field.label}
-                            onChange={(
-                              event
-                            ) =>
-                              updateField(
+                            value={field.label || ""}
+                            onChange={(event) =>
+                              changes.updateFormField(
                                 field.id,
-                                {
-                                  label:
-                                    event
-                                      .target
-                                      .value,
-                                }
+                                "label",
+                                event.target.value,
+                                setFormData
                               )
                             }
-                            placeholder="e.g. Petrol Sold (Litres)"
-                            className="w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-sm outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+                            placeholder="e.g. Petrol Sold"
+                            className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 opacity-100 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
                           />
                         </div>
 
@@ -804,35 +1036,28 @@ const FormBuilder = ({
 
                           <select
                             value={field.type}
-                            onChange={(
-                              event
-                            ) =>
-                              updateField(
+                            onChange={(event) =>
+                              changes.updateFormField(
                                 field.id,
-                                {
-                                  type:
-                                    event
-                                      .target
-                                      .value,
-                                }
+                                "type",
+                                event.target.value,
+                                setFormData
                               )
                             }
-                            className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+                            className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 opacity-100 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
                           >
-                            {FIELD_TYPES.map(
+                            {changes.FORM_FIELD_TYPES.map(
                               (fieldType) => (
                                 <option
                                   key={
-                                    fieldType
+                                    fieldType.value
                                   }
                                   value={
-                                    fieldType
+                                    fieldType.value
                                   }
                                 >
                                   {
-                                    FIELD_TYPE_LABELS[
-                                      fieldType
-                                    ]
+                                    fieldType.label
                                   }
                                 </option>
                               )
@@ -841,19 +1066,18 @@ const FormBuilder = ({
                         </div>
 
                         <div className="col-span-6 flex items-end sm:col-span-3">
-                          <label className="flex cursor-pointer items-center gap-2 pb-1.5">
+                          <label className="flex items-center gap-2 pb-1.5">
                             <button
                               type="button"
                               aria-pressed={
                                 field.required
                               }
                               onClick={() =>
-                                updateField(
+                                changes.updateFormField(
                                   field.id,
-                                  {
-                                    required:
-                                      !field.required,
-                                  }
+                                  "required",
+                                  !field.required,
+                                  setFormData
                                 )
                               }
                               className={`relative h-5 w-9 rounded-full transition-colors ${
@@ -885,82 +1109,172 @@ const FormBuilder = ({
                           <input
                             type="text"
                             value={
-                              field.placeholder
+                              field.placeholder || ""
                             }
-                            onChange={(
-                              event
-                            ) =>
-                              updateField(
+                            onChange={(event) =>
+                              changes.updateFormField(
                                 field.id,
-                                {
-                                  placeholder:
-                                    event
-                                      .target
-                                      .value,
-                                }
+                                "placeholder",
+                                event.target.value,
+                                setFormData
                               )
                             }
-                            placeholder="e.g. Enter volume in litres…"
-                            className="w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-sm outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+                            className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 opacity-100 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
                           />
                         </div>
 
-                        <div className="col-span-12">
-                          <label className="mb-1 block text-xs font-medium text-slate-600">
-                            Help Text{" "}
-                            <span className="font-normal text-slate-400">
-                              (optional)
-                            </span>
-                          </label>
+                        {field.type === "number" && (
+                          <div className="col-span-12">
+                            <label className="mb-1 block text-xs font-medium text-slate-600">
+                              Number Field Preview
+                            </label>
 
-                          <input
-                            type="text"
-                            value={
-                              field.helpText
-                            }
-                            onChange={(
-                              event
-                            ) =>
-                              updateField(
-                                field.id,
-                                {
-                                  helpText:
-                                    event
-                                      .target
-                                      .value,
+                            {/*
+                             * min=0 prevents negative values from the
+                             * number picker. The key guard also blocks
+                             * minus, plus and exponent characters.
+                             */}
+                            <input
+                              type="number"
+                              min="0"
+                              step="any"
+                              placeholder={field.placeholder || "Enter a number"}
+                              onKeyDown={(event) => {
+                                if (
+                                  ["-", "+", "e", "E"].includes(
+                                    event.key
+                                  )
+                                ) {
+                                  event.preventDefault();
                                 }
-                              )
-                            }
-                            placeholder="Guidance shown below the field…"
-                            className="w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-sm outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
-                          />
-                        </div>
+                              }}
+                              onInput={(event) => {
+                                if (
+                                  Number(event.currentTarget.value) < 0
+                                ) {
+                                  event.currentTarget.value = "0";
+                                }
+                              }}
+                              className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+                            />
+                          </div>
+                        )}
+
+                        {field.type === "date" && (
+                          <div className="col-span-12">
+                            <label className="mb-1 block text-xs font-medium text-slate-600">
+                              Date Field Preview
+                            </label>
+
+                            {/* A real date input allows the Ministry to test the date picker. */}
+                            <input
+                              type="date"
+                              className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+                            />
+                          </div>
+                        )}
+
+                        {field.type ===
+                          "dropdown" && (
+                          <div className="col-span-12">
+                            <div className="mb-2 flex items-center justify-between">
+                              <label className="text-xs font-medium text-slate-600">
+                                Dropdown Options
+                              </label>
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  changes.addDropdownOption(
+                                    field.id,
+                                    setFormData
+                                  )
+                                }
+                                className="flex items-center gap-1 text-xs font-medium text-navy-700"
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                                Add Option
+                              </button>
+                            </div>
+
+                            <div className="space-y-2">
+                              {(field.options || []).map(
+                                (
+                                  option,
+                                  optionIndex
+                                ) => (
+                                  <div
+                                    key={`${field.id}-${optionIndex}`}
+                                    className="flex gap-2"
+                                  >
+                                    <input
+                                      type="text"
+                                      value={
+                                        option
+                                      }
+                                      onChange={(event) =>
+                                        changes.updateDropdownOption(
+                                          field.id,
+                                          optionIndex,
+                                          event.target.value,
+                                          setFormData
+                                        )
+                                      }
+                                      placeholder={`Option ${
+                                        optionIndex +
+                                        1
+                                      }`}
+                                      className="flex-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 opacity-100 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+                                    />
+
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        changes.removeDropdownOption(
+                                          field.id,
+                                          optionIndex,
+                                          setFormData
+                                        )
+                                      }
+                                      className="rounded border border-slate-200 px-2 text-slate-400 hover:text-red-600"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                )
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {field.type ===
+                          "yes_no" && (
+                          <div className="col-span-12 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                            <p className="text-xs font-medium text-slate-600">
+                              This field will show
+                              Yes and No options.
+                            </p>
+                          </div>
+                        )}
+
+                        {field.type ===
+                          "camera" && (
+                          <div className="col-span-12 flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                            <Camera className="h-5 w-5 text-navy-700" />
+
+                            <p className="text-xs text-slate-600">
+                              The operator will be
+                              prompted to capture a
+                              photo using their
+                              device camera.
+                            </p>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )
                 )}
-
-                {fields.length === 0 && (
-                  <div className="rounded-lg border-2 border-dashed border-slate-200 py-10 text-center">
-                    <p className="text-sm text-slate-400">
-                      No fields yet. Select
-                      &quot;Add Field&quot; to
-                      start building.
-                    </p>
-                  </div>
-                )}
               </div>
-
-              {fields.length > 0 && (
-                <button
-                  type="button"
-                  onClick={addField}
-                  className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-slate-200 py-2.5 text-sm font-medium text-slate-500 transition hover:border-navy-300 hover:bg-navy-50 hover:text-navy-700"
-                >
-                  <Plus className="h-4 w-4" />
-                  Add Field
-                </button>
-              )}
             </section>
           )}
         </div>
@@ -976,14 +1290,16 @@ const FormBuilder = ({
 
           <Button
             variant="outline"
-            onClick={onSaveDraft}
+            onClick={
+              handleSaveDraft
+            }
           >
             <Save className="h-4 w-4" />
             Save Draft
           </Button>
 
           <Button
-            onClick={onPublish}
+            onClick={handlePublish}
             className="bg-navy-950 text-white shadow-sm hover:bg-navy-900"
           >
             <Send className="h-4 w-4" />

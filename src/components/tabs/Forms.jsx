@@ -1,5 +1,8 @@
-
-import { useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   Archive,
   CheckCircle2,
@@ -15,23 +18,33 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+
 import {
   Card,
-  EmptyCell,
   PageHeader,
   SearchInput,
   Select,
   StatusBadge,
 } from "../ui/interface";
+
 import FormBuilder from "../Forms/FormBuilder";
 import { Button } from "../ui/Button";
 
+import {
+  collection,
+  onSnapshot,
+  orderBy,
+  query,
+} from "firebase/firestore";
 
-const SEGMENT_LABELS = {
-  downstream: "Downstream",
-  midstream: "Midstream",
-  upstream: "Upstream",
-};
+import {
+  auth,
+  db,
+} from "../../firebase/firebase";
+
+import {
+  changes,
+} from "../../lib/form-handlers";
 
 const FREQUENCY_LABELS = {
   daily: "Daily",
@@ -55,12 +68,66 @@ const normalizeText = (value) => {
     .toLowerCase();
 };
 
-const getSegmentLabel = (segment) => {
-  return SEGMENT_LABELS[segment] || segment || "";
+const getFrequencyLabel = (
+  frequency
+) => {
+  return (
+    FREQUENCY_LABELS[
+      frequency
+    ] ||
+    frequency ||
+    ""
+  );
 };
 
-const getFrequencyLabel = (frequency) => {
-  return FREQUENCY_LABELS[frequency] || frequency || "";
+const getAudienceLabel = (
+  targetAudience
+) => {
+  if (
+    targetAudience?.type ===
+    "specific_organizations"
+  ) {
+    return "Specific Companies / Branches";
+  }
+
+  if (
+    targetAudience?.type ===
+    "all_operators"
+  ) {
+    return "All Operators";
+  }
+
+  return "";
+};
+
+const formatTimestamp = (
+  timestamp
+) => {
+  if (!timestamp) {
+    return "";
+  }
+
+  const date =
+    typeof timestamp.toDate === "function"
+      ? timestamp.toDate()
+      : new Date(timestamp);
+
+  if (
+    Number.isNaN(date.getTime())
+  ) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat(
+    "en-GB",
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }
+  ).format(date);
 };
 
 const SortHeader = ({
@@ -70,44 +137,52 @@ const SortHeader = ({
   sortDirection,
   onSort,
 }) => {
-  const isActive = sortKey === column;
+  const isActive =
+    sortKey === column;
 
   return (
-    <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+    <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">
       <button
         type="button"
-        onClick={() => onSort(column)}
+        onClick={() =>
+          onSort(column)
+        }
         className="inline-flex items-center gap-1.5 transition hover:text-navy-950"
       >
         {label}
 
         {!isActive && (
-          <ChevronsUpDown className="h-3.5 w-3.5 text-slate-400" />
+          <ChevronsUpDown className="h-3.5 w-3.5 text-slate-600" />
         )}
 
-        {isActive && sortDirection === "asc" && (
-          <ChevronUp className="h-3.5 w-3.5 text-navy-700" />
-        )}
+        {isActive &&
+          sortDirection === "asc" && (
+            <ChevronUp className="h-3.5 w-3.5 text-navy-700" />
+          )}
 
-        {isActive && sortDirection === "desc" && (
-          <ChevronDown className="h-3.5 w-3.5 text-navy-700" />
-        )}
+        {isActive &&
+          sortDirection === "desc" && (
+            <ChevronDown className="h-3.5 w-3.5 text-navy-700" />
+          )}
       </button>
     </th>
   );
 };
 
 const Forms = ({
-  forms = [],
+  forms: initialForms = [],
+  organizations = [],
   onViewForm = null,
-  onEditForm = null,
   onDuplicateForm = null,
   onArchiveForm = null,
   onDeleteForm = null,
-  onSaveDraft = null,
-  onPublish = null,
 }) => {
-  const [search, setSearch] = useState("");
+  const [forms, setForms] =
+    useState(initialForms);
+
+  const [search, setSearch] =
+    useState("");
+
   const [statusFilter, setStatusFilter] =
     useState("");
 
@@ -120,10 +195,87 @@ const Forms = ({
   const [builderOpen, setBuilderOpen] =
     useState(false);
 
+  const [editingForm, setEditingForm] =
+    useState(null);
+
+  const [formsLoading, setFormsLoading] =
+    useState(true);
+
+  const [formsLoadError, setFormsLoadError] =
+    useState("");
+
+  /*
+   * Forms are loaded directly from Firestore so the table
+   * always reflects the backend after a refresh.
+   *
+   * onSnapshot also keeps the page updated when a form is
+   * created or edited elsewhere.
+   */
+  useEffect(() => {
+    const formsQuery = query(
+      collection(
+        db,
+        "formTemplates"
+      ),
+      orderBy(
+        "updatedAt",
+        "desc"
+      )
+    );
+
+    const unsubscribe =
+      onSnapshot(
+        formsQuery,
+        (snapshot) => {
+          const backendForms =
+            snapshot.docs.map(
+              (formDocument) => {
+                const form =
+                  formDocument.data();
+
+                return {
+                  id:
+                    formDocument.id,
+                  ...form,
+                  lastUpdated:
+                    formatTimestamp(
+                      form.updatedAt ||
+                        form.createdAt
+                    ),
+                };
+              }
+            );
+
+          setForms(
+            backendForms
+          );
+          setFormsLoading(false);
+          setFormsLoadError("");
+        },
+        (error) => {
+          console.error(
+            "Unable to load forms:",
+            error
+          );
+
+          setFormsLoading(false);
+          setFormsLoadError(
+            error.message ||
+              "The forms could not be loaded."
+          );
+        }
+      );
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
   const summaryCards = useMemo(() => {
     const activeCount = forms.filter(
       (form) =>
-        normalizeText(form.status) === "active"
+        normalizeText(form.status) ===
+        "active"
     ).length;
 
     const scheduledCount = forms.filter(
@@ -134,7 +286,8 @@ const Forms = ({
 
     const draftCount = forms.filter(
       (form) =>
-        normalizeText(form.status) === "draft"
+        normalizeText(form.status) ===
+        "draft"
     ).length;
 
     return [
@@ -142,7 +295,8 @@ const Forms = ({
         label: "Total Forms",
         value: forms.length,
         icon: FileSpreadsheet,
-        iconClassName: "text-slate-700",
+        iconClassName:
+          "text-slate-700",
         iconWrapperClassName:
           "bg-slate-100 ring-slate-200",
       },
@@ -150,7 +304,8 @@ const Forms = ({
         label: "Active Forms",
         value: activeCount,
         icon: CheckCircle2,
-        iconClassName: "text-emerald-600",
+        iconClassName:
+          "text-emerald-600",
         iconWrapperClassName:
           "bg-emerald-50 ring-emerald-200",
       },
@@ -158,7 +313,8 @@ const Forms = ({
         label: "Scheduled Forms",
         value: scheduledCount,
         icon: Clock,
-        iconClassName: "text-amber-600",
+        iconClassName:
+          "text-amber-600",
         iconWrapperClassName:
           "bg-amber-50 ring-amber-200",
       },
@@ -166,83 +322,127 @@ const Forms = ({
         label: "Draft Forms",
         value: draftCount,
         icon: FileEdit,
-        iconClassName: "text-navy-600",
+        iconClassName:
+          "text-navy-600",
         iconWrapperClassName:
           "bg-navy-50 ring-navy-200",
       },
     ];
   }, [forms]);
 
-  // Filters and sorts a copy without modifying the original records.
   const visibleForms = useMemo(() => {
     const normalizedSearch =
       normalizeText(search);
 
-    const filteredForms = forms.filter(
-      (form) => {
+    const filteredForms =
+      forms.filter((form) => {
         const matchesStatus =
           !statusFilter ||
           normalizeText(form.status) ===
-            normalizeText(statusFilter);
+            normalizeText(
+              statusFilter
+            );
 
         const searchableValues = [
           form.name,
           form.description,
           form.sector,
-          getSegmentLabel(form.segment),
-          getFrequencyLabel(form.frequency),
-          form.targetAudience,
+          form.industrySegment,
+          getFrequencyLabel(
+            form.reportingFrequency
+              ?.type
+          ),
+          getAudienceLabel(
+            form.targetAudience
+          ),
         ];
 
         const matchesSearch =
           !normalizedSearch ||
-          searchableValues.some((value) =>
-            normalizeText(value).includes(
-              normalizedSearch
-            )
+          searchableValues.some(
+            (value) =>
+              normalizeText(
+                value
+              ).includes(
+                normalizedSearch
+              )
           );
 
-        return matchesStatus && matchesSearch;
-      }
-    );
+        return (
+          matchesStatus &&
+          matchesSearch
+        );
+      });
 
     return [...filteredForms].sort(
-      (firstForm, secondForm) => {
-        let firstValue = firstForm[sortKey];
-        let secondValue = secondForm[sortKey];
+      (
+        firstForm,
+        secondForm
+      ) => {
+        let firstValue =
+          firstForm[sortKey];
 
-        if (sortKey === "segment") {
-          firstValue = getSegmentLabel(
-            firstForm.segment
-          );
+        let secondValue =
+          secondForm[sortKey];
 
-          secondValue = getSegmentLabel(
-            secondForm.segment
-          );
+        if (
+          sortKey ===
+          "industrySegment"
+        ) {
+          firstValue =
+            firstForm.industrySegment;
+
+          secondValue =
+            secondForm.industrySegment;
         }
 
-        if (sortKey === "frequency") {
-          firstValue = getFrequencyLabel(
-            firstForm.frequency
-          );
+        if (
+          sortKey === "frequency"
+        ) {
+          firstValue =
+            getFrequencyLabel(
+              firstForm.reportingFrequency
+                ?.type
+            );
 
-          secondValue = getFrequencyLabel(
-            secondForm.frequency
-          );
+          secondValue =
+            getFrequencyLabel(
+              secondForm.reportingFrequency
+                ?.type
+            );
         }
 
-        const comparison = String(
-          firstValue ?? ""
-        ).localeCompare(
-          String(secondValue ?? ""),
-          undefined,
-          {
-            numeric: true,
-            sensitivity: "base",
-          }
-        );
+        if (
+          sortKey ===
+          "targetAudience"
+        ) {
+          firstValue =
+            getAudienceLabel(
+              firstForm.targetAudience
+            );
 
-        return sortDirection === "asc"
+          secondValue =
+            getAudienceLabel(
+              secondForm.targetAudience
+            );
+        }
+
+        const comparison =
+          String(
+            firstValue ?? ""
+          ).localeCompare(
+            String(
+              secondValue ?? ""
+            ),
+            undefined,
+            {
+              numeric: true,
+              sensitivity: "base",
+            }
+          );
+
+        return sortDirection ===
+          "asc"
           ? comparison
           : -comparison;
       }
@@ -255,12 +455,16 @@ const Forms = ({
     sortDirection,
   ]);
 
-  const handleSort = (column) => {
+  const handleSort = (
+    column
+  ) => {
     if (sortKey === column) {
-      setSortDirection((currentDirection) =>
-        currentDirection === "asc"
-          ? "desc"
-          : "asc"
+      setSortDirection(
+        (currentDirection) =>
+          currentDirection ===
+          "asc"
+            ? "desc"
+            : "asc"
       );
 
       return;
@@ -270,20 +474,171 @@ const Forms = ({
     setSortDirection("asc");
   };
 
-  const handleBuilderSaveDraft = async () => {
-    if (onSaveDraft) {
-      await onSaveDraft();
-    }
-
+  const closeBuilder = () => {
     setBuilderOpen(false);
+    setEditingForm(null);
   };
 
-  const handleBuilderPublish = async () => {
-    if (onPublish) {
-      await onPublish();
-    }
+  const openNewForm = () => {
+    setEditingForm(null);
+    setBuilderOpen(true);
+  };
 
-    setBuilderOpen(false);
+  const openEditForm = (
+    form
+  ) => {
+    setEditingForm(form);
+    setBuilderOpen(true);
+  };
+
+  /*
+   * Saves a new draft or updates an existing form.
+   *
+   * createFormHandler is used when there is no existing form ID.
+   * updateFormHandler is used when the Ministry is editing a form.
+   */
+  const handleBuilderSaveDraft = async (
+    formData
+  ) => {
+    const currentUser =
+      auth.currentUser;
+
+
+    try {
+      const savedForm =
+        editingForm?.id
+          ? await changes.updateFormHandler({
+              formId:
+                editingForm.id,
+              formData,
+              currentUser,
+              status: "draft",
+            })
+          : await changes.createFormHandler({
+              formData,
+              currentUser,
+              status: "draft",
+            });
+
+      setForms((currentForms) => {
+        const existingForm =
+          currentForms.some(
+            (form) =>
+              form.id ===
+              savedForm.id
+          );
+
+        if (existingForm) {
+          return currentForms.map(
+            (form) =>
+              form.id ===
+              savedForm.id
+                ? {
+                    ...form,
+                    ...savedForm,
+                    lastUpdated:
+                      "Just now",
+                  }
+                : form
+          );
+        }
+
+        return [
+          {
+            ...savedForm,
+            lastUpdated:
+              "Just now",
+          },
+          ...currentForms,
+        ];
+      });
+
+      closeBuilder();
+    } catch (error) {
+      console.error(
+        "Unable to save form draft:",
+        error
+      );
+
+      // Re-throw the error so FormBuilder can display it
+      // inside the open builder panel.
+      throw error;
+    }
+  };
+
+  /*
+   * Publishing creates or updates the form with an active status.
+   *
+   * Active form templates can later be used by the scheduling
+   * process to create reporting tasks for operators.
+   */
+  const handleBuilderPublish = async (
+    formData
+  ) => {
+    const currentUser =
+      auth.currentUser;
+
+
+    try {
+      const savedForm =
+        editingForm?.id
+          ? await changes.updateFormHandler({
+              formId:
+                editingForm.id,
+              formData,
+              currentUser,
+              status: "active",
+            })
+          : await changes.createFormHandler({
+              formData,
+              currentUser,
+              status: "active",
+            });
+
+      setForms((currentForms) => {
+        const existingForm =
+          currentForms.some(
+            (form) =>
+              form.id ===
+              savedForm.id
+          );
+
+        if (existingForm) {
+          return currentForms.map(
+            (form) =>
+              form.id ===
+              savedForm.id
+                ? {
+                    ...form,
+                    ...savedForm,
+                    lastUpdated:
+                      "Just now",
+                  }
+                : form
+          );
+        }
+
+        return [
+          {
+            ...savedForm,
+            lastUpdated:
+              "Just now",
+          },
+          ...currentForms,
+        ];
+      });
+
+      closeBuilder();
+    } catch (error) {
+      console.error(
+        "Unable to publish form:",
+        error
+      );
+
+      // Re-throw the error so FormBuilder can display it
+      // inside the open builder panel.
+      throw error;
+    }
   };
 
   return (
@@ -291,14 +646,15 @@ const Forms = ({
       <div className="min-h-full">
         <PageHeader title="Forms" />
 
-        <p className="-mt-4 mb-6 max-w-2xl text-sm text-slate-500">
-          Create, manage, schedule and publish
-          reporting forms for operators across the
-          petroleum sector.
+        <p className="-mt-4 mb-6 max-w-2xl text-sm text-slate-700">
+          Create, manage, schedule and
+          publish reporting forms for
+          operators across the petroleum
+          sector.
         </p>
 
+
         <div className="space-y-6">
-          {/* Summary cards */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {summaryCards.map(
               ({
@@ -314,7 +670,7 @@ const Forms = ({
                 >
                   <div className="flex items-center justify-between gap-4">
                     <div>
-                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                      <p className="text-xs font-medium uppercase tracking-wide text-slate-700">
                         {label}
                       </p>
 
@@ -337,7 +693,6 @@ const Forms = ({
           </div>
 
           <Card className="overflow-visible">
-            {/* Toolbar */}
             <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:items-center">
                 <SearchInput
@@ -348,24 +703,25 @@ const Forms = ({
 
                 <Select
                   value={statusFilter}
-                  onChange={setStatusFilter}
-                  options={STATUS_OPTIONS}
+                  onChange={
+                    setStatusFilter
+                  }
+                  options={
+                    STATUS_OPTIONS
+                  }
                   placeholder="All Statuses"
                 />
               </div>
 
               <Button
-                onClick={() =>
-                  setBuilderOpen(true)
-                }
-                className="bg-navy-950 text-white hover:bg-navy-900"
+                onClick={openNewForm}
+                className="!bg-navy-950 !text-white shadow-sm hover:!bg-navy-900"
               >
                 <Plus className="h-4 w-4" />
                 Create New Form
               </Button>
             </div>
 
-            {/* Forms table */}
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1100px]">
                 <thead>
@@ -377,7 +733,9 @@ const Forms = ({
                       sortDirection={
                         sortDirection
                       }
-                      onSort={handleSort}
+                      onSort={
+                        handleSort
+                      }
                     />
 
                     <SortHeader
@@ -387,17 +745,21 @@ const Forms = ({
                       sortDirection={
                         sortDirection
                       }
-                      onSort={handleSort}
+                      onSort={
+                        handleSort
+                      }
                     />
 
                     <SortHeader
                       label="Segment"
-                      column="segment"
+                      column="industrySegment"
                       sortKey={sortKey}
                       sortDirection={
                         sortDirection
                       }
-                      onSort={handleSort}
+                      onSort={
+                        handleSort
+                      }
                     />
 
                     <SortHeader
@@ -407,7 +769,9 @@ const Forms = ({
                       sortDirection={
                         sortDirection
                       }
-                      onSort={handleSort}
+                      onSort={
+                        handleSort
+                      }
                     />
 
                     <SortHeader
@@ -417,7 +781,9 @@ const Forms = ({
                       sortDirection={
                         sortDirection
                       }
-                      onSort={handleSort}
+                      onSort={
+                        handleSort
+                      }
                     />
 
                     <SortHeader
@@ -427,7 +793,9 @@ const Forms = ({
                       sortDirection={
                         sortDirection
                       }
-                      onSort={handleSort}
+                      onSort={
+                        handleSort
+                      }
                     />
 
                     <SortHeader
@@ -437,69 +805,68 @@ const Forms = ({
                       sortDirection={
                         sortDirection
                       }
-                      onSort={handleSort}
+                      onSort={
+                        handleSort
+                      }
                     />
 
-                    <th className="whitespace-nowrap px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    <th className="whitespace-nowrap px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-700">
                       Actions
                     </th>
                   </tr>
                 </thead>
 
                 <tbody>
-                  {visibleForms.length > 0 ? (
-                    visibleForms.map((form) => {
-                      const formId =
-                        form.id ||
-                        `${form.name}-${form.lastUpdated}`;
-
-                      return (
+                  {visibleForms.length >
+                  0 ? (
+                    visibleForms.map(
+                      (form) => (
                         <tr
-                          key={formId}
+                          key={form.id}
                           className="border-b border-slate-100 transition-colors last:border-0 hover:bg-slate-50/60"
                         >
                           <td className="px-5 py-4">
                             <p className="text-sm font-medium text-navy-950">
-                              <EmptyCell
-                                value={form.name}
-                              />
+                              <span className="text-navy-950">
+                                {form.name || "—"}
+                              </span>
                             </p>
 
                             {form.description && (
-                              <p className="mt-0.5 max-w-xs truncate text-xs text-slate-500">
-                                {form.description}
+                              <p className="mt-0.5 max-w-xs truncate text-xs text-slate-700">
+                                {
+                                  form.description
+                                }
                               </p>
                             )}
                           </td>
 
                           <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
-                            <EmptyCell
-                              value={form.sector}
-                            />
+                            <span className="font-medium text-slate-800">
+                              {form.sector || "—"}
+                            </span>
                           </td>
 
                           <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
-                            <EmptyCell
-                              value={getSegmentLabel(
-                                form.segment
-                              )}
-                            />
+                            <span className="font-medium text-slate-800">
+                              {form.industrySegment || "—"}
+                            </span>
                           </td>
 
                           <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
-                            <EmptyCell
-                              value={getFrequencyLabel(
-                                form.frequency
-                              )}
-                            />
+                            <span className="font-medium text-slate-800">
+                              {getFrequencyLabel(
+                                form.reportingFrequency?.type
+                              ) || "—"}
+                            </span>
                           </td>
 
                           <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
-                            <EmptyCell
-                              value={
+                            <span className="font-medium text-slate-800">
+                              {getAudienceLabel(
                                 form.targetAudience
-                              }
-                            />
+                              ) || "—"}
+                            </span>
                           </td>
 
                           <td className="whitespace-nowrap px-5 py-4">
@@ -510,12 +877,10 @@ const Forms = ({
                             />
                           </td>
 
-                          <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-500">
-                            <EmptyCell
-                              value={
-                                form.lastUpdated
-                              }
-                            />
+                          <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
+                            <span className="font-medium text-slate-800">
+                              {form.lastUpdated || "—"}
+                            </span>
                           </td>
 
                           <td className="px-5 py-4">
@@ -524,14 +889,12 @@ const Forms = ({
                                 variant="ghost"
                                 size="icon-sm"
                                 onClick={() =>
-                                  onViewForm?.(form)
+                                  onViewForm?.(
+                                    form
+                                  )
                                 }
                                 title="View"
-                                aria-label={`View ${
-                                  form.name ||
-                                  "form"
-                                }`}
-                                className="text-slate-400 hover:bg-slate-100 hover:text-navy-800"
+                                className="border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-navy-300 hover:bg-navy-50 hover:text-navy-950"
                               >
                                 <Eye className="h-4 w-4" />
                               </Button>
@@ -540,14 +903,12 @@ const Forms = ({
                                 variant="ghost"
                                 size="icon-sm"
                                 onClick={() =>
-                                  onEditForm?.(form)
+                                  openEditForm(
+                                    form
+                                  )
                                 }
                                 title="Edit"
-                                aria-label={`Edit ${
-                                  form.name ||
-                                  "form"
-                                }`}
-                                className="text-slate-400 hover:bg-slate-100 hover:text-navy-800"
+                                className="border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-navy-300 hover:bg-navy-50 hover:text-navy-950"
                               >
                                 <Pencil className="h-4 w-4" />
                               </Button>
@@ -561,11 +922,7 @@ const Forms = ({
                                   )
                                 }
                                 title="Duplicate"
-                                aria-label={`Duplicate ${
-                                  form.name ||
-                                  "form"
-                                }`}
-                                className="text-slate-400 hover:bg-slate-100 hover:text-navy-800"
+                                className="border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-navy-300 hover:bg-navy-50 hover:text-navy-950"
                               >
                                 <Copy className="h-4 w-4" />
                               </Button>
@@ -579,11 +936,7 @@ const Forms = ({
                                   )
                                 }
                                 title="Archive"
-                                aria-label={`Archive ${
-                                  form.name ||
-                                  "form"
-                                }`}
-                                className="text-slate-400 hover:bg-slate-100 hover:text-navy-800"
+                                className="border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700"
                               >
                                 <Archive className="h-4 w-4" />
                               </Button>
@@ -592,22 +945,20 @@ const Forms = ({
                                 variant="ghost"
                                 size="icon-sm"
                                 onClick={() =>
-                                  onDeleteForm?.(form)
+                                  onDeleteForm?.(
+                                    form
+                                  )
                                 }
                                 title="Delete"
-                                aria-label={`Delete ${
-                                  form.name ||
-                                  "form"
-                                }`}
-                                className="text-slate-400 hover:bg-red-50 hover:text-red-600"
+                                className="border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-red-300 hover:bg-red-50 hover:text-red-600"
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
                             </div>
                           </td>
                         </tr>
-                      );
-                    })
+                      )
+                    )
                   ) : (
                     <tr>
                       <td
@@ -616,14 +967,19 @@ const Forms = ({
                       >
                         <FileSpreadsheet className="mx-auto h-8 w-8 text-slate-300" />
 
-                        <p className="mt-3 text-sm font-medium text-slate-500">
-                          No forms found
+                        <p className="mt-3 text-sm font-medium text-slate-700">
+                          {formsLoading
+                            ? "Loading forms..."
+                            : formsLoadError
+                              ? "Unable to load forms"
+                              : "No forms found"}
                         </p>
 
-                        <p className="mt-1 text-xs text-slate-400">
-                          Forms matching the selected
-                          filters will appear here.
-                        </p>
+                        {formsLoadError && (
+                          <p className="mx-auto mt-1 max-w-md text-xs text-red-600">
+                            {formsLoadError}
+                          </p>
+                        )}
                       </td>
                     </tr>
                   )}
@@ -631,30 +987,12 @@ const Forms = ({
               </table>
             </div>
 
-            {/* Table footer */}
-            <div className="flex flex-col gap-3 border-t border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 border-t border-slate-200 px-5 py-3 text-xs text-slate-700 sm:flex-row sm:items-center sm:justify-between">
               <span>
-                Showing {visibleForms.length} of{" "}
+                Showing{" "}
+                {visibleForms.length} of{" "}
                 {forms.length} forms
               </span>
-
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled
-                >
-                  Previous
-                </Button>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled
-                >
-                  Next
-                </Button>
-              </div>
             </div>
           </Card>
         </div>
@@ -662,13 +1000,21 @@ const Forms = ({
 
       {builderOpen && (
         <FormBuilder
-          onClose={() =>
-            setBuilderOpen(false)
+          initialData={
+            editingForm
+          }
+          organizations={
+            organizations
+          }
+          onClose={
+            closeBuilder
           }
           onSaveDraft={
             handleBuilderSaveDraft
           }
-          onPublish={handleBuilderPublish}
+          onPublish={
+            handleBuilderPublish
+          }
         />
       )}
     </>
