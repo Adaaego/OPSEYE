@@ -36,6 +36,12 @@ const normalizeStatus = (value) => {
     .replace(/[\s-]+/g, "_");
 };
 
+const normalizeRole = (value) => {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+};
+
 const formatFieldType = (type) => {
   return String(type || "text")
     .replace(/_/g, " ")
@@ -43,7 +49,6 @@ const formatFieldType = (type) => {
       letter.toUpperCase()
     );
 };
-
 
 const formatAuditTimestamp = (value) => {
   if (!value) {
@@ -104,6 +109,17 @@ const ReportViewer = ({
       ? report.workflowStages
       : [];
 
+  /*
+   * Ministry receives the completed report but does not
+   * participate in the organization's approval process.
+   */
+  const approvalStages =
+    workflowStages.filter(
+      (stage) =>
+        normalizeRole(stage?.role) !==
+        "ministry"
+    );
+
   const currentStageIndex =
     Number.isInteger(
       report?.currentStageIndex
@@ -111,13 +127,26 @@ const ReportViewer = ({
       ? report.currentStageIndex
       : 0;
 
+  const currentStageRole =
+    normalizeRole(
+      report?.currentStageRole ||
+        workflowStages[
+          currentStageIndex
+        ]?.role
+    );
+
   const reportStatus =
     normalizeStatus(
       report?.status
     );
 
+  const hasReachedMinistry =
+    currentStageRole === "ministry";
+
   const isCompleted =
-    reportStatus === "approved";
+    reportStatus === "approved" ||
+    reportStatus === "submitted" ||
+    hasReachedMinistry;
 
   const isReadOnly = [
     "submitted",
@@ -126,10 +155,25 @@ const ReportViewer = ({
     "rejected",
   ].includes(reportStatus);
 
-  /*
-   * Company logos are stored in the local companies file.
-   * Use the same normalized-name lookup as FormBuilder.
-   */
+  const activeApprovalStageIndex =
+    isCompleted
+      ? approvalStages.length
+      : Math.min(
+          currentStageIndex,
+          Math.max(
+            approvalStages.length - 1,
+            0
+          )
+        );
+
+  const displayStatus =
+    isCompleted
+      ? "Submitted to Ministry"
+      : String(
+          report?.status ||
+            "Pending Submission"
+        ).replace(/_/g, " ");
+
   const operatorCompany =
     useMemo(
       () =>
@@ -191,8 +235,10 @@ const ReportViewer = ({
         icon: User,
         label: "Assigned To",
         value:
-          report?.assignedTo ||
-          "—",
+          isCompleted
+            ? "Ministry — Preview Only"
+            : report?.assignedTo ||
+              "—",
       },
       {
         icon: Clock,
@@ -202,7 +248,11 @@ const ReportViewer = ({
           "—",
       },
     ],
-    [report, operatorCompany]
+    [
+      report,
+      operatorCompany,
+      isCompleted,
+    ]
   );
 
   const handleFieldChange = (
@@ -270,25 +320,25 @@ const ReportViewer = ({
           currentUser:
             auth.currentUser,
 
-            userProfile: {
-                role:
-                  report?.assignedRole,
-              
-                fullName:
-                  report?.assignedUserName ||
-                  "Unknown user",
-              
-                email:
-                  report?.assignedUserEmail ||
-                  auth.currentUser?.email ||
-                  "",
-              
-                organizationId:
-                  report?.organizationId,
-              
-                country:
-                  report?.country,
-              },
+          userProfile: {
+            role:
+              report?.assignedRole,
+
+            fullName:
+              report?.assignedUserName ||
+              "Unknown user",
+
+            email:
+              report?.assignedUserEmail ||
+              auth.currentUser?.email ||
+              "",
+
+            organizationId:
+              report?.organizationId,
+
+            country:
+              report?.country,
+          },
         });
 
       onUpdate(updatedReport);
@@ -516,43 +566,37 @@ const ReportViewer = ({
             <div className="mb-4 flex items-center justify-between gap-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">
-                  Workflow Progress
+                  Organization Approval Progress
                 </p>
 
                 <p className="mt-1 text-sm font-medium text-slate-700">
                   {isCompleted
-                    ? "Completed"
+                    ? "Organization review completed"
                     : `Stage ${
-                        currentStageIndex +
+                        activeApprovalStageIndex +
                         1
                       } of ${
-                        workflowStages.length ||
+                        approvalStages.length ||
                         1
                       }`}
                 </p>
               </div>
 
               <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold capitalize text-slate-700">
-                {String(
-                  report?.status ||
-                    "Pending Submission"
-                ).replace(
-                  /_/g,
-                  " "
-                )}
+                {displayStatus}
               </span>
             </div>
 
             <div className="flex items-start">
-              {workflowStages.map(
+              {approvalStages.map(
                 (stage, index) => {
                   const isPassed =
                     index <
-                    currentStageIndex;
+                    activeApprovalStageIndex;
 
                   const isCurrent =
                     index ===
-                      currentStageIndex &&
+                      activeApprovalStageIndex &&
                     !isCompleted;
 
                   const isDone =
@@ -604,7 +648,7 @@ const ReportViewer = ({
                       </div>
 
                       {index <
-                        workflowStages.length -
+                        approvalStages.length -
                           1 && (
                         <div
                           className={`mx-2 mt-4 h-0.5 flex-1 rounded-full ${
@@ -621,11 +665,18 @@ const ReportViewer = ({
               )}
             </div>
 
+            {isCompleted && (
+              <div className="mt-4 flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
+                <CheckCircle2 className="h-4 w-4" />
+                Organization review is complete. The report is now available to the Ministry for preview and reporting.
+              </div>
+            )}
+
             {isReadOnly &&
               !isCompleted && (
                 <div className="mt-4 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
                   <Lock className="h-4 w-4" />
-                  This report has already been submitted and cannot be edited.
+                  This report is being reviewed within the organization and cannot be edited.
                 </div>
               )}
           </section>
@@ -681,7 +732,9 @@ const ReportViewer = ({
               </p>
 
               <h3 className="mt-1 text-lg font-bold text-navy-950">
-                Complete the report
+                {isReadOnly
+                  ? "Submitted responses"
+                  : "Complete the report"}
               </h3>
             </div>
 
@@ -764,75 +817,107 @@ const ReportViewer = ({
             <div className="mb-4 flex items-center gap-2">
               <History className="h-4 w-4 text-navy-700" />
 
-              <div>
-
-                <h3 className="mt-1 text-lg font-bold text-navy-950">
-                  Report activity
-                </h3>
-              </div>
+              <h3 className="text-lg font-bold text-navy-950">
+                Report activity
+              </h3>
             </div>
 
             {workflowHistory.length ? (
               <div className="space-y-0">
                 {[...workflowHistory]
-                  .sort((firstEntry, secondEntry) => {
-                    const firstDate =
-                      typeof firstEntry?.timestamp?.toDate === "function"
-                        ? firstEntry.timestamp.toDate()
-                        : new Date(firstEntry?.timestamp || 0);
+                  .sort(
+                    (
+                      firstEntry,
+                      secondEntry
+                    ) => {
+                      const firstDate =
+                        typeof firstEntry
+                          ?.timestamp
+                          ?.toDate ===
+                        "function"
+                          ? firstEntry.timestamp.toDate()
+                          : new Date(
+                              firstEntry?.timestamp ||
+                                0
+                            );
 
-                    const secondDate =
-                      typeof secondEntry?.timestamp?.toDate === "function"
-                        ? secondEntry.timestamp.toDate()
-                        : new Date(secondEntry?.timestamp || 0);
+                      const secondDate =
+                        typeof secondEntry
+                          ?.timestamp
+                          ?.toDate ===
+                        "function"
+                          ? secondEntry.timestamp.toDate()
+                          : new Date(
+                              secondEntry?.timestamp ||
+                                0
+                            );
 
-                    return secondDate - firstDate;
-                  })
-                  .map((entry, index) => (
-                    <div
-                      key={`${entry.userId || "user"}-${entry.action || "action"}-${index}`}
-                      className="relative flex gap-3 pb-5 last:pb-0"
-                    >
-                      {index < workflowHistory.length - 1 && (
-                        <div className="absolute left-[17px] top-9 h-[calc(100%-1.25rem)] w-px bg-slate-200" />
-                      )}
-
-                      <div className="relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white">
-                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                      </div>
-
-                      <div className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-                        <p className="text-sm font-semibold text-slate-900">
-                          {entry.userName || "Unknown user"}
-                        </p>
-
-                        <p className="mt-1 text-xs font-medium capitalize text-slate-600">
-                          {String(
-                            entry.role ||
-                              entry.stageLabel ||
-                              "Unknown role"
-                          ).replace(/_/g, " ")}
-                        </p>
-
-                        {entry.userEmail && (
-                          <p className="mt-1 text-xs text-slate-500">
-                            {entry.userEmail}
-                          </p>
+                      return (
+                        secondDate -
+                        firstDate
+                      );
+                    }
+                  )
+                  .map(
+                    (entry, index) => (
+                      <div
+                        key={`${entry.userId || "user"}-${entry.action || "action"}-${index}`}
+                        className="relative flex gap-3 pb-5 last:pb-0"
+                      >
+                        {index <
+                          workflowHistory.length -
+                            1 && (
+                          <div className="absolute left-[17px] top-9 h-[calc(100%-1.25rem)] w-px bg-slate-200" />
                         )}
 
-                        <p className="mt-2 text-xs font-medium capitalize text-slate-600">
-                          {String(
-                            entry.action ||
-                              "updated"
-                          ).replace(/_/g, " ")}
-                        </p>
+                        <div className="relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white">
+                          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                        </div>
 
-                        <p className="mt-1 text-xs text-slate-500">
-                          {formatAuditTimestamp(entry.timestamp)}
-                        </p>
+                        <div className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                          <p className="text-sm font-semibold text-slate-900">
+                            {entry.userName ||
+                              "Unknown user"}
+                          </p>
+
+                          <p className="mt-1 text-xs font-medium capitalize text-slate-600">
+                            {String(
+                              entry.role ||
+                                entry.stageLabel ||
+                                "Unknown role"
+                            ).replace(
+                              /_/g,
+                              " "
+                            )}
+                          </p>
+
+                          {entry.userEmail && (
+                            <p className="mt-1 text-xs text-slate-500">
+                              {
+                                entry.userEmail
+                              }
+                            </p>
+                          )}
+
+                          <p className="mt-2 text-xs font-medium capitalize text-slate-600">
+                            {String(
+                              entry.action ||
+                                "updated"
+                            ).replace(
+                              /_/g,
+                              " "
+                            )}
+                          </p>
+
+                          <p className="mt-1 text-xs text-slate-500">
+                            {formatAuditTimestamp(
+                              entry.timestamp
+                            )}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  )}
               </div>
             ) : (
               <div className="rounded-xl border-2 border-dashed border-slate-200 py-8 text-center">
@@ -842,7 +927,6 @@ const ReportViewer = ({
               </div>
             )}
           </section>
-
         </div>
 
         {submitError && (

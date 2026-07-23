@@ -9,12 +9,18 @@ import {
     Timestamp,
     updateDoc,
   } from "firebase/firestore";
-  import { db } from "../firebase/firebase";
-  import { v4 } from "uuid";
+  
+  import {
+    db,
+  } from "../firebase/firebase";
+  
+  import {
+    v4,
+  } from "uuid";
   
   const FORM_TEMPLATES_COLLECTION =
     "formTemplates";
-
+  
   const REPORT_SUBMISSIONS_COLLECTION =
     "reportSubmissions";
   
@@ -86,10 +92,13 @@ import {
       label: "Ministry",
     },
   ];
-
+  
   /*
-   * This is the only valid approval hierarchy.
-   * Roles always move from the form submitter up to the Ministry.
+   * This is the only valid workflow hierarchy.
+   *
+   * Organization roles review and approve the report internally.
+   * Ministry remains the final destination for submitted data,
+   * but it does not approve the report.
    */
   export const APPROVAL_ROLE_ORDER = [
     "employee",
@@ -99,7 +108,7 @@ import {
     "enterprise_admin",
     "ministry",
   ];
-
+  
   export const DEFAULT_APPROVAL_WORKFLOW = [
     "employee",
     "branch_admin",
@@ -208,8 +217,7 @@ import {
       dayOfWeek: "",
       dayOfMonth: "",
     },
-
-    /* Controls when the active form is sent to its audience. */
+  
     sendSchedule: {
       time: "08:00",
       timezone: "Africa/Accra",
@@ -220,13 +228,11 @@ import {
       timezone: "Africa/Accra",
     },
   
-    /*
-     * New forms begin with the complete approval hierarchy.
-     * The first role receives, fills and submits the form.
-     */
     approvalWorkflow: {
       enabled: true,
-      roles: [...DEFAULT_APPROVAL_WORKFLOW],
+      roles: [
+        ...DEFAULT_APPROVAL_WORKFLOW,
+      ],
       submitterRole: "employee",
     },
   
@@ -235,12 +241,6 @@ import {
     ],
   });
   
-  /*
-   * Updates a normal top-level form value.
-   *
-   * The input must have a name that matches a property
-   * inside the form state, such as name or description.
-   */
   const handleInputChange = (
     event,
     setFormData
@@ -261,10 +261,6 @@ import {
     }));
   };
   
-  /*
-   * Updates a nested object such as targetAudience,
-   * reportingFrequency or submissionDeadline.
-   */
   const handleNestedInputChange = (
     section,
     property,
@@ -280,10 +276,6 @@ import {
     }));
   };
   
-  /*
-   * Changes the target audience type and clears selected
-   * organizations when All Operators is selected.
-   */
   const handleTargetAudienceChange = (
     value,
     setFormData
@@ -303,10 +295,6 @@ import {
     }));
   };
   
-  /*
-   * Adds or removes an organization from the target
-   * audience list.
-   */
   const toggleTargetOrganization = (
     organizationId,
     setFormData
@@ -341,40 +329,49 @@ import {
     });
   };
   
-  /* Returns unique roles in the correct hierarchy order. */
-  const sortApprovalRoles = (roles = []) => {
+  const sortApprovalRoles = (
+    roles = []
+  ) => {
     return [
       ...new Set(
         roles.filter((role) =>
-          APPROVAL_ROLE_ORDER.includes(role)
+          APPROVAL_ROLE_ORDER.includes(
+            role
+          )
         )
       ),
     ].sort(
-      (firstRole, secondRole) =>
-        APPROVAL_ROLE_ORDER.indexOf(firstRole) -
-        APPROVAL_ROLE_ORDER.indexOf(secondRole)
+      (
+        firstRole,
+        secondRole
+      ) =>
+        APPROVAL_ROLE_ORDER.indexOf(
+          firstRole
+        ) -
+        APPROVAL_ROLE_ORDER.indexOf(
+          secondRole
+        )
     );
   };
-
-  /* The first role in the chain fills and submits the form. */
-  const getSubmitterRole = (roles = []) => {
-    return sortApprovalRoles(roles)[0] || "";
+  
+  const getSubmitterRole = (
+    roles = []
+  ) => {
+    return (
+      sortApprovalRoles(roles)[0] ||
+      ""
+    );
   };
-
-  /*
-   * Enables or disables the approval workflow.
-   *
-   * When disabled, the selected roles and submitter are
-   * removed so old workflow data is not saved accidentally.
-   */
+  
   const toggleApprovalWorkflow = (
     enabled,
     setFormData
   ) => {
     setFormData((currentForm) => {
       const currentRoles =
-        currentForm.approvalWorkflow?.roles || [];
-
+        currentForm.approvalWorkflow
+          ?.roles || [];
+  
       const roles = enabled
         ? sortApprovalRoles(
             currentRoles.length
@@ -382,60 +379,62 @@ import {
               : DEFAULT_APPROVAL_WORKFLOW
           )
         : [];
-
+  
       return {
         ...currentForm,
+  
         approvalWorkflow: {
           enabled,
           roles,
           submitterRole:
             enabled
-              ? getSubmitterRole(roles)
+              ? getSubmitterRole(
+                  roles
+                )
               : "",
         },
       };
     });
   };
   
-  /*
-   * Adds a role and keeps the workflow in hierarchy order.
-   * Adding an approver never changes the existing submitter
-   * unless a lower role is added to the chain.
-   */
   const addApprovalRole = (
     role,
     setFormData
   ) => {
-    if (!APPROVAL_ROLE_ORDER.includes(role)) {
+    if (
+      !APPROVAL_ROLE_ORDER.includes(
+        role
+      )
+    ) {
       return;
     }
-
+  
     setFormData((currentForm) => {
       const existingRoles =
-        currentForm.approvalWorkflow?.roles || [];
-
+        currentForm.approvalWorkflow
+          ?.roles || [];
+  
       const updatedRoles =
         sortApprovalRoles([
           ...existingRoles,
           role,
         ]);
-
+  
       return {
         ...currentForm,
+  
         approvalWorkflow: {
           enabled: true,
           roles: updatedRoles,
           submitterRole:
-            getSubmitterRole(updatedRoles),
+            getSubmitterRole(
+              updatedRoles
+            ),
         },
       };
     });
   };
-
-  /*
-   * Removes a role and makes the lowest remaining role
-   * the person who fills and submits the form.
-   */
+  
   const removeApprovalRole = (
     role,
     setFormData
@@ -444,30 +443,38 @@ import {
       const updatedRoles =
         sortApprovalRoles(
           (
-            currentForm.approvalWorkflow?.roles || []
+            currentForm
+              .approvalWorkflow
+              ?.roles || []
           ).filter(
             (currentRole) =>
               currentRole !== role
           )
         );
-
+  
       return {
         ...currentForm,
+  
         approvalWorkflow: {
-          ...currentForm.approvalWorkflow,
-          enabled: updatedRoles.length > 0,
-          roles: updatedRoles,
+          ...currentForm
+            .approvalWorkflow,
+  
+          enabled:
+            updatedRoles.length >
+            0,
+  
+          roles:
+            updatedRoles,
+  
           submitterRole:
-            getSubmitterRole(updatedRoles),
+            getSubmitterRole(
+              updatedRoles
+            ),
         },
       };
     });
   };
-
-  /*
-   * Replaces the workflow with roles selected together in the builder.
-   * Invalid role ordering is corrected automatically.
-   */
+  
   const setApprovalRoles = (
     roles,
     setFormData
@@ -475,23 +482,30 @@ import {
     setFormData((currentForm) => {
       const updatedRoles =
         sortApprovalRoles(roles);
-
+  
       return {
         ...currentForm,
+  
         approvalWorkflow: {
-          ...currentForm.approvalWorkflow,
-          enabled: updatedRoles.length > 0,
-          roles: updatedRoles,
+          ...currentForm
+            .approvalWorkflow,
+  
+          enabled:
+            updatedRoles.length >
+            0,
+  
+          roles:
+            updatedRoles,
+  
           submitterRole:
-            getSubmitterRole(updatedRoles),
+            getSubmitterRole(
+              updatedRoles
+            ),
         },
       };
     });
   };
-
-  /*
-   * Adds a new question to the editable form.
-   */
+  
   const addFormField = (
     setFormData
   ) => {
@@ -505,9 +519,6 @@ import {
     }));
   };
   
-  /*
-   * Removes a question from the editable form.
-   */
   const removeFormField = (
     fieldId,
     setFormData
@@ -523,13 +534,6 @@ import {
     }));
   };
   
-  /*
-   * Updates a property on one form field.
-   *
-   * When the field type changes, its placeholder is updated
-   * automatically. Dropdown options are kept only for
-   * dropdown fields.
-   */
   const updateFormField = (
     fieldId,
     property,
@@ -539,40 +543,45 @@ import {
     setFormData((currentForm) => ({
       ...currentForm,
   
-      fields: currentForm.fields.map(
-        (field) => {
-          if (field.id !== fieldId) {
-            return field;
-          }
+      fields:
+        currentForm.fields.map(
+          (field) => {
+            if (
+              field.id !== fieldId
+            ) {
+              return field;
+            }
   
-          if (property === "type") {
+            if (
+              property === "type"
+            ) {
+              return {
+                ...field,
+  
+                type: value,
+  
+                placeholder:
+                  FIELD_PLACEHOLDERS[
+                    value
+                  ] ||
+                  "Enter your response",
+  
+                options:
+                  value === "dropdown"
+                    ? field.options
+                    : [],
+              };
+            }
+  
             return {
               ...field,
-              type: value,
-              placeholder:
-                FIELD_PLACEHOLDERS[
-                  value
-                ] ||
-                "Enter your response",
-              options:
-                value === "dropdown"
-                  ? field.options
-                  : [],
+              [property]: value,
             };
           }
-  
-          return {
-            ...field,
-            [property]: value,
-          };
-        }
-      ),
+        ),
     }));
   };
   
-  /*
-   * Adds an empty choice to a dropdown field.
-   */
   const addDropdownOption = (
     fieldId,
     setFormData
@@ -580,24 +589,23 @@ import {
     setFormData((currentForm) => ({
       ...currentForm,
   
-      fields: currentForm.fields.map(
-        (field) =>
-          field.id === fieldId
-            ? {
-                ...field,
-                options: [
-                  ...field.options,
-                  "",
-                ],
-              }
-            : field
-      ),
+      fields:
+        currentForm.fields.map(
+          (field) =>
+            field.id === fieldId
+              ? {
+                  ...field,
+  
+                  options: [
+                    ...field.options,
+                    "",
+                  ],
+                }
+              : field
+        ),
     }));
   };
   
-  /*
-   * Updates one dropdown option.
-   */
   const updateDropdownOption = (
     fieldId,
     optionIndex,
@@ -607,32 +615,33 @@ import {
     setFormData((currentForm) => ({
       ...currentForm,
   
-      fields: currentForm.fields.map(
-        (field) => {
-          if (field.id !== fieldId) {
-            return field;
+      fields:
+        currentForm.fields.map(
+          (field) => {
+            if (
+              field.id !== fieldId
+            ) {
+              return field;
+            }
+  
+            const updatedOptions = [
+              ...field.options,
+            ];
+  
+            updatedOptions[
+              optionIndex
+            ] = value;
+  
+            return {
+              ...field,
+              options:
+                updatedOptions,
+            };
           }
-  
-          const updatedOptions = [
-            ...field.options,
-          ];
-  
-          updatedOptions[
-            optionIndex
-          ] = value;
-  
-          return {
-            ...field,
-            options: updatedOptions,
-          };
-        }
-      ),
+        ),
     }));
   };
   
-  /*
-   * Removes one option from a dropdown field.
-   */
   const removeDropdownOption = (
     fieldId,
     optionIndex,
@@ -641,21 +650,22 @@ import {
     setFormData((currentForm) => ({
       ...currentForm,
   
-      fields: currentForm.fields.map(
-        (field) =>
-          field.id === fieldId
-            ? {
-                ...field,
+      fields:
+        currentForm.fields.map(
+          (field) =>
+            field.id === fieldId
+              ? {
+                  ...field,
   
-                options:
-                  field.options.filter(
-                    (_, index) =>
-                      index !==
-                      optionIndex
-                  ),
-              }
-            : field
-      ),
+                  options:
+                    field.options.filter(
+                      (_, index) =>
+                        index !==
+                        optionIndex
+                    ),
+                }
+              : field
+        ),
     }));
   };
   
@@ -683,7 +693,8 @@ import {
     }
   
     if (
-      !formData.targetAudience.type
+      !formData.targetAudience
+        .type
     ) {
       throw new Error(
         "Please select a target audience."
@@ -691,7 +702,8 @@ import {
     }
   
     if (
-      formData.targetAudience.type ===
+      formData.targetAudience
+        .type ===
         "specific_organizations" &&
       !formData.targetAudience
         .organizationIds.length
@@ -740,7 +752,7 @@ import {
         "Please select the time when this form should be sent."
       );
     }
-
+  
     if (
       !formData.submissionDeadline
         .time
@@ -758,29 +770,33 @@ import {
         "Please add at least one role to the submission workflow."
       );
     }
-
+  
     const orderedWorkflowRoles =
       sortApprovalRoles(
-        formData.approvalWorkflow.roles
+        formData.approvalWorkflow
+          .roles
       );
-
+  
     const workflowIsInvalid =
       orderedWorkflowRoles.length !==
-        formData.approvalWorkflow.roles.length ||
+        formData.approvalWorkflow
+          .roles.length ||
       orderedWorkflowRoles.some(
         (role, index) =>
           role !==
-          formData.approvalWorkflow.roles[index]
+          formData.approvalWorkflow
+            .roles[index]
       );
-
+  
     if (workflowIsInvalid) {
       throw new Error(
         "The approval workflow must follow the organization hierarchy."
       );
     }
-
+  
     if (
-      formData.approvalWorkflow.submitterRole !==
+      formData.approvalWorkflow
+        .submitterRole !==
       orderedWorkflowRoles[0]
     ) {
       throw new Error(
@@ -830,52 +846,58 @@ import {
     return {
       ...formData,
   
-      name: formData.name.trim(),
+      name:
+        formData.name.trim(),
   
       description:
-        formData.description?.trim() || "",
+        formData.description
+          ?.trim() || "",
   
       approvalWorkflow: {
-        ...formData.approvalWorkflow,
-        roles: sortApprovalRoles(
-          formData.approvalWorkflow.roles
-        ),
+        ...formData
+          .approvalWorkflow,
+  
+        roles:
+          sortApprovalRoles(
+            formData
+              .approvalWorkflow
+              .roles
+          ),
+  
         submitterRole:
           getSubmitterRole(
-            formData.approvalWorkflow.roles
+            formData
+              .approvalWorkflow
+              .roles
           ),
       },
-
-      fields: formData.fields.map(
-        (field) => ({
-          ...field,
   
-          label: field.label.trim(),
+      fields:
+        formData.fields.map(
+          (field) => ({
+            ...field,
   
-          placeholder:
-            field.placeholder?.trim() || "",
+            label:
+              field.label.trim(),
   
-          options:
-            field.type ===
-            "dropdown"
-              ? field.options
-                  .map((option) =>
-                    option.trim()
-                  )
-                  .filter(Boolean)
-              : [],
-        })
-      ),
+            placeholder:
+              field.placeholder
+                ?.trim() || "",
+  
+            options:
+              field.type ===
+              "dropdown"
+                ? field.options
+                    .map((option) =>
+                      option.trim()
+                    )
+                    .filter(Boolean)
+                : [],
+          })
+        ),
     };
   };
   
-  /*
-   * Creates a new form template in Firestore.
-   *
-   * Draft and published forms use the same collection.
-   * Their status determines whether they are available for
-   * automatic assignment to operators.
-   */
   const createFormHandler = async ({
     formData,
     currentUser,
@@ -887,43 +909,50 @@ import {
       );
     }
   
-    validateFormTemplate(formData);
+    validateFormTemplate(
+      formData
+    );
   
     const cleanedForm =
-      cleanFormData(formData);
+      cleanFormData(
+        formData
+      );
   
     const formDocument = {
       ...cleanedForm,
   
       status,
   
-      createdBy: currentUser.uid,
-      createdAt: serverTimestamp(),
+      createdBy:
+        currentUser.uid,
   
-      updatedBy: currentUser.uid,
-      updatedAt: serverTimestamp(),
+      createdAt:
+        serverTimestamp(),
+  
+      updatedBy:
+        currentUser.uid,
+  
+      updatedAt:
+        serverTimestamp(),
     };
   
-    const formReference = await addDoc(
-      collection(
-        db,
-        FORM_TEMPLATES_COLLECTION
-      ),
-      formDocument
-    );
+    const formReference =
+      await addDoc(
+        collection(
+          db,
+          FORM_TEMPLATES_COLLECTION
+        ),
+        formDocument
+      );
   
     return {
-      id: formReference.id,
+      id:
+        formReference.id,
+  
       ...formDocument,
     };
   };
   
-  /*
-   * Updates an existing editable form template.
-   *
-   * createdBy and createdAt remain unchanged. Only the
-   * latest editor and update time are replaced.
-   */
   const updateFormHandler = async ({
     formId,
     formData,
@@ -942,40 +971,47 @@ import {
       );
     }
   
-    validateFormTemplate(formData);
+    validateFormTemplate(
+      formData
+    );
   
     const cleanedForm =
-      cleanFormData(formData);
+      cleanFormData(
+        formData
+      );
   
-    const formReference = doc(
-      db,
-      FORM_TEMPLATES_COLLECTION,
-      formId
-    );
+    const formReference =
+      doc(
+        db,
+        FORM_TEMPLATES_COLLECTION,
+        formId
+      );
   
     await updateDoc(
       formReference,
       {
         ...cleanedForm,
+  
         status,
-        updatedBy: currentUser.uid,
-        updatedAt: serverTimestamp(),
+  
+        updatedBy:
+          currentUser.uid,
+  
+        updatedAt:
+          serverTimestamp(),
       }
     );
   
     return {
-      id: formId,
+      id:
+        formId,
+  
       ...cleanedForm,
+  
       status,
     };
   };
   
-  /*
-   * Permanently deletes a form template from Firestore.
-   *
-   * The Forms page should call this only after the Ministry
-   * confirms the delete action in the confirmation popup.
-   */
   const deleteFormHandler = async ({
     formId,
     currentUser,
@@ -985,13 +1021,13 @@ import {
         "A form ID is required."
       );
     }
-
+  
     if (!currentUser?.uid) {
       throw new Error(
         "A signed-in user is required."
       );
     }
-
+  
     await deleteDoc(
       doc(
         db,
@@ -999,78 +1035,95 @@ import {
         formId
       )
     );
-
+  
     return {
-      id: formId,
-      deleted: true,
+      id:
+        formId,
+  
+      deleted:
+        true,
     };
   };
-
-  /*
-   * Checks that every required Ministry field has been completed.
-   */
+  
   const validateReportResponses = (
     report,
     fieldValues
   ) => {
     const reportFields =
-      Array.isArray(report?.fields)
+      Array.isArray(
+        report?.fields
+      )
         ? report.fields
         : [];
-
+  
     const missingRequiredField =
-      reportFields.find((field) => {
-        if (!field.required) {
-          return false;
+      reportFields.find(
+        (field) => {
+          if (!field.required) {
+            return false;
+          }
+  
+          const value =
+            fieldValues?.[
+              field.id
+            ];
+  
+          return (
+            value ===
+              undefined ||
+            value === null ||
+            String(value).trim() ===
+              ""
+          );
         }
-
-        const value =
-          fieldValues?.[field.id];
-
-        return (
-          value === undefined ||
-          value === null ||
-          String(value).trim() === ""
-        );
-      });
-
+      );
+  
     if (missingRequiredField) {
       throw new Error(
-        `${missingRequiredField.label || "A required field"} must be completed.`
+        `${
+          missingRequiredField
+            .label ||
+          "A required field"
+        } must be completed.`
       );
     }
   };
-
-  /*
-   * Saves only answers that belong to fields in the Ministry's
-   * original form template.
-   */
+  
   const cleanReportResponses = (
     report,
     fieldValues
   ) => {
     const reportFields =
-      Array.isArray(report?.fields)
+      Array.isArray(
+        report?.fields
+      )
         ? report.fields
         : [];
-
+  
     return reportFields.reduce(
-      (responses, field) => {
-        responses[field.id] =
-          fieldValues?.[field.id] ?? "";
-
+      (
+        responses,
+        field
+      ) => {
+        responses[
+          field.id
+        ] =
+          fieldValues?.[
+            field.id
+          ] ?? "";
+  
         return responses;
       },
       {}
     );
   };
-
+  
   /*
    * Creates the first operator submission or updates an existing
-   * report submission before moving it to the next workflow role.
+   * submission as it moves through the organization's review flow.
    *
-   * Every submission adds an immutable history entry containing
-   * the submitter, role, stage and exact action time.
+   * Ministry is the final recipient of the completed data.
+   * It does not approve the report.
    */
   const submitReportHandler = async ({
     report,
@@ -1083,41 +1136,43 @@ import {
         "A signed-in user is required."
       );
     }
-
+  
     const formTemplateId =
       report?.formTemplateId ||
       report?.templateId ||
       report?.id;
-
+  
     if (!formTemplateId) {
       throw new Error(
         "A form template ID is required."
       );
     }
-
+  
     const workflowStages =
-      Array.isArray(report?.workflowStages)
+      Array.isArray(
+        report?.workflowStages
+      )
         ? report.workflowStages
         : [];
-
+  
     if (!workflowStages.length) {
       throw new Error(
         "This report does not have a valid workflow."
       );
     }
-
+  
     const currentStageIndex =
       Number.isInteger(
         report?.currentStageIndex
       )
         ? report.currentStageIndex
         : 0;
-
+  
     const currentStage =
       workflowStages[
         currentStageIndex
       ];
-
+  
     const currentUserRole =
       String(
         userProfile?.role ||
@@ -1127,94 +1182,121 @@ import {
       )
         .trim()
         .toLowerCase();
-
+  
     const currentStageRole =
       String(
-        currentStage?.role || ""
+        currentStage?.role ||
+          ""
       )
         .trim()
         .toLowerCase();
-
+  
     if (
       !currentUserRole ||
       currentUserRole !==
         currentStageRole
     ) {
       throw new Error(
-        "You are not the person currently assigned to submit this report."
+        "You are not the person currently assigned to submit or review this report."
       );
     }
-
+  
     validateReportResponses(
       report,
       fieldValues
     );
-
+  
     const cleanedResponses =
       cleanReportResponses(
         report,
         fieldValues
       );
-
-    const lastStageIndex =
-      workflowStages.length - 1;
-
-    const nextStageIndex =
-      Math.min(
-        currentStageIndex + 1,
-        lastStageIndex
+  
+    const ministryStageIndex =
+      workflowStages.findIndex(
+        (stage) =>
+          String(
+            stage?.role || ""
+          )
+            .trim()
+            .toLowerCase() ===
+          "ministry"
       );
-
+  
+    const lastOrganizationStageIndex =
+      ministryStageIndex > -1
+        ? ministryStageIndex - 1
+        : workflowStages.length - 1;
+  
+    const isFinalOrganizationStage =
+      currentStageIndex >=
+      lastOrganizationStageIndex;
+  
+    const nextStageIndex =
+      isFinalOrganizationStage
+        ? ministryStageIndex > -1
+          ? ministryStageIndex
+          : currentStageIndex
+        : currentStageIndex + 1;
+  
     const nextStage =
       workflowStages[
         nextStageIndex
       ];
-
+  
+    const hasReachedMinistry =
+      isFinalOrganizationStage;
+  
     const submittedAt =
       Timestamp.now();
-
-      const submitterName =
+  
+    const submitterName =
       userProfile?.fullName ||
       userProfile?.name ||
       currentUser.displayName ||
       "Unknown user";
-    
+  
     const submitterEmail =
       userProfile?.email ||
       currentUser.email ||
       "";
-
-      const historyEntry = {
-        action: "submitted",
-      
-        userId:
-          currentUser.uid,
-      
-        userName:
-          submitterName,
-      
-        userEmail:
-          submitterEmail,
-      
-        role:
-          currentUserRole,
-      
-        stageIndex:
-          currentStageIndex,
-      
-        stageLabel:
-          currentStage?.label ||
-          currentStageRole,
-      
-        timestamp:
-          submittedAt,
-      };
-
+  
+    const historyEntry = {
+      action:
+        hasReachedMinistry
+          ? "submitted_to_ministry"
+          : currentStageIndex === 0
+            ? "submitted"
+            : "approved",
+  
+      userId:
+        currentUser.uid,
+  
+      userName:
+        submitterName,
+  
+      userEmail:
+        submitterEmail,
+  
+      role:
+        currentUserRole,
+  
+      stageIndex:
+        currentStageIndex,
+  
+      stageLabel:
+        currentStage?.label ||
+        currentStageRole,
+  
+      timestamp:
+        submittedAt,
+    };
+  
     const submissionId =
       report?.reportSubmissionId ||
       report?.submissionId ||
       "";
-
+  
     const submissionReference =
       submissionId
         ? doc(
@@ -1228,92 +1310,138 @@ import {
               REPORT_SUBMISSIONS_COLLECTION
             )
           );
-
+  
     const sharedSubmissionData = {
       formTemplateId,
+  
       reportName:
         report?.reportName ||
         report?.name ||
         "",
+  
       description:
-        report?.description || "",
+        report?.description ||
+        "",
+  
       fields:
-        Array.isArray(report?.fields)
+        Array.isArray(
+          report?.fields
+        )
           ? report.fields
           : [],
+  
       fieldValues:
         cleanedResponses,
-
+  
       organizationId:
         report?.organizationId ||
-        userProfile?.organizationId ||
+        userProfile
+          ?.organizationId ||
         "",
+  
       operatorName:
         report?.operatorName ||
-        report?.organizationName ||
+        report
+          ?.organizationName ||
         "",
+  
       normalizedName:
         report?.normalizedName ||
-        report?.companyNormalizedName ||
-        report?.organizationNormalizedName ||
+        report
+          ?.companyNormalizedName ||
+        report
+          ?.organizationNormalizedName ||
         "",
+  
       branchName:
         report?.branchName ||
         report?.branch ||
         "",
+  
       regionName:
         report?.regionName ||
         report?.region ||
         "",
+  
       country:
         report?.country ||
         userProfile?.country ||
         "",
-
+  
       reportingDate:
-        report?.reportingDate || "",
+        report?.reportingDate ||
+        "",
+  
       dueTime:
-        report?.dueTime || "",
-
+        report?.dueTime ||
+        "",
+  
       workflowStages,
+  
       currentStageIndex:
         nextStageIndex,
+  
       currentStageRole:
-        nextStage?.role || "",
+        hasReachedMinistry
+          ? "ministry"
+          : nextStage?.role ||
+            "",
+  
       assignedRole:
-        nextStage?.role || "",
-
+        hasReachedMinistry
+          ? ""
+          : nextStage?.role ||
+            "",
+  
+      assignedTo:
+        hasReachedMinistry
+          ? "Ministry — Preview Only"
+          : nextStage?.label ||
+            nextStage?.role ||
+            "",
+  
       status:
-        nextStageIndex ===
-        lastStageIndex
+        hasReachedMinistry
           ? "submitted"
           : "under_review",
-
-          submittedBy:
-          currentUser.uid,
-        
-        submittedByName:
-          submitterName,
-        
-        submittedByEmail:
-          submitterEmail,
-        
-        submittedByRole:
-          currentUserRole,
+  
+      organizationApprovalCompleted:
+        hasReachedMinistry,
+  
+      ministryApprovalRequired:
+        false,
+  
+      availableToMinistry:
+        hasReachedMinistry,
+  
+      submittedBy:
+        currentUser.uid,
+  
+      submittedByName:
+        submitterName,
+  
+      submittedByEmail:
+        submitterEmail,
+  
+      submittedByRole:
+        currentUserRole,
+  
       submittedAt:
         serverTimestamp(),
-
+  
       updatedBy:
         currentUser.uid,
+  
       updatedAt:
         serverTimestamp(),
     };
-
+  
     if (submissionId) {
       await updateDoc(
         submissionReference,
         {
           ...sharedSubmissionData,
+  
           workflowHistory:
             arrayUnion(
               historyEntry
@@ -1325,43 +1453,45 @@ import {
         submissionReference,
         {
           ...sharedSubmissionData,
+  
           createdBy:
             currentUser.uid,
+  
           createdAt:
             serverTimestamp(),
+  
           workflowHistory: [
             historyEntry,
           ],
         }
       );
     }
-
+  
     return {
       ...report,
       ...sharedSubmissionData,
+  
       id:
         submissionReference.id,
+  
       reportSubmissionId:
         submissionReference.id,
+  
       submissionId:
         submissionReference.id,
+  
       workflowHistory: [
         ...(Array.isArray(
           report?.workflowHistory
         )
           ? report.workflowHistory
           : []),
+  
         historyEntry,
       ],
     };
   };
-
-  /*
-   * All form builder utilities are exposed through one object
-   * so components can continue importing:
-   *
-   * import { changes } from "../../lib/form-handlers";
-   */
+  
   export const changes = {
     REPORTING_FREQUENCIES,
     TARGET_AUDIENCE_TYPES,
