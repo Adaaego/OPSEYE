@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   CalendarClock,
@@ -19,7 +19,25 @@ import {
   StatusBadge,
 } from "../ui/interface";
 import { Button } from "../ui/Button";
-import ReportViewier from "./ReportsViewer";
+
+import {
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  where,
+} from "firebase/firestore";
+
+import {
+  onAuthStateChanged,
+} from "firebase/auth";
+
+import {
+  auth,
+  db,
+} from "../../firebase/firebase";
+import ReportViewer from "./ReportsViewer";
+
 
 const SEGMENT_LABELS = {
   downstream: "Downstream",
@@ -53,6 +71,170 @@ const getSegmentLabel = (segment) => {
     SEGMENT_LABELS[normalizeValue(segment)] ||
     segment ||
     ""
+  );
+};
+
+const ROLE_LABELS = {
+  employee: "Employee",
+  branch_admin: "Branch Admin",
+  region_admin: "Region Admin",
+  country_admin: "Country Admin",
+  enterprise_admin: "Enterprise Admin",
+  ministry: "Ministry",
+};
+
+const getRoleLabel = (role) => {
+  return (
+    ROLE_LABELS[normalizeValue(role)] ||
+    role ||
+    ""
+  );
+};
+
+const getOrganizationIds = (
+  userRecord,
+  organization
+) => {
+  return [
+    userRecord?.organizationId,
+    userRecord?.companyId,
+    userRecord?.enterpriseId,
+    userRecord?.branchId,
+    organization?.id,
+    organization?.organizationId,
+    organization?.companyId,
+    organization?.enterpriseId,
+    organization?.parentOrganizationId,
+    organization?.branchId,
+  ].filter(Boolean);
+};
+
+const getOrganizationSegment = (
+  organization
+) => {
+  return (
+    organization?.industrySegment ||
+    organization?.industry ||
+    organization?.segment ||
+    ""
+  );
+};
+
+const templateMatchesOrganization = (
+  formTemplate,
+  userRecord,
+  organization
+) => {
+  const organizationSector =
+    normalizeValue(
+      organization?.sector ||
+        userRecord?.sector
+    );
+
+  const organizationSegment =
+    normalizeValue(
+      getOrganizationSegment(
+        organization
+      ) ||
+        userRecord?.industrySegment ||
+        userRecord?.segment
+    );
+
+  const templateSector =
+    normalizeValue(
+      formTemplate.sector
+    );
+
+  const templateSegment =
+    normalizeValue(
+      formTemplate.industrySegment
+    );
+
+  const matchesSector =
+    !templateSector ||
+    templateSector ===
+      organizationSector;
+
+  const matchesSegment =
+    !templateSegment ||
+    templateSegment ===
+      organizationSegment;
+
+  if (
+    !matchesSector ||
+    !matchesSegment
+  ) {
+    return false;
+  }
+
+  const audience =
+    formTemplate.targetAudience || {};
+
+  if (
+    audience.type ===
+    "all_operators"
+  ) {
+    return true;
+  }
+
+  if (
+    audience.type ===
+    "specific_organizations"
+  ) {
+    const receivingOrganizationIds =
+      Array.isArray(
+        audience.organizationIds
+      )
+        ? audience.organizationIds
+        : [];
+
+    const userOrganizationIds =
+      getOrganizationIds(
+        userRecord,
+        organization
+      );
+
+    return userOrganizationIds.some(
+      (organizationId) =>
+        receivingOrganizationIds.includes(
+          organizationId
+        )
+    );
+  }
+
+  return false;
+};
+
+const templateMatchesSubmitter = (
+  formTemplate,
+  userRecord
+) => {
+  const userRole =
+    normalizeValue(
+      userRecord?.role ||
+        userRecord?.userRole
+    );
+
+  const workflow =
+    formTemplate.approvalWorkflow || {};
+
+  const workflowRoles =
+    Array.isArray(workflow.roles)
+      ? workflow.roles.map(
+          normalizeValue
+        )
+      : [];
+
+  const submitterRole =
+    normalizeValue(
+      workflow.submitterRole ||
+        workflowRoles[0]
+    );
+
+  return (
+    Boolean(userRole) &&
+    workflowRoles.includes(userRole) &&
+    userRole === submitterRole
   );
 };
 
@@ -153,7 +335,7 @@ const SortHeader = ({
 };
 
 const OperatorsReports = ({
-  reports = [],
+  reports: initialReports = [],
   onUpdateReport = null,
 }) => {
   const [search, setSearch] =
@@ -171,7 +353,296 @@ const OperatorsReports = ({
   const [openReport, setOpenReport] =
     useState(null);
 
+  const [reports, setReports] =
+    useState(initialReports);
+
+  const [reportsLoading, setReportsLoading] =
+    useState(true);
+
+  const [reportsError, setReportsError] =
+    useState("");
+
+  const [currentUserRole, setCurrentUserRole] =
+    useState("");
+
   const today = getDateKey(new Date());
+
+  /*
+   * Listen for active Ministry form templates and show only
+   * the forms assigned to the signed-in user's organization
+   * and submitter role.
+   */
+  useEffect(() => {
+    let unsubscribeUser = null;
+    let unsubscribeOrganization = null;
+    let unsubscribeTemplates = null;
+
+    const stopListening = () => {
+      unsubscribeUser?.();
+      unsubscribeOrganization?.();
+      unsubscribeTemplates?.();
+    };
+
+    const unsubscribeAuth =
+      onAuthStateChanged(
+        auth,
+        (currentUser) => {
+          stopListening();
+
+          if (!currentUser?.uid) {
+            setCurrentUserRole("");
+            setReports([]);
+            setReportsLoading(false);
+            setReportsError(
+              "Please sign in to view assigned reports."
+            );
+            return;
+          }
+
+          setReportsLoading(true);
+          setReportsError("");
+
+          unsubscribeUser =
+            onSnapshot(
+              doc(
+                db,
+                "users",
+                currentUser.uid
+              ),
+              (userSnapshot) => {
+                if (!userSnapshot.exists()) {
+                  setReports([]);
+                  setReportsLoading(false);
+                  setReportsError(
+                    "Your user profile could not be found."
+                  );
+                  return;
+                }
+
+                const userRecord = {
+                  id: userSnapshot.id,
+                  ...userSnapshot.data(),
+                };
+
+                setCurrentUserRole(
+                  normalizeValue(
+                    userRecord.role ||
+                      userRecord.userRole
+                  )
+                );
+
+                const organizationId =
+                  userRecord.organizationId ||
+                  userRecord.companyId ||
+                  userRecord.enterpriseId ||
+                  userRecord.branchId;
+
+                if (!organizationId) {
+                  setReports([]);
+                  setReportsLoading(false);
+                  setReportsError(
+                    "Your account is not linked to an organization."
+                  );
+                  return;
+                }
+
+                unsubscribeOrganization?.();
+                unsubscribeTemplates?.();
+
+                unsubscribeOrganization =
+                  onSnapshot(
+                    doc(
+                      db,
+                      "organizations",
+                      organizationId
+                    ),
+                    (organizationSnapshot) => {
+                      if (
+                        !organizationSnapshot.exists()
+                      ) {
+                        setReports([]);
+                        setReportsLoading(false);
+                        setReportsError(
+                          "Your linked organization could not be found."
+                        );
+                        return;
+                      }
+
+                      const organization = {
+                        id:
+                          organizationSnapshot.id,
+                        ...organizationSnapshot.data(),
+                      };
+
+                      unsubscribeTemplates?.();
+
+                      const templatesQuery =
+                        query(
+                          collection(
+                            db,
+                            "formTemplates"
+                          ),
+                          where(
+                            "status",
+                            "==",
+                            "active"
+                          )
+                        );
+
+                      unsubscribeTemplates =
+                        onSnapshot(
+                          templatesQuery,
+                          (templatesSnapshot) => {
+                            const assignedReports =
+                              templatesSnapshot.docs
+                                .map(
+                                  (templateDocument) => ({
+                                    id:
+                                      templateDocument.id,
+                                    ...templateDocument.data(),
+                                  })
+                                )
+                                .filter(
+                                  (formTemplate) =>
+                                    templateMatchesOrganization(
+                                      formTemplate,
+                                      userRecord,
+                                      organization
+                                    ) &&
+                                    templateMatchesSubmitter(
+                                      formTemplate,
+                                      userRecord
+                                    )
+                                )
+                                .map(
+                                  (formTemplate) => {
+                                    const workflowRoles =
+                                      formTemplate
+                                        .approvalWorkflow
+                                        ?.roles || [];
+
+                                    return {
+                                      ...formTemplate,
+                                      formTemplateId:
+                                        formTemplate.id,
+                                      reportName:
+                                        formTemplate.name,
+                                      operatorName:
+                                        organization.name ||
+                                        userRecord.organizationName ||
+                                        "",
+                                      organizationId:
+                                        organization.id,
+                                      branchName:
+                                        organization.branchName ||
+                                        organization.locationName ||
+                                        (
+                                          normalizeValue(
+                                            organization.type ||
+                                              organization.organizationType
+                                          ) === "branch"
+                                            ? organization.name
+                                            : ""
+                                        ),
+                                      regionName:
+                                        organization.regionName ||
+                                        organization.region ||
+                                        organization.parentRegionName ||
+                                        "",
+                                      reportingDate:
+                                        today,
+                                      dueTime:
+                                        formTemplate
+                                          .submissionDeadline
+                                          ?.time || "",
+                                      assignedTo:
+                                        currentUser.displayName ||
+                                        currentUser.email ||
+                                        getRoleLabel(
+                                          userRecord.role ||
+                                            userRecord.userRole
+                                        ),
+                                      assignedRole:
+                                        normalizeValue(
+                                          userRecord.role ||
+                                            userRecord.userRole
+                                        ),
+                                      status:
+                                        "Pending Submission",
+                                      currentStageIndex:
+                                        0,
+                                      workflowStages:
+                                        workflowRoles.map(
+                                          (role) => ({
+                                            role,
+                                            label:
+                                              getRoleLabel(
+                                                role
+                                              ),
+                                          })
+                                        ),
+                                    };
+                                  }
+                                );
+
+                            setReports(
+                              assignedReports
+                            );
+                            setReportsLoading(false);
+                            setReportsError("");
+                          },
+                          (templatesError) => {
+                            console.error(
+                              "Unable to load active forms:",
+                              templatesError
+                            );
+
+                            setReports([]);
+                            setReportsLoading(false);
+                            setReportsError(
+                              templatesError.message ||
+                                "Assigned forms could not be loaded."
+                            );
+                          }
+                        );
+                    },
+                    (organizationError) => {
+                      console.error(
+                        "Unable to load organization:",
+                        organizationError
+                      );
+
+                      setReports([]);
+                      setReportsLoading(false);
+                      setReportsError(
+                        organizationError.message ||
+                          "Your organization could not be loaded."
+                      );
+                    }
+                  );
+              },
+              (userError) => {
+                console.error(
+                  "Unable to load user profile:",
+                  userError
+                );
+
+                setReports([]);
+                setReportsLoading(false);
+                setReportsError(
+                  userError.message ||
+                    "Your user profile could not be loaded."
+                );
+              }
+            );
+        }
+      );
+
+    return () => {
+      unsubscribeAuth();
+      stopListening();
+    };
+  }, [today]);
 
   const summaryCards = useMemo(() => {
     const reportsDueToday =
@@ -274,11 +745,12 @@ const OperatorsReports = ({
           !normalizedSearch ||
           [
             report.reportName,
-            report.operatorName,
+            report.reportingDate,
+            report.branchName,
+            report.regionName,
             report.assignedTo,
-            report.sector,
-            getSegmentLabel(
-              report.segment
+            getWorkflowStageLabel(
+              report
             ),
           ].some((value) =>
             normalizeValue(value).includes(
@@ -295,12 +767,6 @@ const OperatorsReports = ({
     return [...filteredReports].sort(
       (firstReport, secondReport) => {
         const getSortValue = (report) => {
-          if (sortKey === "segment") {
-            return getSegmentLabel(
-              report.segment
-            );
-          }
-
           if (sortKey === "status") {
             return normalizeStatus(
               report.status
@@ -362,12 +828,34 @@ const OperatorsReports = ({
     }
   };
 
+  /*
+   * Location columns change based on the signed-in user's role.
+   * Branch admins already work within one branch, so repeating
+   * that branch in every row adds no useful context.
+   */
+  const showBranchColumn = [
+    "employee",
+    "region_admin",
+    "country_admin",
+    "enterprise_admin",
+  ].includes(currentUserRole);
+
+  const showRegionColumn = [
+    "country_admin",
+    "enterprise_admin",
+  ].includes(currentUserRole);
+
+  const tableColumnCount =
+    6 +
+    (showBranchColumn ? 1 : 0) +
+    (showRegionColumn ? 1 : 0);
+
   return (
     <>
       <div>
         <PageHeader title="Reports" />
 
-        <p className="-mt-4 mb-6 max-w-2xl text-sm text-slate-500">
+        <p className="-mt-4 mb-6 max-w-2xl text-sm font-medium text-slate-700">
           View reporting tasks assigned by the
           ministry and complete them before their
           submission deadlines.
@@ -390,7 +878,7 @@ const OperatorsReports = ({
                 >
                   <div className="flex items-center justify-between gap-4">
                     <div>
-                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">
                         {label}
                       </p>
 
@@ -430,7 +918,7 @@ const OperatorsReports = ({
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1200px]">
+              <table className="w-full min-w-[1050px]">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50/50">
                     <SortHeader
@@ -453,25 +941,29 @@ const OperatorsReports = ({
                       onSort={handleSort}
                     />
 
-                    <SortHeader
-                      label="Sector"
-                      column="sector"
-                      sortKey={sortKey}
-                      sortDirection={
-                        sortDirection
-                      }
-                      onSort={handleSort}
-                    />
+                    {showRegionColumn && (
+                      <SortHeader
+                        label="Region"
+                        column="regionName"
+                        sortKey={sortKey}
+                        sortDirection={
+                          sortDirection
+                        }
+                        onSort={handleSort}
+                      />
+                    )}
 
-                    <SortHeader
-                      label="Segment"
-                      column="segment"
-                      sortKey={sortKey}
-                      sortDirection={
-                        sortDirection
-                      }
-                      onSort={handleSort}
-                    />
+                    {showBranchColumn && (
+                      <SortHeader
+                        label="Branch"
+                        column="branchName"
+                        sortKey={sortKey}
+                        sortDirection={
+                          sortDirection
+                        }
+                        onSort={handleSort}
+                      />
+                    )}
 
                     <SortHeader
                       label="Due Time"
@@ -548,16 +1040,9 @@ const OperatorsReports = ({
                                 />
                               </p>
 
-                              {report.operatorName && (
-                                <p className="mt-0.5 text-xs text-slate-500">
-                                  {
-                                    report.operatorName
-                                  }
-                                </p>
-                              )}
                             </td>
 
-                            <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
+                            <td className="whitespace-nowrap px-5 py-4 text-sm font-medium text-slate-800">
                               <EmptyCell
                                 value={
                                   report.reportingDate
@@ -565,23 +1050,27 @@ const OperatorsReports = ({
                               />
                             </td>
 
-                            <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
-                              <EmptyCell
-                                value={
-                                  report.sector
-                                }
-                              />
-                            </td>
+                            {showRegionColumn && (
+                              <td className="whitespace-nowrap px-5 py-4 text-sm font-medium text-slate-800">
+                                <EmptyCell
+                                  value={
+                                    report.regionName
+                                  }
+                                />
+                              </td>
+                            )}
 
-                            <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
-                              <EmptyCell
-                                value={getSegmentLabel(
-                                  report.segment
-                                )}
-                              />
-                            </td>
+                            {showBranchColumn && (
+                              <td className="whitespace-nowrap px-5 py-4 text-sm font-medium text-slate-800">
+                                <EmptyCell
+                                  value={
+                                    report.branchName
+                                  }
+                                />
+                              </td>
+                            )}
 
-                            <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
+                            <td className="whitespace-nowrap px-5 py-4 text-sm font-medium text-slate-800">
                               <EmptyCell
                                 value={
                                   report.dueTime
@@ -597,7 +1086,7 @@ const OperatorsReports = ({
                               />
                             </td>
 
-                            <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
+                            <td className="whitespace-nowrap px-5 py-4 text-sm font-medium text-slate-800">
                               <EmptyCell
                                 value={
                                   report.assignedTo
@@ -605,7 +1094,7 @@ const OperatorsReports = ({
                               />
                             </td>
 
-                            <td className="whitespace-nowrap px-5 py-4 text-sm font-medium text-slate-600">
+                            <td className="whitespace-nowrap px-5 py-4 text-sm font-semibold text-slate-800">
                               {getWorkflowStageLabel(
                                 report
                               )}
@@ -620,7 +1109,7 @@ const OperatorsReports = ({
                                     report
                                   )
                                 }
-                                className="border-slate-300 text-slate-700 hover:border-navy-300 hover:bg-navy-50 hover:text-navy-800"
+                                className="!border-navy-950 !bg-navy-950 !text-white shadow-sm hover:!bg-navy-900"
                               >
                                 <ExternalLink className="h-3.5 w-3.5" />
                                 Open Report
@@ -633,18 +1122,28 @@ const OperatorsReports = ({
                   ) : (
                     <tr>
                       <td
-                        colSpan={9}
+                        colSpan={tableColumnCount}
                         className="px-5 py-14 text-center"
                       >
                         <FileText className="mx-auto h-8 w-8 text-slate-300" />
 
-                        <p className="mt-3 text-sm font-medium text-slate-500">
-                          No reports found
+                        <p className="mt-3 text-sm font-semibold text-slate-700">
+                          {reportsLoading
+                            ? "Loading assigned reports..."
+                            : reportsError
+                              ? "Unable to load reports"
+                              : "No reports found"}
                         </p>
 
-                        <p className="mt-1 text-xs text-slate-400">
-                          Assigned reports will
-                          appear here.
+                        <p
+                          className={`mx-auto mt-1 max-w-md text-xs ${
+                            reportsError
+                              ? "text-red-600"
+                              : "text-slate-600"
+                          }`}
+                        >
+                          {reportsError ||
+                            "Published forms assigned to your organization and role will appear here."}
                         </p>
                       </td>
                     </tr>
@@ -653,7 +1152,7 @@ const OperatorsReports = ({
               </table>
             </div>
 
-            <div className="flex flex-col gap-3 border-t border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 border-t border-slate-200 px-5 py-3 text-xs font-medium text-slate-700 sm:flex-row sm:items-center sm:justify-between">
               <span>
                 Showing {visibleReports.length} of{" "}
                 {reports.length} reports
@@ -661,17 +1160,17 @@ const OperatorsReports = ({
 
               <div className="flex items-center gap-2">
                 <Button
-                  variant="outline"
                   size="sm"
                   disabled
+                  className="!bg-navy-950 !text-white disabled:!bg-navy-950 disabled:!text-white disabled:opacity-50"
                 >
                   Previous
                 </Button>
 
                 <Button
-                  variant="outline"
                   size="sm"
                   disabled
+                  className="!bg-navy-950 !text-white disabled:!bg-navy-950 disabled:!text-white disabled:opacity-50"
                 >
                   Next
                 </Button>
