@@ -4,19 +4,30 @@ import {
   useState,
 } from "react";
 import {
-  Archive,
+  AlignLeft,
+  Building2,
+  Calendar,
+  CalendarClock,
+  Camera,
   CheckCircle2,
+  CheckSquare,
   ChevronDown,
   ChevronUp,
   ChevronsUpDown,
   Clock,
-  Copy,
   Eye,
   FileEdit,
   FileSpreadsheet,
+  Hash,
+  Layers,
+  ListChecks,
   Pencil,
   Plus,
+  Repeat,
   Trash2,
+  Type,
+  Users,
+  X,
 } from "lucide-react";
 
 import {
@@ -62,6 +73,16 @@ const STATUS_OPTIONS = [
   "archived",
 ];
 
+const FIELD_TYPE_ICONS = {
+  text: Type,
+  number: Hash,
+  date: Calendar,
+  textarea: AlignLeft,
+  dropdown: ListChecks,
+  yes_no: CheckSquare,
+  camera: Camera,
+};
+
 const normalizeText = (value) => {
   return String(value ?? "")
     .trim()
@@ -98,6 +119,15 @@ const getAudienceLabel = (
   }
 
   return "";
+};
+
+const getFieldTypeIcon = (
+  type
+) => {
+  return (
+    FIELD_TYPE_ICONS[type] ||
+    Type
+  );
 };
 
 const formatTimestamp = (
@@ -172,10 +202,6 @@ const SortHeader = ({
 const Forms = ({
   forms: initialForms = [],
   organizations = [],
-  onViewForm = null,
-  onDuplicateForm = null,
-  onArchiveForm = null,
-  onDeleteForm = null,
 }) => {
   const [forms, setForms] =
     useState(initialForms);
@@ -197,6 +223,18 @@ const Forms = ({
 
   const [editingForm, setEditingForm] =
     useState(null);
+
+  const [viewingForm, setViewingForm] =
+    useState(null);
+
+  const [formPendingDelete, setFormPendingDelete] =
+    useState(null);
+
+  const [deleteError, setDeleteError] =
+    useState("");
+
+  const [deletingForm, setDeletingForm] =
+    useState(false);
 
   const [formsLoading, setFormsLoading] =
     useState(true);
@@ -491,6 +529,70 @@ const Forms = ({
     setBuilderOpen(true);
   };
 
+  const openViewForm = (
+    form
+  ) => {
+    setViewingForm(form);
+  };
+
+  const closeViewForm = () => {
+    setViewingForm(null);
+  };
+
+  const openDeleteConfirmation = (
+    form
+  ) => {
+    setFormPendingDelete(form);
+    setDeleteError("");
+  };
+
+  const closeDeleteConfirmation = () => {
+    if (deletingForm) {
+      return;
+    }
+
+    setFormPendingDelete(null);
+    setDeleteError("");
+  };
+
+  /*
+   * Permanently deletes the selected form from Firestore.
+   *
+   * The Firestore subscription removes it from the table
+   * automatically after the backend deletion succeeds.
+   */
+  const handleConfirmDelete = async () => {
+    if (!formPendingDelete?.id) {
+      return;
+    }
+
+    try {
+      setDeletingForm(true);
+      setDeleteError("");
+
+      await changes.deleteFormHandler({
+        formId:
+          formPendingDelete.id,
+        currentUser:
+          auth.currentUser,
+      });
+
+      setFormPendingDelete(null);
+    } catch (error) {
+      console.error(
+        "Unable to delete form:",
+        error
+      );
+
+      setDeleteError(
+        error.message ||
+          "The form could not be deleted."
+      );
+    } finally {
+      setDeletingForm(false);
+    }
+  };
+
   /*
    * Saves a new draft or updates an existing form.
    *
@@ -715,7 +817,7 @@ const Forms = ({
 
               <Button
                 onClick={openNewForm}
-                className="!bg-navy-950 !text-white shadow-sm hover:!bg-navy-900"
+                className="!bg-gradient-to-br !from-navy-950 !to-navy-900 !text-white shadow-sm hover:!from-navy-900 hover:!to-navy-800"
               >
                 <Plus className="h-4 w-4" />
                 Create New Form
@@ -889,7 +991,7 @@ const Forms = ({
                                 variant="ghost"
                                 size="icon-sm"
                                 onClick={() =>
-                                  onViewForm?.(
+                                  openViewForm(
                                     form
                                   )
                                 }
@@ -917,35 +1019,7 @@ const Forms = ({
                                 variant="ghost"
                                 size="icon-sm"
                                 onClick={() =>
-                                  onDuplicateForm?.(
-                                    form
-                                  )
-                                }
-                                title="Duplicate"
-                                className="border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-navy-300 hover:bg-navy-50 hover:text-navy-950"
-                              >
-                                <Copy className="h-4 w-4" />
-                              </Button>
-
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                onClick={() =>
-                                  onArchiveForm?.(
-                                    form
-                                  )
-                                }
-                                title="Archive"
-                                className="border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700"
-                              >
-                                <Archive className="h-4 w-4" />
-                              </Button>
-
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                onClick={() =>
-                                  onDeleteForm?.(
+                                  openDeleteConfirmation(
                                     form
                                   )
                                 }
@@ -1016,6 +1090,322 @@ const Forms = ({
             handleBuilderPublish
           }
         />
+      )}
+
+      {/* Read-only form preview */}
+      {viewingForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Close form preview"
+            onClick={closeViewForm}
+            className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
+          />
+
+          <div className="relative z-10 flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-900/5">
+            <div className="relative shrink-0 border-b border-slate-200 bg-gradient-to-br from-navy-950 to-navy-900 px-6 py-6 text-white">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={closeViewForm}
+                aria-label="Close form preview"
+                className="absolute right-4 top-4 border border-white/15 bg-white/10 text-white shadow-sm hover:bg-white/20"
+              >
+                <X className="h-5 w-5" />
+              </Button>
+
+              <div className="flex items-center gap-2.5">
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-navy-200">
+                  Form Preview
+                </span>
+
+                <StatusBadge
+                  status={normalizeText(
+                    viewingForm.status
+                  )}
+                />
+              </div>
+
+              <h2 className="mt-3 max-w-xl pr-10 text-2xl font-bold leading-tight text-white">
+                {viewingForm.name || "Untitled Form"}
+              </h2>
+
+              {viewingForm.description && (
+                <p className="mt-2 max-w-xl text-sm leading-6 text-navy-100/90">
+                  {viewingForm.description}
+                </p>
+              )}
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-6">
+              <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {[
+                  {
+                    label: "Sector",
+                    value: viewingForm.sector,
+                    icon: Building2,
+                  },
+                  {
+                    label: "Industry Segment",
+                    value: viewingForm.industrySegment,
+                    icon: Layers,
+                  },
+                  {
+                    label: "Frequency",
+                    value: getFrequencyLabel(
+                      viewingForm.reportingFrequency?.type
+                    ),
+                    icon: Repeat,
+                  },
+                  {
+                    label: "Target Audience",
+                    value: getAudienceLabel(
+                      viewingForm.targetAudience
+                    ),
+                    icon: Users,
+                  },
+                  {
+                    label: "Send Time",
+                    value: viewingForm.sendSchedule?.time,
+                    icon: Clock,
+                  },
+                  {
+                    label: "Submission Closes",
+                    value: viewingForm.submissionDeadline?.time,
+                    icon: CalendarClock,
+                  },
+                ].map(
+                  ({
+                    label,
+                    value,
+                    icon: MetaIcon,
+                  }) => (
+                    <div
+                      key={label}
+                      className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3.5"
+                    >
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-navy-700 ring-1 ring-slate-200">
+                        <MetaIcon className="h-4 w-4" />
+                      </div>
+
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          {label}
+                        </p>
+                        <p className="mt-0.5 truncate text-sm font-semibold text-slate-800">
+                          {value || "—"}
+                        </p>
+                      </div>
+                    </div>
+                  )
+                )}
+              </div>
+
+              <div>
+                <div className="mb-4 flex items-end justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Form Questions
+                    </p>
+
+                    <h3 className="mt-1 text-lg font-bold text-navy-950">
+                      Questions to be completed
+                    </h3>
+                  </div>
+
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                    {(viewingForm.fields || []).length}{" "}
+                    {(viewingForm.fields || []).length === 1
+                      ? "question"
+                      : "questions"}
+                  </span>
+                </div>
+
+                <div className="space-y-3">
+                  {(viewingForm.fields || []).map(
+                    (field, index) => {
+                      const FieldTypeIcon =
+                        getFieldTypeIcon(field.type);
+
+                      return (
+                      <div
+                        key={field.id || index}
+                        className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-slate-300"
+                      >
+                        <div className="mb-3 flex items-start gap-3">
+                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-navy-950 text-xs font-bold text-white">
+                            {index + 1}
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-semibold leading-6 text-slate-800">
+                              {field.label || `Question ${index + 1}`}
+                              {field.required && (
+                                <span className="ml-1 text-red-500">
+                                  *
+                                </span>
+                              )}
+                            </p>
+
+                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-xs capitalize text-slate-500">
+                              <FieldTypeIcon className="h-3.5 w-3.5" />
+                              {String(field.type || "text").replace("_", " ")}
+                              {field.required ? " · Required" : " · Optional"}
+                            </p>
+                          </div>
+                        </div>
+
+                      {field.type === "textarea" && (
+                        <textarea
+                          disabled
+                          rows={3}
+                          placeholder={field.placeholder}
+                          className="w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600"
+                        />
+                      )}
+
+                      {field.type === "dropdown" && (
+                        <select
+                          disabled
+                          className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600"
+                        >
+                          <option>
+                            {field.placeholder || "Select an option"}
+                          </option>
+                          {(field.options || []).map(
+                            (option) => (
+                              <option key={option}>
+                                {option}
+                              </option>
+                            )
+                          )}
+                        </select>
+                      )}
+
+                      {field.type === "yes_no" && (
+                        <div className="flex gap-3">
+                          <label className="flex items-center gap-2 text-sm text-slate-600">
+                            <input
+                              type="radio"
+                              disabled
+                            />
+                            Yes
+                          </label>
+
+                          <label className="flex items-center gap-2 text-sm text-slate-600">
+                            <input
+                              type="radio"
+                              disabled
+                            />
+                            No
+                          </label>
+                        </div>
+                      )}
+
+                      {field.type === "camera" && (
+                        <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                          Camera capture field
+                        </div>
+                      )}
+
+                      {![
+                        "textarea",
+                        "dropdown",
+                        "yes_no",
+                        "camera",
+                      ].includes(field.type) && (
+                        <input
+                          type={
+                            field.type === "number"
+                              ? "number"
+                              : field.type === "date"
+                                ? "date"
+                                : "text"
+                          }
+                          disabled
+                          min={
+                            field.type === "number"
+                              ? "0"
+                              : undefined
+                          }
+                          placeholder={field.placeholder}
+                          className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600"
+                        />
+                      )}
+                      </div>
+                      );
+                    }
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex shrink-0 items-center justify-end gap-3 border-t border-slate-200 bg-slate-50 px-6 py-4">
+              <Button
+                variant="outline"
+                onClick={closeViewForm}
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirmation */}
+      {formPendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Close delete confirmation"
+            onClick={closeDeleteConfirmation}
+            className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm"
+          />
+
+          <div className="relative z-10 w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-red-50 text-red-600">
+              <Trash2 className="h-5 w-5" />
+            </div>
+
+            <h2 className="mt-4 text-lg font-bold text-navy-950">
+              Delete form?
+            </h2>
+
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              Are you sure you want to delete{" "}
+              <span className="font-semibold text-slate-800">
+                {formPendingDelete.name}
+              </span>
+              ? This action cannot be undone.
+            </p>
+
+            {deleteError && (
+              <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <Button
+                variant="outline"
+                onClick={closeDeleteConfirmation}
+                disabled={deletingForm}
+              >
+                Cancel
+              </Button>
+
+              <Button
+                onClick={handleConfirmDelete}
+                disabled={deletingForm}
+                className="bg-red-600 text-white hover:bg-red-700"
+              >
+                {deletingForm
+                  ? "Deleting..."
+                  : "Delete Form"}
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

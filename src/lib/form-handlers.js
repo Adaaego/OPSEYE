@@ -1,6 +1,7 @@
 import {
     addDoc,
     collection,
+    deleteDoc,
     doc,
     serverTimestamp,
     updateDoc,
@@ -964,6 +965,42 @@ import {
   };
   
   /*
+   * Permanently deletes a form template from Firestore.
+   *
+   * The Forms page should call this only after the Ministry
+   * confirms the delete action in the confirmation popup.
+   */
+  const deleteFormHandler = async ({
+    formId,
+    currentUser,
+  }) => {
+    if (!formId) {
+      throw new Error(
+        "A form ID is required."
+      );
+    }
+
+    if (!currentUser?.uid) {
+      throw new Error(
+        "A signed-in user is required."
+      );
+    }
+
+    await deleteDoc(
+      doc(
+        db,
+        FORM_TEMPLATES_COLLECTION,
+        formId
+      )
+    );
+
+    return {
+      id: formId,
+      deleted: true,
+    };
+  };
+
+  /*
    * All form builder utilities are exposed through one object
    * so components can continue importing:
    *
@@ -1003,4 +1040,5 @@ import {
   
     createFormHandler,
     updateFormHandler,
+    deleteFormHandler,
   };
