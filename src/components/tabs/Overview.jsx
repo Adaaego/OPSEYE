@@ -28,6 +28,7 @@ import {
   ClipboardList,
   Factory,
   Loader2,
+  ShieldCheck,
   TrendingDown,
   TrendingUp,
   Users,
@@ -51,10 +52,6 @@ import {
 import {
   STATUS_STYLES,
 } from "../../lib/status";
-
-import {
-  CHART_COLORS,
-} from "../../lib/util";
 
 import {
   getCompanyById,
@@ -94,6 +91,21 @@ const SUBMITTED_REPORT_STATUSES =
     "closed",
     "passed",
   ]);
+
+// Brand palette shared across every chart, badge and bar in this
+// dashboard so the reporting view reads as one cohesive system with
+// the sidebar (navy, #0F172A) and its icon tint (#C8D5E8).
+const BRAND_NAVY = "#0F172A";
+const BRAND_ICON_TINT = "#C8D5E8";
+
+const BRAND_CHART_COLORS = [
+  "#0F172A",
+  "#C08829",
+  "#B4552F",
+  "#2F6F62",
+  "#5B7290",
+  "#8A5A16",
+];
 
 const normalizeValue = (
   value
@@ -480,9 +492,9 @@ const CustomPieSector = ({
     <Sector
       {...sectorProps}
       fill={
-        CHART_COLORS[
+        BRAND_CHART_COLORS[
           index %
-            CHART_COLORS.length
+            BRAND_CHART_COLORS.length
         ]
       }
     />
@@ -495,7 +507,7 @@ const Card = ({
 }) => {
   return (
     <div
-      className={`rounded-xl border border-slate-200 bg-white shadow-sm ${className}`}
+      className={`rounded-2xl border border-slate-200/80 bg-white shadow-sm ${className}`}
     >
       {children}
     </div>
@@ -508,7 +520,7 @@ const SectionHeader = ({
 }) => {
   return (
     <div className="mb-3">
-      <h2 className="text-base font-semibold text-slate-900">
+      <h2 className="text-base font-semibold tracking-tight text-slate-900">
         {children}
       </h2>
 
@@ -644,12 +656,18 @@ const KpiCard = ({
   trend,
   trendDirection,
   icon: Icon,
+  accentColor = BRAND_NAVY,
 }) => {
   const isPositiveTrend =
     trendDirection === "up";
 
   return (
-    <Card className="p-5">
+    <Card
+      className="p-5"
+      style={{
+        borderTop: `3px solid ${accentColor}`,
+      }}
+    >
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-sm font-medium text-slate-500">
@@ -661,7 +679,13 @@ const KpiCard = ({
           </p>
         </div>
 
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+        <div
+          className="flex h-11 w-11 items-center justify-center rounded-xl"
+          style={{
+            backgroundColor: `${accentColor}1A`,
+            color: accentColor,
+          }}
+        >
           <Icon className="h-5 w-5" />
         </div>
       </div>
@@ -2068,13 +2092,25 @@ const Overviews = () => {
 
   return (
     <section className="min-h-full bg-slate-50 p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto max-w-7xl">
+      <div className="mx-auto max-w-[1680px]">
         <header className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
           <div>
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
                 Overview
               </h1>
+
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ring-1"
+                style={{
+                  backgroundColor: `${BRAND_ICON_TINT}40`,
+                  color: BRAND_NAVY,
+                  borderColor: BRAND_ICON_TINT,
+                }}
+              >
+                <ShieldCheck className="h-3.5 w-3.5" />
+                {scopeLabel}
+              </span>
             </div>
 
             <p className="text-sm text-slate-500">
@@ -2112,6 +2148,7 @@ const Overviews = () => {
             }
             caption="Petrol and diesel volume reported today"
             icon={Factory}
+            accentColor={BRAND_NAVY}
           />
 
           <KpiCard
@@ -2126,6 +2163,7 @@ const Overviews = () => {
             }
             caption="Calculated using each operator's linked NPA prices"
             icon={Banknote}
+            accentColor="#C08829"
           />
 
           <KpiCard
@@ -2139,6 +2177,7 @@ const Overviews = () => {
                 : "No reports scheduled for today"
             }
             icon={ClipboardList}
+            accentColor="#B4552F"
           />
 
           <KpiCard
@@ -2156,6 +2195,7 @@ const Overviews = () => {
                 : "No workforce data available"
             }
             icon={Users}
+            accentColor="#2F6F62"
           />
         </div>
 
@@ -2270,9 +2310,9 @@ const Overviews = () => {
                             operator.id
                           }
                           fill={
-                            CHART_COLORS[
+                            BRAND_CHART_COLORS[
                               index %
-                                CHART_COLORS.length
+                                BRAND_CHART_COLORS.length
                             ]
                           }
                         />
@@ -2383,9 +2423,9 @@ const Overviews = () => {
                               className="h-2.5 w-2.5 rounded-sm"
                               style={{
                                 backgroundColor:
-                                  CHART_COLORS[
+                                  BRAND_CHART_COLORS[
                                     index %
-                                      CHART_COLORS.length
+                                      BRAND_CHART_COLORS.length
                                   ],
                               }}
                             />
@@ -2488,9 +2528,9 @@ const Overviews = () => {
                               operator
                             }
                             stroke={
-                              CHART_COLORS[
+                              BRAND_CHART_COLORS[
                                 index %
-                                  CHART_COLORS.length
+                                  BRAND_CHART_COLORS.length
                               ]
                             }
                             strokeWidth={2}
@@ -2930,10 +2970,12 @@ const Overviews = () => {
 
                           <div className="flex h-7 overflow-hidden rounded-md bg-slate-100">
                             <div
-                              className="flex items-center justify-center bg-slate-900 text-[10px] font-medium text-white"
+                              className="flex items-center justify-center text-[10px] font-medium text-white"
                               style={{
                                 width:
                                   `${percentages.localWorkforcePercentage}%`,
+                                backgroundColor:
+                                  BRAND_CHART_COLORS[0],
                               }}
                               title={`${formatNumber(
                                 operator.local
@@ -2948,10 +2990,12 @@ const Overviews = () => {
                             </div>
 
                             <div
-                              className="flex items-center justify-center bg-slate-300 text-[10px] font-medium text-slate-700"
+                              className="flex items-center justify-center text-[10px] font-medium text-white"
                               style={{
                                 width:
                                   `${percentages.expatWorkforcePercentage}%`,
+                                backgroundColor:
+                                  BRAND_CHART_COLORS[1],
                               }}
                               title={`${formatNumber(
                                 operator.expat

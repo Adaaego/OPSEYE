@@ -30,7 +30,10 @@ import {
 } from "../ui/interface";
 import { Button } from "../ui/Button";
 import OperatorDetail from "./OperatorDetail";
-import { getCompanyByNormalizedName } from "../../lib/companies";
+import {
+  getCompanyById,
+  getCompanyByNormalizedName,
+} from "../../lib/companies";
 
 const normalizeValue = (value) => {
   return String(value ?? "")
@@ -91,8 +94,22 @@ const getOrganizationCategory = (
   );
 };
 
-// Resolves the logo from the same company directory used by Account Settings.
+/*
+ * Resolves the operator logo from the fixed company directory.
+ *
+ * companyId is checked first because it is the stable link saved
+ * during onboarding. The normalized-name fallback supports older
+ * organization records created before companyId was introduced.
+ */
 const getOrganizationLogo = (organization) => {
+  const companyById = getCompanyById(
+    organization?.companyId
+  );
+
+  if (companyById?.logo) {
+    return companyById.logo;
+  }
+
   const normalizedName =
     organization?.normalizedName ||
     normalizeValue(organization?.name);
@@ -101,10 +118,10 @@ const getOrganizationLogo = (organization) => {
     return "";
   }
 
-  const company =
-    getCompanyByNormalizedName(normalizedName);
-
-  return company?.logo || "";
+  return (
+    getCompanyByNormalizedName(normalizedName)
+      ?.logo || ""
+  );
 };
 
 const isCompany = (organization) => {
@@ -119,6 +136,150 @@ const isMinistry = (organization) => {
     getOrganizationCategory(organization) ===
     "ministry"
   );
+};
+
+
+const getOrganizationId = (
+  organization
+) => {
+  return (
+    organization?.organizationId ||
+    organization?.id ||
+    ""
+  );
+};
+
+const getOrganizationLevel = (
+  organization
+) => {
+  return normalizeValue(
+    organization?.type ||
+      organization?.organizationType ||
+      organization?.level
+  );
+};
+
+/*
+ * An enterprise is the top-level operator record. Its country,
+ * region and branch organizations are displayed as children rather
+ * than as separate operators in the main table.
+ */
+const isEnterpriseOperator = (
+  organization
+) => {
+  if (!isCompany(organization)) {
+    return false;
+  }
+
+  const organizationId =
+    getOrganizationId(
+      organization
+    );
+
+  const rootEnterpriseId =
+    organization?.rootEnterpriseId;
+
+  return (
+    getOrganizationLevel(
+      organization
+    ) === "enterprise" ||
+    (
+      !organization?.parentId &&
+      (
+        !rootEnterpriseId ||
+        rootEnterpriseId ===
+          organizationId
+      )
+    )
+  );
+};
+
+/*
+ * Returns true when an organization belongs to the selected
+ * organization's subtree.
+ *
+ * ancestorIds is the preferred hierarchy field. parentId and
+ * rootEnterpriseId are retained as fallbacks for existing records.
+ */
+const isOrganizationOrDescendant = (
+  organization,
+  parentOrganizationId
+) => {
+  if (!parentOrganizationId) {
+    return false;
+  }
+
+  const organizationId =
+    getOrganizationId(
+      organization
+    );
+
+  const ancestorIds =
+    Array.isArray(
+      organization?.ancestorIds
+    )
+      ? organization.ancestorIds
+      : [];
+
+  return (
+    organizationId ===
+      parentOrganizationId ||
+    organization?.parentId ===
+      parentOrganizationId ||
+    organization?.rootEnterpriseId ===
+      parentOrganizationId ||
+    ancestorIds.includes(
+      parentOrganizationId
+    )
+  );
+};
+
+/*
+ * Builds the child list shown when an operator row is expanded.
+ * Existing branch/report data can still be merged into this list later.
+ */
+const buildOrganizationChildren = (
+  enterprise,
+  organizations
+) => {
+  const enterpriseId =
+    getOrganizationId(
+      enterprise
+    );
+
+  return organizations
+    .filter(
+      (organization) =>
+        getOrganizationId(
+          organization
+        ) !== enterpriseId &&
+        isOrganizationOrDescendant(
+          organization,
+          enterpriseId
+        )
+    )
+    .map(
+      (organization) => ({
+        ...organization,
+        id:
+          getOrganizationId(
+            organization
+          ),
+        name:
+          organization.name ||
+          "Unnamed organization",
+        branch:
+          organization.name ||
+          "Unnamed organization",
+        region:
+          organization.regionName ||
+          organization.region ||
+          "",
+        status:
+          organization.status ||
+          "active",
+      })
+    );
 };
 
 const CompanyLogo = ({
@@ -314,85 +475,95 @@ const OperatorsTab = ({
           );
         }
 
-        const organizationSector =
-          normalizeValue(
-            signedInOrganization.sector
-          );
-
-        const organizationSegment =
-          normalizeValue(
-            signedInOrganization.industrySegment
-          );
-
-        const organizationCountry =
-          normalizeValue(
-            signedInOrganization.country
-          );
-
         let matchingCompanies = [];
 
         if (
           isMinistry(signedInOrganization)
         ) {
           /*
-           * Ministry users see companies within their sector.
-           * Where the ministry has an industry segment, companies
-           * must also match that segment.
+           * Ministry access is global across operators.
+           *
+           * The Ministry sees every registered enterprise operator,
+           * regardless of sector, segment or country. Each operator row
+           * carries its complete child hierarchy for expansion.
            */
           matchingCompanies =
-            organizations.filter(
-              (organization) => {
-                if (!isCompany(organization)) {
-                  return false;
-                }
-
-                const companySector =
-                  normalizeValue(
-                    organization.sector
-                  );
-
-                const companySegment =
-                  normalizeValue(
-                    organization.industrySegment
-                  );
-
-                const matchesSector =
-                  !organizationSector ||
-                  companySector ===
-                    organizationSector;
-
-                const matchesSegment =
-                  !organizationSegment ||
-                  companySegment ===
-                    organizationSegment;
-
-                return (
-                  matchesSector &&
-                  matchesSegment
-                );
-              }
-            );
+            organizations
+              .filter(
+                isEnterpriseOperator
+              )
+              .map(
+                (enterprise) => ({
+                  ...enterprise,
+                  branches:
+                    buildOrganizationChildren(
+                      enterprise,
+                      organizations
+                    ),
+                })
+              );
         } else if (
           isCompany(signedInOrganization)
         ) {
           /*
-           * Company users see other company organizations
-           * registered in the same country.
+           * Operator access is limited to the signed-in organization
+           * and its descendants.
+           *
+           * Enterprise users see their company plus every country,
+           * region and branch below it. A user linked to a child
+           * organization only sees that child organization and the
+           * organizations beneath it.
            */
-          matchingCompanies =
-            organizations.filter(
-              (organization) => {
-                if (!isCompany(organization)) {
-                  return false;
-                }
-
-                return (
-                  normalizeValue(
-                    organization.country
-                  ) === organizationCountry
-                );
-              }
+          const signedInOrganizationId =
+            getOrganizationId(
+              signedInOrganization
             );
+
+          const accessibleHierarchy =
+            organizations.filter(
+              (organization) =>
+                isOrganizationOrDescendant(
+                  organization,
+                  signedInOrganizationId
+                )
+            );
+
+          matchingCompanies = [
+            {
+              ...signedInOrganization,
+              branches:
+                accessibleHierarchy
+                  .filter(
+                    (organization) =>
+                      getOrganizationId(
+                        organization
+                      ) !==
+                      signedInOrganizationId
+                  )
+                  .map(
+                    (organization) => ({
+                      ...organization,
+                      id:
+                        getOrganizationId(
+                          organization
+                        ),
+                      name:
+                        organization.name ||
+                        "Unnamed organization",
+                      branch:
+                        organization.name ||
+                        "Unnamed organization",
+                      region:
+                        organization.regionName ||
+                        organization.region ||
+                        "",
+                      status:
+                        organization.status ||
+                        "active",
+                    })
+                  ),
+            },
+          ];
         } else {
           throw new Error(
             "The organization category must be ministry or company."
@@ -473,6 +644,84 @@ const OperatorsTab = ({
             );
           }) || {};
 
+        const organizationChildren =
+          Array.isArray(
+            organization.branches
+          )
+            ? organization.branches
+            : [];
+
+        const metricChildren =
+          Array.isArray(
+            matchingMetrics.branches
+          )
+            ? matchingMetrics.branches
+            : [];
+
+        /*
+         * Firestore supplies the organization hierarchy while report
+         * metrics may supply submission and production details.
+         *
+         * Merge children by organization ID or normalized name so
+         * the expanded rows retain both identity and report values.
+         */
+        const mergedChildren =
+          organizationChildren.map(
+            (child) => {
+              const matchingChildMetrics =
+                metricChildren.find(
+                  (metricChild) => {
+                    const childId =
+                      getOrganizationId(
+                        child
+                      );
+
+                    const metricChildId =
+                      getOrganizationId(
+                        metricChild
+                      ) ||
+                      metricChild.branchId;
+
+                    return (
+                      (
+                        childId &&
+                        metricChildId &&
+                        childId ===
+                          metricChildId
+                      ) ||
+                      normalizeValue(
+                        child.name ||
+                          child.branch
+                      ) ===
+                        normalizeValue(
+                          metricChild.name ||
+                            metricChild.branch
+                        )
+                    );
+                  }
+                ) || {};
+
+              return {
+                ...child,
+                ...matchingChildMetrics,
+
+                id:
+                  getOrganizationId(
+                    child
+                  ),
+                name:
+                  child.name,
+                branch:
+                  child.name,
+                region:
+                  child.regionName ||
+                  child.region ||
+                  matchingChildMetrics.region ||
+                  "",
+              };
+            }
+          );
+
         return {
           ...organization,
           ...matchingMetrics,
@@ -481,11 +730,21 @@ const OperatorsTab = ({
           id: organization.id,
           organizationId:
             organization.organizationId,
+          companyId:
+            organization.companyId,
           name: organization.name,
           country: organization.country,
           sector: organization.sector,
           industrySegment:
             organization.industrySegment,
+          rootEnterpriseId:
+            organization.rootEnterpriseId,
+          ancestorIds:
+            organization.ancestorIds,
+          branches:
+            mergedChildren,
+          branchCount:
+            mergedChildren.length,
           logoUrl:
             getOrganizationLogo(
               organization
@@ -693,25 +952,11 @@ const OperatorsTab = ({
     }
 
     if (isMinistry(currentOrganization)) {
-      const sector =
-        currentOrganization.sector;
-
-      const segment =
-        currentOrganization.industrySegment;
-
-      if (sector && segment) {
-        return `Showing ${segment} companies in the ${sector} sector.`;
-      }
-
-      if (sector) {
-        return `Showing companies in the ${sector} sector.`;
-      }
+      return "Showing every registered operator and its child organizations.";
     }
 
     if (isCompany(currentOrganization)) {
-      return currentOrganization.country
-        ? `Showing companies registered in ${currentOrganization.country}.`
-        : "";
+      return `Showing ${currentOrganization.name || "your organization"} and its child organizations only.`;
     }
 
     return "";
@@ -1218,8 +1463,8 @@ const OperatorsTab = ({
                     </p>
 
                     <p className="mt-1 text-xs text-slate-400">
-                      No company organizations
-                      match your sector or country.
+                      No operator organizations are available
+                      within your access scope.
                     </p>
                   </td>
                 </tr>
