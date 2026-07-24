@@ -4,6 +4,7 @@ import {
     collection,
     deleteDoc,
     doc,
+    getDoc,
     serverTimestamp,
     setDoc,
     Timestamp,
@@ -23,6 +24,544 @@ import {
   
   const REPORT_SUBMISSIONS_COLLECTION =
     "reportSubmissions";
+
+  export const FORM_TEMPLATE_STATUSES = {
+    draft: "draft",
+    scheduled: "scheduled",
+    active: "active",
+    archived: "archived",
+  };
+
+  export const REPORT_TASK_STATUSES = {
+    pendingSubmission: "pending_submission",
+    draft: "draft",
+    underReview: "under_review",
+    submitted: "submitted",
+    overdue: "overdue",
+    rejected: "rejected",
+  };
+
+  const WEEK_DAY_INDEX = {
+    sunday: 0,
+    monday: 1,
+    tuesday: 2,
+    wednesday: 3,
+    thursday: 4,
+    friday: 5,
+    saturday: 6,
+  };
+
+  const normalizeStatusValue = (value) => {
+    return String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, "_");
+  };
+
+  const parseTime = (value, fallback = "00:00") => {
+    const [hours, minutes] = String(value || fallback)
+      .split(":")
+      .map(Number);
+
+    return {
+      hours: Number.isFinite(hours) ? hours : 0,
+      minutes: Number.isFinite(minutes) ? minutes : 0,
+    };
+  };
+
+  const getZonedParts = (date, timezone) => {
+    const formatter = new Intl.DateTimeFormat(
+      "en-CA",
+      {
+        timeZone: timezone || "Africa/Accra",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+        weekday: "long",
+      }
+    );
+
+    const parts = Object.fromEntries(
+      formatter
+        .formatToParts(date)
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, part.value])
+    );
+
+    return {
+      year: Number(parts.year),
+      month: Number(parts.month),
+      day: Number(parts.day),
+      hours: Number(parts.hour),
+      minutes: Number(parts.minute),
+      seconds: Number(parts.second),
+      weekday: String(parts.weekday || "").toLowerCase(),
+    };
+  };
+
+  const zonedDateTimeToDate = ({
+    year,
+    month,
+    day,
+    hours = 0,
+    minutes = 0,
+    seconds = 0,
+    timezone = "Africa/Accra",
+  }) => {
+    let candidate = new Date(
+      Date.UTC(
+        year,
+        month - 1,
+        day,
+        hours,
+        minutes,
+        seconds
+      )
+    );
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const zoned = getZonedParts(candidate, timezone);
+      const desiredUtc = Date.UTC(
+        year,
+        month - 1,
+        day,
+        hours,
+        minutes,
+        seconds
+      );
+      const actualUtc = Date.UTC(
+        zoned.year,
+        zoned.month - 1,
+        zoned.day,
+        zoned.hours,
+        zoned.minutes,
+        zoned.seconds
+      );
+
+      const difference = desiredUtc - actualUtc;
+
+      if (difference === 0) {
+        break;
+      }
+
+      candidate = new Date(candidate.getTime() + difference);
+    }
+
+    return candidate;
+  };
+
+  const addCalendarDays = (parts, days) => {
+    const date = new Date(
+      Date.UTC(
+        parts.year,
+        parts.month - 1,
+        parts.day + days
+      )
+    );
+
+    return {
+      year: date.getUTCFullYear(),
+      month: date.getUTCMonth() + 1,
+      day: date.getUTCDate(),
+    };
+  };
+
+  const addCalendarMonths = (parts, months) => {
+    const date = new Date(
+      Date.UTC(
+        parts.year,
+        parts.month - 1 + months,
+        1
+      )
+    );
+
+    return {
+      year: date.getUTCFullYear(),
+      month: date.getUTCMonth() + 1,
+      day: parts.day,
+    };
+  };
+
+  const clampDayOfMonth = (year, month, day) => {
+    const lastDay = new Date(
+      Date.UTC(year, month, 0)
+    ).getUTCDate();
+
+    return Math.min(
+      Math.max(Number(day) || 1, 1),
+      lastDay
+    );
+  };
+
+  export const calculateNextSendAt = ({
+    reportingFrequency,
+    sendSchedule,
+    fromDate = new Date(),
+  }) => {
+    const timezone =
+      sendSchedule?.timezone ||
+      "Africa/Accra";
+
+    const { hours, minutes } = parseTime(
+      sendSchedule?.time,
+      "08:00"
+    );
+
+    const frequency =
+      reportingFrequency?.type ||
+      "daily";
+
+    const nowParts = getZonedParts(
+      fromDate,
+      timezone
+    );
+
+    let candidateParts = {
+      year: nowParts.year,
+      month: nowParts.month,
+      day: nowParts.day,
+    };
+
+    if (frequency === "weekly") {
+      const targetDay = WEEK_DAY_INDEX[
+        reportingFrequency?.dayOfWeek
+      ];
+
+      const currentDay = WEEK_DAY_INDEX[
+        nowParts.weekday
+      ];
+
+      const daysUntilTarget =
+        targetDay === undefined ||
+        currentDay === undefined
+          ? 0
+          : (targetDay - currentDay + 7) % 7;
+
+      candidateParts = addCalendarDays(
+        candidateParts,
+        daysUntilTarget
+      );
+    }
+
+    if (frequency === "monthly") {
+      candidateParts.day = clampDayOfMonth(
+        candidateParts.year,
+        candidateParts.month,
+        reportingFrequency?.dayOfMonth
+      );
+    }
+
+    if (frequency === "quarterly") {
+      const quarterStartMonth =
+        Math.floor((nowParts.month - 1) / 3) * 3 + 1;
+
+      candidateParts.month = quarterStartMonth;
+      candidateParts.day = clampDayOfMonth(
+        candidateParts.year,
+        candidateParts.month,
+        reportingFrequency?.dayOfMonth || 1
+      );
+    }
+
+    if (frequency === "annual") {
+      candidateParts.month = Number(
+        reportingFrequency?.monthOfYear || 1
+      );
+
+      candidateParts.day = clampDayOfMonth(
+        candidateParts.year,
+        candidateParts.month,
+        reportingFrequency?.dayOfMonth || 1
+      );
+    }
+
+    let candidate = zonedDateTimeToDate({
+      ...candidateParts,
+      hours,
+      minutes,
+      timezone,
+    });
+
+    if (candidate <= fromDate) {
+      if (frequency === "daily") {
+        candidateParts = addCalendarDays(
+          candidateParts,
+          1
+        );
+      } else if (frequency === "weekly") {
+        candidateParts = addCalendarDays(
+          candidateParts,
+          7
+        );
+      } else if (frequency === "monthly") {
+        const nextMonth = addCalendarMonths(
+          candidateParts,
+          1
+        );
+
+        candidateParts = {
+          ...nextMonth,
+          day: clampDayOfMonth(
+            nextMonth.year,
+            nextMonth.month,
+            reportingFrequency?.dayOfMonth
+          ),
+        };
+      } else if (frequency === "quarterly") {
+        const nextQuarter = addCalendarMonths(
+          candidateParts,
+          3
+        );
+
+        candidateParts = {
+          ...nextQuarter,
+          day: clampDayOfMonth(
+            nextQuarter.year,
+            nextQuarter.month,
+            reportingFrequency?.dayOfMonth || 1
+          ),
+        };
+      } else if (frequency === "annual") {
+        candidateParts = {
+          year: candidateParts.year + 1,
+          month: candidateParts.month,
+          day: clampDayOfMonth(
+            candidateParts.year + 1,
+            candidateParts.month,
+            reportingFrequency?.dayOfMonth || 1
+          ),
+        };
+      } else if (frequency === "one-time") {
+        return null;
+      }
+
+      candidate = zonedDateTimeToDate({
+        ...candidateParts,
+        hours,
+        minutes,
+        timezone,
+      });
+    }
+
+    return candidate;
+  };
+
+  export const calculateDeadlineAt = ({
+    sendAt,
+    submissionDeadline,
+  }) => {
+    if (!sendAt) {
+      return null;
+    }
+
+    const timezone =
+      submissionDeadline?.timezone ||
+      "Africa/Accra";
+
+    const sendParts = getZonedParts(
+      sendAt,
+      timezone
+    );
+
+    const { hours, minutes } = parseTime(
+      submissionDeadline?.time,
+      "17:00"
+    );
+
+    let deadlineParts = {
+      year: sendParts.year,
+      month: sendParts.month,
+      day: sendParts.day,
+    };
+
+    let deadline = zonedDateTimeToDate({
+      ...deadlineParts,
+      hours,
+      minutes,
+      timezone,
+    });
+
+    if (deadline <= sendAt) {
+      deadlineParts = addCalendarDays(
+        deadlineParts,
+        1
+      );
+
+      deadline = zonedDateTimeToDate({
+        ...deadlineParts,
+        hours,
+        minutes,
+        timezone,
+      });
+    }
+
+    return deadline;
+  };
+
+  export const getFormTemplateStatus = ({
+    currentStatus,
+    currentWindowOpensAt,
+    currentWindowClosesAt,
+    now = new Date(),
+  }) => {
+    const normalizedStatus =
+      normalizeStatusValue(
+        currentStatus
+      );
+
+    if (normalizedStatus === "draft") {
+      return FORM_TEMPLATE_STATUSES.draft;
+    }
+
+    if (normalizedStatus === "archived") {
+      return FORM_TEMPLATE_STATUSES.archived;
+    }
+
+    const opensAt =
+      typeof currentWindowOpensAt?.toDate === "function"
+        ? currentWindowOpensAt.toDate()
+        : currentWindowOpensAt
+          ? new Date(currentWindowOpensAt)
+          : null;
+
+    const closesAt =
+      typeof currentWindowClosesAt?.toDate === "function"
+        ? currentWindowClosesAt.toDate()
+        : currentWindowClosesAt
+          ? new Date(currentWindowClosesAt)
+          : null;
+
+    if (
+      opensAt &&
+      closesAt &&
+      now >= opensAt &&
+      now < closesAt
+    ) {
+      return FORM_TEMPLATE_STATUSES.active;
+    }
+
+    return FORM_TEMPLATE_STATUSES.scheduled;
+  };
+
+  export const isFormDueToSend = ({
+    nextSendAt,
+    now = new Date(),
+  }) => {
+    const scheduledDate =
+      typeof nextSendAt?.toDate === "function"
+        ? nextSendAt.toDate()
+        : nextSendAt
+          ? new Date(nextSendAt)
+          : null;
+
+    return Boolean(
+      scheduledDate &&
+      scheduledDate <= now
+    );
+  };
+
+  export const isReportSubmissionClosed = ({
+    deadlineAt,
+    submissionClosed = false,
+    now = new Date(),
+  }) => {
+    if (submissionClosed) {
+      return true;
+    }
+
+    const deadlineDate =
+      typeof deadlineAt?.toDate === "function"
+        ? deadlineAt.toDate()
+        : deadlineAt
+          ? new Date(deadlineAt)
+          : null;
+
+    return Boolean(
+      deadlineDate &&
+      now >= deadlineDate
+    );
+  };
+
+  const buildScheduleMetadata = ({
+    formData,
+    requestedStatus,
+    now = new Date(),
+    existingForm = null,
+  }) => {
+    const normalizedRequestedStatus =
+      normalizeStatusValue(
+        requestedStatus
+      );
+
+    if (normalizedRequestedStatus === "draft") {
+      return {
+        status: FORM_TEMPLATE_STATUSES.draft,
+        nextSendAt: null,
+        currentWindowOpensAt: null,
+        currentWindowClosesAt: null,
+      };
+    }
+
+    if (normalizedRequestedStatus === "archived") {
+      return {
+        status: FORM_TEMPLATE_STATUSES.archived,
+        nextSendAt: null,
+        currentWindowOpensAt: null,
+        currentWindowClosesAt: null,
+      };
+    }
+
+    const existingOpensAt =
+      existingForm?.currentWindowOpensAt;
+
+    const existingClosesAt =
+      existingForm?.currentWindowClosesAt;
+
+    const existingOperationalStatus =
+      getFormTemplateStatus({
+        currentStatus: existingForm?.status,
+        currentWindowOpensAt: existingOpensAt,
+        currentWindowClosesAt: existingClosesAt,
+        now,
+      });
+
+    if (
+      existingOperationalStatus ===
+      FORM_TEMPLATE_STATUSES.active
+    ) {
+      return {
+        status: FORM_TEMPLATE_STATUSES.active,
+        nextSendAt:
+          existingForm?.nextSendAt || null,
+        currentWindowOpensAt:
+          existingOpensAt || null,
+        currentWindowClosesAt:
+          existingClosesAt || null,
+      };
+    }
+
+    const nextSendAt = calculateNextSendAt({
+      reportingFrequency:
+        formData.reportingFrequency,
+      sendSchedule:
+        formData.sendSchedule,
+      fromDate: now,
+    });
+
+    return {
+      status: FORM_TEMPLATE_STATUSES.scheduled,
+      nextSendAt:
+        nextSendAt
+          ? Timestamp.fromDate(nextSendAt)
+          : null,
+      currentWindowOpensAt: null,
+      currentWindowClosesAt: null,
+    };
+  };
   
   const createId = () => {
     return v4();
@@ -227,6 +766,14 @@ import {
       time: "17:00",
       timezone: "Africa/Accra",
     },
+
+    status:
+      FORM_TEMPLATE_STATUSES.draft,
+
+    nextSendAt: null,
+    currentWindowOpensAt: null,
+    currentWindowClosesAt: null,
+    lastSentAt: null,
   
     approvalWorkflow: {
       enabled: true,
@@ -918,10 +1465,15 @@ import {
         formData
       );
   
+    const scheduleMetadata =
+      buildScheduleMetadata({
+        formData: cleanedForm,
+        requestedStatus: status,
+      });
+
     const formDocument = {
       ...cleanedForm,
-  
-      status,
+      ...scheduleMetadata,
   
       createdBy:
         currentUser.uid,
@@ -986,13 +1538,29 @@ import {
         FORM_TEMPLATES_COLLECTION,
         formId
       );
+
+    const existingSnapshot =
+      await getDoc(
+        formReference
+      );
+
+    const existingForm =
+      existingSnapshot.exists()
+        ? existingSnapshot.data()
+        : null;
+
+    const scheduleMetadata =
+      buildScheduleMetadata({
+        formData: cleanedForm,
+        requestedStatus: status,
+        existingForm,
+      });
   
     await updateDoc(
       formReference,
       {
         ...cleanedForm,
-  
-        status,
+        ...scheduleMetadata,
   
         updatedBy:
           currentUser.uid,
@@ -1007,8 +1575,7 @@ import {
         formId,
   
       ...cleanedForm,
-  
-      status,
+      ...scheduleMetadata,
     };
   };
   
@@ -1201,6 +1768,19 @@ import {
       );
     }
   
+    if (
+      isReportSubmissionClosed({
+        deadlineAt:
+          report?.deadlineAt,
+        submissionClosed:
+          report?.submissionClosed,
+      })
+    ) {
+      throw new Error(
+        "The submission deadline has passed. This report can no longer be submitted."
+      );
+    }
+
     validateReportResponses(
       report,
       fieldValues
@@ -1495,11 +2075,19 @@ import {
   export const changes = {
     REPORTING_FREQUENCIES,
     TARGET_AUDIENCE_TYPES,
+    FORM_TEMPLATE_STATUSES,
+    REPORT_TASK_STATUSES,
     FORM_SUBMISSION_ROLES,
     APPROVAL_ROLE_ORDER,
     DEFAULT_APPROVAL_WORKFLOW,
     FORM_FIELD_TYPES,
     WEEK_DAYS,
+
+    calculateNextSendAt,
+    calculateDeadlineAt,
+    getFormTemplateStatus,
+    isFormDueToSend,
+    isReportSubmissionClosed,
   
     createEmptyField,
     createInitialFormData,

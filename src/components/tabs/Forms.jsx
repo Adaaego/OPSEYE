@@ -89,6 +89,27 @@ const normalizeText = (value) => {
     .toLowerCase();
 };
 
+
+const normalizeStatus = (value) => {
+  return normalizeText(value)
+    .replace(/[\s-]+/g, "_");
+};
+
+const getFormDisplayStatus = (form) => {
+  const status =
+    normalizeStatus(form?.status);
+
+  if (
+    ["draft", "scheduled", "active", "archived"].includes(
+      status
+    )
+  ) {
+    return status;
+  }
+
+  return "draft";
+};
+
 const getFrequencyLabel = (
   frequency
 ) => {
@@ -312,19 +333,19 @@ const Forms = ({
   const summaryCards = useMemo(() => {
     const activeCount = forms.filter(
       (form) =>
-        normalizeText(form.status) ===
+        getFormDisplayStatus(form) ===
         "active"
     ).length;
 
     const scheduledCount = forms.filter(
       (form) =>
-        normalizeText(form.status) ===
+        getFormDisplayStatus(form) ===
         "scheduled"
     ).length;
 
     const draftCount = forms.filter(
       (form) =>
-        normalizeText(form.status) ===
+        getFormDisplayStatus(form) ===
         "draft"
     ).length;
 
@@ -376,8 +397,8 @@ const Forms = ({
       forms.filter((form) => {
         const matchesStatus =
           !statusFilter ||
-          normalizeText(form.status) ===
-            normalizeText(
+          getFormDisplayStatus(form) ===
+            normalizeStatus(
               statusFilter
             );
 
@@ -448,6 +469,23 @@ const Forms = ({
               secondForm.reportingFrequency
                 ?.type
             );
+        }
+
+        if (
+          sortKey ===
+          "nextSendAt"
+        ) {
+          firstValue =
+            firstForm.nextSendAt
+              ?.toDate?.() ||
+            firstForm.nextSendAt ||
+            "";
+
+          secondValue =
+            secondForm.nextSendAt
+              ?.toDate?.() ||
+            secondForm.nextSendAt ||
+            "";
         }
 
         if (
@@ -669,10 +707,10 @@ const Forms = ({
   };
 
   /*
-   * Publishing creates or updates the form with an active status.
+   * Publishing places the form on the schedule.
    *
-   * Active form templates can later be used by the scheduling
-   * process to create reporting tasks for operators.
+   * The backend scheduler changes the template to active only
+   * when the current reporting window has actually opened.
    */
   const handleBuilderPublish = async (
     formData
@@ -689,12 +727,12 @@ const Forms = ({
                 editingForm.id,
               formData,
               currentUser,
-              status: "active",
+              status: "scheduled",
             })
           : await changes.createFormHandler({
               formData,
               currentUser,
-              status: "active",
+              status: "scheduled",
             });
 
       setForms((currentForms) => {
@@ -733,7 +771,7 @@ const Forms = ({
       closeBuilder();
     } catch (error) {
       console.error(
-        "Unable to publish form:",
+        "Unable to schedule form:",
         error
       );
 
@@ -749,10 +787,9 @@ const Forms = ({
         <PageHeader title="Forms" />
 
         <p className="-mt-4 mb-6 max-w-2xl text-sm text-slate-700">
-          Create, manage, schedule and
-          publish reporting forms for
-          operators across the petroleum
-          sector.
+          Create and schedule reporting forms,
+          monitor open reporting windows and track
+          forms waiting for their next release.
         </p>
 
 
@@ -877,6 +914,18 @@ const Forms = ({
                     />
 
                     <SortHeader
+                      label="Next Send"
+                      column="nextSendAt"
+                      sortKey={sortKey}
+                      sortDirection={
+                        sortDirection
+                      }
+                      onSort={
+                        handleSort
+                      }
+                    />
+
+                    <SortHeader
                       label="Target Audience"
                       column="targetAudience"
                       sortKey={sortKey}
@@ -965,6 +1014,14 @@ const Forms = ({
 
                           <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
                             <span className="font-medium text-slate-800">
+                              {formatTimestamp(
+                                form.nextSendAt
+                              ) || "—"}
+                            </span>
+                          </td>
+
+                          <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-700">
+                            <span className="font-medium text-slate-800">
                               {getAudienceLabel(
                                 form.targetAudience
                               ) || "—"}
@@ -973,9 +1030,11 @@ const Forms = ({
 
                           <td className="whitespace-nowrap px-5 py-4">
                             <StatusBadge
-                              status={normalizeText(
-                                form.status
-                              )}
+                              status={
+                                getFormDisplayStatus(
+                                  form
+                                )
+                              }
                             />
                           </td>
 
@@ -1036,7 +1095,7 @@ const Forms = ({
                   ) : (
                     <tr>
                       <td
-                        colSpan={8}
+                        colSpan={9}
                         className="px-5 py-14 text-center"
                       >
                         <FileSpreadsheet className="mx-auto h-8 w-8 text-slate-300" />
@@ -1120,9 +1179,11 @@ const Forms = ({
                 </span>
 
                 <StatusBadge
-                  status={normalizeText(
-                    viewingForm.status
-                  )}
+                  status={
+                    getFormDisplayStatus(
+                      viewingForm
+                    )
+                  }
                 />
               </div>
 
@@ -1168,6 +1229,14 @@ const Forms = ({
                     label: "Send Time",
                     value: viewingForm.sendSchedule?.time,
                     icon: Clock,
+                  },
+                  {
+                    label: "Next Send",
+                    value:
+                      formatTimestamp(
+                        viewingForm.nextSendAt
+                      ) || "—",
+                    icon: CalendarClock,
                   },
                   {
                     label: "Submission Closes",

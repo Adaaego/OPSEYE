@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   Building2,
+  CalendarClock,
   Camera,
   ChevronRight,
+  Clock3,
   Globe,
   GripVertical,
   Landmark,
@@ -78,6 +80,35 @@ const normalizeValue = (value) => {
   return String(value ?? "")
     .trim()
     .toLowerCase();
+};
+
+
+const normalizeStatus = (value) => {
+  return normalizeValue(value)
+    .replace(/[\s-]+/g, "_");
+};
+
+const formatScheduleTimestamp = (value) => {
+  if (!value) {
+    return "";
+  }
+
+  const date =
+    typeof value?.toDate === "function"
+      ? value.toDate()
+      : new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat(
+    "en-GB",
+    {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }
+  ).format(date);
 };
 
 const FormBuilder = ({
@@ -309,6 +340,33 @@ const FormBuilder = ({
       formData.sector,
       formData.industrySegment,
     ]);
+
+  /*
+   * The backend scheduler owns the final status.
+   * This display helps the Ministry understand whether the
+   * template is waiting, currently open or no longer active.
+   */
+  const formStatus =
+    normalizeStatus(
+      initialData?.status ||
+        formData.status ||
+        "draft"
+    );
+
+  const scheduleStatusLabel =
+    formStatus === "active"
+      ? "Active"
+      : formStatus === "scheduled"
+        ? "Scheduled"
+        : formStatus === "archived"
+          ? "Archived"
+          : "Draft";
+
+  const nextSendLabel =
+    formatScheduleTimestamp(
+      initialData?.nextSendAt ||
+        formData.nextSendAt
+    );
 
   /*
    * Adds or removes a role from the workflow.
@@ -789,6 +847,53 @@ const FormBuilder = ({
                     </div>
                   )}
 
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white">
+                        <CalendarClock className="h-4 w-4 text-navy-700" />
+                      </div>
+
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-navy-950">
+                            Schedule Status
+                          </p>
+
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${
+                              scheduleStatusLabel === "Active"
+                                ? "bg-emerald-100 text-emerald-700"
+                                : scheduleStatusLabel === "Scheduled"
+                                  ? "bg-navy-100 text-navy-700"
+                                  : scheduleStatusLabel === "Archived"
+                                    ? "bg-slate-200 text-slate-600"
+                                    : "bg-amber-100 text-amber-700"
+                            }`}
+                          >
+                            {scheduleStatusLabel}
+                          </span>
+                        </div>
+
+                        <p className="mt-1 text-xs leading-5 text-slate-600">
+                          {scheduleStatusLabel === "Active"
+                            ? "The current reporting window is open."
+                            : scheduleStatusLabel === "Scheduled"
+                              ? "The form is waiting for its next scheduled send time."
+                              : scheduleStatusLabel === "Archived"
+                                ? "This form is no longer being scheduled."
+                                : "Publish the form to place it on the reporting schedule."}
+                        </p>
+
+                        {nextSendLabel && (
+                          <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-slate-700">
+                            <Clock3 className="h-3.5 w-3.5 text-slate-500" />
+                            Next send: {nextSendLabel}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
                       <label
@@ -854,9 +959,43 @@ const FormBuilder = ({
                       />
 
                       <p className="mt-1 text-[11px] text-slate-500">
-                        The system will send the form at this time for each reporting period.
+                        The scheduler will use the latest saved time for the next reporting period.
                       </p>
                     </div>
+
+                    {formData.reportingFrequency
+                      .type === "one-time" && (
+                      <div className="sm:col-span-2">
+                        <label
+                          htmlFor="sendDate"
+                          className="mb-1.5 block text-xs font-medium text-slate-700"
+                        >
+                          Send Date
+                        </label>
+
+                        <input
+                          id="sendDate"
+                          type="date"
+                          value={
+                            formData.sendSchedule
+                              ?.date || ""
+                          }
+                          onChange={(event) =>
+                            changes.handleNestedInputChange(
+                              "sendSchedule",
+                              "date",
+                              event.target.value,
+                              setFormData
+                            )
+                          }
+                          className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+                        />
+
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          Required for one-time forms.
+                        </p>
+                      </div>
+                    )}
 
                     <div className="sm:col-span-2">
                       <label
@@ -885,7 +1024,7 @@ const FormBuilder = ({
                       />
 
                       <p className="mt-1 text-[11px] text-slate-500">
-                        Submissions will close at this time for each reporting period.
+                        Operators cannot submit after this closing time. Missed reports will remain visible as overdue.
                       </p>
                     </div>
                   </div>
@@ -1484,7 +1623,9 @@ const FormBuilder = ({
             className="bg-navy-950 text-white shadow-sm hover:bg-navy-900"
           >
             <Send className="h-4 w-4" />
-            Publish Form
+            {initialData
+              ? "Update Schedule"
+              : "Schedule Form"}
           </Button>
         </div>
       </div>

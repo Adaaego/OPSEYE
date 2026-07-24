@@ -110,15 +110,11 @@ const ReportViewer = ({
       : [];
 
   /*
-   * Ministry receives the completed report but does not
-   * participate in the organization's approval process.
+   * Ministry remains visible as the final destination in the
+   * workflow, but no Ministry approval action is required.
    */
-  const approvalStages =
-    workflowStages.filter(
-      (stage) =>
-        normalizeRole(stage?.role) !==
-        "ministry"
-    );
+  const displayStages =
+    workflowStages;
 
   const currentStageIndex =
     Number.isInteger(
@@ -155,16 +151,14 @@ const ReportViewer = ({
     "rejected",
   ].includes(reportStatus);
 
-  const activeApprovalStageIndex =
-    isCompleted
-      ? approvalStages.length
-      : Math.min(
-          currentStageIndex,
-          Math.max(
-            approvalStages.length - 1,
-            0
-          )
-        );
+  const activeStageIndex =
+    Math.min(
+      currentStageIndex,
+      Math.max(
+        displayStages.length - 1,
+        0
+      )
+    );
 
   const displayStatus =
     isCompleted
@@ -236,7 +230,7 @@ const ReportViewer = ({
         label: "Assigned To",
         value:
           isCompleted
-            ? "Ministry — Preview Only"
+            ? "Ministry"
             : report?.assignedTo ||
               "—",
       },
@@ -566,17 +560,17 @@ const ReportViewer = ({
             <div className="mb-4 flex items-center justify-between gap-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">
-                  Organization Approval Progress
+                  Report Workflow
                 </p>
 
                 <p className="mt-1 text-sm font-medium text-slate-700">
                   {isCompleted
-                    ? "Organization review completed"
+                    ? "Organization review completed and submitted to Ministry"
                     : `Stage ${
-                        activeApprovalStageIndex +
+                        activeStageIndex +
                         1
                       } of ${
-                        approvalStages.length ||
+                        displayStages.length ||
                         1
                       }`}
                 </p>
@@ -588,20 +582,31 @@ const ReportViewer = ({
             </div>
 
             <div className="flex items-start">
-              {approvalStages.map(
+              {displayStages.map(
                 (stage, index) => {
+                  const stageRole =
+                    normalizeRole(
+                      stage?.role
+                    );
+
+                  const isMinistryStage =
+                    stageRole ===
+                    "ministry";
+
                   const isPassed =
                     index <
-                    activeApprovalStageIndex;
+                    activeStageIndex;
 
                   const isCurrent =
                     index ===
-                      activeApprovalStageIndex &&
+                    activeStageIndex &&
                     !isCompleted;
 
                   const isDone =
-                    isCompleted ||
-                    isPassed;
+                    isCompleted
+                      ? index <=
+                        activeStageIndex
+                      : isPassed;
 
                   return (
                     <div
@@ -617,7 +622,9 @@ const ReportViewer = ({
                         <div
                           className={`flex h-9 w-9 items-center justify-center rounded-full border-2 text-xs font-bold ${
                             isDone
-                              ? "border-emerald-500 bg-emerald-500 text-white"
+                              ? isMinistryStage
+                                ? "border-navy-950 bg-navy-950 text-white"
+                                : "border-emerald-500 bg-emerald-500 text-white"
                               : isCurrent
                                 ? "border-navy-950 bg-white text-navy-950"
                                 : "border-slate-300 bg-white text-slate-500"
@@ -633,7 +640,9 @@ const ReportViewer = ({
                         <span
                           className={`max-w-24 text-center text-[11px] font-semibold leading-tight ${
                             isDone
-                              ? "text-emerald-700"
+                              ? isMinistryStage
+                                ? "text-navy-950"
+                                : "text-emerald-700"
                               : isCurrent
                                 ? "text-navy-950"
                                 : "text-slate-600"
@@ -645,14 +654,21 @@ const ReportViewer = ({
                               index + 1
                             }`}
                         </span>
+
+                        {isMinistryStage && (
+                          <span className="max-w-24 text-center text-[10px] font-medium leading-tight text-slate-500">
+                            submission complete
+                          </span>
+                        )}
                       </div>
 
                       {index <
-                        approvalStages.length -
+                        displayStages.length -
                           1 && (
                         <div
                           className={`mx-2 mt-4 h-0.5 flex-1 rounded-full ${
-                            isPassed ||
+                            index <
+                              activeStageIndex ||
                             isCompleted
                               ? "bg-emerald-400"
                               : "bg-slate-300"
@@ -668,7 +684,7 @@ const ReportViewer = ({
             {isCompleted && (
               <div className="mt-4 flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
                 <CheckCircle2 className="h-4 w-4" />
-                Organization review is complete. The report is now available to the Ministry for preview and reporting.
+                Organization review is complete. The report has reached the Ministry for preview and reporting.
               </div>
             )}
 
