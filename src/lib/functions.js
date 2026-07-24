@@ -20,8 +20,20 @@ import {
   USER_ROLES,
 } from "./types";
 
+import {
+  getCompanyById,
+  getCompanyByNormalizedName,
+} from "./companies";
+
+import {
+  getNpaPricesByCompanyId,
+  validateNpaPriceRecord,
+} from "./npa-prices";
+
 const USERS_COLLECTION = "users";
 const ORGANIZATIONS_COLLECTION = "organizations";
+const COMPANY_FUEL_PRICES_COLLECTION =
+  "companyFuelPrices";
 
 // These characters exclude values such as 0, O, 1 and I,
 // which can easily be confused when reading an organization ID.
@@ -222,6 +234,32 @@ export const completeUserOnboarding = async (
   });
 };
 
+/*
+ * Resolves the company selected during onboarding against the fixed
+ * list in companies.js.
+ *
+ * companyId is preferred because it is stable. organizationName is
+ * kept as a fallback so existing onboarding data still works.
+ */
+const resolveSelectedCompany = (
+  companyDetails = {}
+) => {
+  const companyById =
+    getCompanyById(
+      companyDetails.companyId
+    );
+
+  if (companyById) {
+    return companyById;
+  }
+
+  return getCompanyByNormalizedName(
+    companyDetails.normalizedName ||
+      companyDetails.organizationName ||
+      companyDetails.name
+  );
+};
+
 // Checks that every required onboarding field has been completed
 // before any information is submitted to Firestore.
 const validateOnboardingData = (onboardingData) => {
@@ -338,6 +376,44 @@ export const submitOnboarding = async (
   const isMinistry =
     organizationType === ORGANIZATION_TYPES.MINISTRY;
 
+  /*
+   * Company onboarding is restricted to the supported company list.
+   * The selected company also determines which NPA prices are copied
+   * into the linked Firestore price record.
+   */
+  const selectedCompany =
+    isMinistry
+      ? null
+      : resolveSelectedCompany(
+          companyDetails
+        );
+
+  if (!isMinistry && !selectedCompany) {
+    throw new Error(
+      "The selected company is not included in the supported company list."
+    );
+  }
+
+  const npaPrices =
+    isMinistry
+      ? null
+      : getNpaPricesByCompanyId(
+          selectedCompany.id
+        );
+
+  if (!isMinistry) {
+    const priceValidation =
+      validateNpaPriceRecord(
+        npaPrices
+      );
+
+    if (!priceValidation.isValid) {
+      throw new Error(
+        `${selectedCompany.name}: ${priceValidation.message}`
+      );
+    }
+  }
+
   // Companies created through public onboarding begin as enterprises.
   // Ministries use their own organization type and do not follow
   // the enterprise, country, region and branch hierarchy.
@@ -347,11 +423,11 @@ export const submitOnboarding = async (
 
   const organizationName = isMinistry
     ? ministryDetails.ministryName.trim()
-    : companyDetails.organizationName.trim();
+    : selectedCompany.name;
 
   const sector = isMinistry
     ? ministryDetails.sector || "Energy"
-    : companyDetails.sector;
+    : selectedCompany.sector;
 
   const userCountry = isMinistry
     ? ministryDetails.country
@@ -386,13 +462,33 @@ export const submitOnboarding = async (
     uid
   );
 
+  /*
+   * The price document uses the same ID as the company organization.
+   * A report can therefore load its prices directly with organizationId.
+   */
+  const companyFuelPriceReference =
+    isMinistry
+      ? null
+      : doc(
+          db,
+          COMPANY_FUEL_PRICES_COLLECTION,
+          organizationId
+        );
+
   const batch = writeBatch(db);
 
   // Create the main organization document.
   batch.set(organizationReference, {
     organizationId,
     name: organizationName,
-    normalizedName: organizationName.toLowerCase(),
+    normalizedName: isMinistry
+      ? organizationName.toLowerCase()
+      : selectedCompany.normalizedName,
+
+    // companyId matches the stable ID in companies.js.
+    companyId: isMinistry
+      ? null
+      : selectedCompany.id,
 
     organizationCategory: organizationType,
     type: organizationLevel,
@@ -411,7 +507,7 @@ export const submitOnboarding = async (
 
     industrySegment: isMinistry
       ? null
-      : companyDetails.industrySegment.trim(),
+      : selectedCompany.industrySegment,
 
     country: organizationCountry,
     status: "active",
@@ -429,6 +525,10 @@ export const submitOnboarding = async (
     jobTitle: userProfile.jobTitle.trim(),
 
     organizationId,
+    organizationName,
+    companyId: isMinistry
+      ? null
+      : selectedCompany.id,
     role,
     country: userCountry,
 
@@ -446,8 +546,70 @@ export const submitOnboarding = async (
     updatedAt: serverTimestamp(),
   });
 
-  // Both documents are submitted together. If either write fails,
-  // Firestore will not save the other one.
+  if (
+    !isMinistry &&
+    companyFuelPriceReference
+  ) {
+    /*
+     * The NPA prices are copied when the company organization is
+     * created. Later report calculations use this organization-linked
+     * record rather than trying to match a company name.
+     */
+    batch.set(
+      companyFuelPriceReference,
+      {
+        organizationId,
+        companyId:
+          selectedCompany.id,
+        companyName:
+          selectedCompany.name,
+        normalizedCompanyName:
+          selectedCompany.normalizedName,
+
+        petrolPrice:
+          Number(
+            npaPrices.petrolPrice
+          ),
+        dieselPrice:
+          Number(
+            npaPrices.dieselPrice
+          ),
+
+        currency:
+          npaPrices.currency ||
+          "GHS",
+        unit:
+          npaPrices.unit ||
+          "litre",
+        source:
+          npaPrices.source ||
+          "NPA",
+
+        publicationReference:
+          npaPrices.publicationReference ||
+          "",
+        publishedAt:
+          npaPrices.publishedAt ||
+          null,
+        effectiveFrom:
+          npaPrices.effectiveFrom ||
+          null,
+
+        status: "active",
+        createdBy: uid,
+        updatedBy: uid,
+        createdAt:
+          serverTimestamp(),
+        updatedAt:
+          serverTimestamp(),
+      }
+    );
+  }
+
+  /*
+   * The organization, user update and company price record are written
+   * together. If one write fails, Firestore saves none of them.
+   */
   await batch.commit();
 
   return {
@@ -457,6 +619,9 @@ export const submitOnboarding = async (
     organizationLevel,
     role,
     sector,
+    companyId:
+      selectedCompany?.id ||
+      null,
   };
 };
 

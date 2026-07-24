@@ -1,5 +1,11 @@
-import { useState } from "react";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import {
+  useState,
+} from "react";
+
+import {
+  CheckCircle2,
+  Loader2,
+} from "lucide-react";
 
 export function OnboardingStep4({
   email,
@@ -9,47 +15,62 @@ export function OnboardingStep4({
   submissionError = "",
 }) {
   // Stores the verification code entered by the user.
-  const [otp, setOtp] = useState("");
+  const [otp, setOtp] =
+    useState("");
 
-  // Generates one random six-digit code when this step first loads.
-  // The code stays the same while the user remains on this step.
-  const [generatedOtp] = useState(() =>
-    String(Math.floor(Math.random() * 900000) + 100000)
-  );
+  // Generates one six-digit prototype code when this step loads.
+  const [generatedOtp] =
+    useState(() =>
+      String(
+        Math.floor(
+          Math.random() *
+            900000
+        ) + 100000
+      )
+    );
 
-  // Tracks whether the user entered the correct verification code.
-  const [verified, setVerified] = useState(false);
+  const [verified, setVerified] =
+    useState(false);
 
-  // Prevents users from clicking buttons repeatedly during verification.
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] =
+    useState(false);
 
-  // Stores any validation or verification error shown to the user.
-  const [error, setError] = useState("");
+  const [error, setError] =
+    useState("");
 
   const handleVerify = () => {
     setError("");
 
     if (!otp) {
-      setError("Please enter the verification code.");
+      setError(
+        "Please enter the verification code."
+      );
       return;
     }
 
     if (otp.length !== 6) {
-      setError("The verification code must be 6 digits.");
+      setError(
+        "The verification code must be 6 digits."
+      );
       return;
     }
 
     setLoading(true);
 
-    // This delay simulates a real verification request for the prototype.
+    // This delay simulates a verification request for the prototype.
     setTimeout(() => {
-      if (otp === generatedOtp) {
+      if (
+        otp ===
+        generatedOtp
+      ) {
         setVerified(true);
         setLoading(false);
         return;
       }
 
-      setError("Invalid verification code. Please try again.");
+      setError(
+        "Invalid verification code. Please try again."
+      );
       setOtp("");
       setLoading(false);
     }, 1000);
@@ -71,6 +92,12 @@ export function OnboardingStep4({
             Your email has been successfully verified.
           </p>
         </div>
+
+        {submissionError && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-left text-xs text-red-700">
+            {submissionError}
+          </div>
+        )}
 
         <button
           type="button"
@@ -101,7 +128,8 @@ export function OnboardingStep4({
         <p className="text-sm text-blue-600">
           We&apos;ve sent a verification code to{" "}
           <span className="font-semibold text-blue-900">
-            {email || "your account email"}
+            {email ||
+              "your account email"}
           </span>
         </p>
       </div>
@@ -134,10 +162,25 @@ export function OnboardingStep4({
           inputMode="numeric"
           value={otp}
           onChange={(event) =>
-            setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))
+            setOtp(
+              event.target.value
+                .replace(
+                  /\D/g,
+                  ""
+                )
+                .slice(
+                  0,
+                  6
+                )
+            )
           }
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !loading && otp.length === 6) {
+            if (
+              event.key ===
+                "Enter" &&
+              !loading &&
+              otp.length === 6
+            ) {
               handleVerify();
             }
           }}
@@ -167,7 +210,10 @@ export function OnboardingStep4({
         <button
           type="button"
           onClick={handleVerify}
-          disabled={loading || otp.length !== 6}
+          disabled={
+            loading ||
+            otp.length !== 6
+          }
           className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-blue-900 px-4 py-3 font-semibold text-white transition-all hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading ? (
@@ -179,12 +225,6 @@ export function OnboardingStep4({
             "Verify"
           )}
         </button>
-
-        {submissionError && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700">
-            {submissionError}
-          </div>
-        )}
       </div>
     </div>
   );

@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Building2,
   CalendarClock,
+  Calculator,
   Camera,
   ChevronRight,
   Clock3,
@@ -43,6 +44,14 @@ import {
 import {
   getCompanyByNormalizedName,
 } from "../../lib/companies";
+import {
+  CALCULATION_SOURCE_METRICS,
+  getAvailableMetricOptions,
+  getCalculationReadiness,
+  getFieldMetricKey,
+  getSourceMetric,
+  validateMetricMappings,
+} from "../../lib/calculation-metrics";
 
 /*
  * Each approval role receives a readable label and icon.
@@ -123,6 +132,13 @@ const FormBuilder = ({
 
   const [error, setError] =
     useState("");
+
+  /*
+   * Mapping errors are kept separately so the relevant field can be
+   * highlighted while the main error remains visible at the top.
+   */
+  const [metricErrors, setMetricErrors] =
+    useState([]);
 
   const [backendOrganizations, setBackendOrganizations] =
     useState([]);
@@ -369,6 +385,31 @@ const FormBuilder = ({
     );
 
   /*
+   * Field labels are written for people, while metric keys are used
+   * by the calculation layer. These values help the builder explain
+   * which calculations the current form can support.
+   */
+  const mappedSourceMetricKeys =
+    useMemo(() => {
+      return formData.fields
+        .map(getFieldMetricKey)
+        .filter(Boolean);
+    }, [formData.fields]);
+
+  const calculationReadiness =
+    useMemo(() => {
+      return getCalculationReadiness(
+        formData.fields
+      );
+    }, [formData.fields]);
+
+  const fieldBasedCalculationReadiness =
+    calculationReadiness.filter(
+      (metric) =>
+        !metric.systemGenerated
+    );
+
+  /*
    * Adds or removes a role from the workflow.
    *
    * The shared form handler automatically places selected roles
@@ -406,6 +447,110 @@ const FormBuilder = ({
       ],
       setFormData
     );
+  };
+
+  /*
+   * A field can only remain mapped while it is a number field.
+   * Changing it to another type clears the calculation meaning so
+   * incompatible mappings are never saved accidentally.
+   */
+  const handleFieldTypeChange = (
+    fieldId,
+    nextType
+  ) => {
+    changes.updateFormField(
+      fieldId,
+      "type",
+      nextType,
+      setFormData
+    );
+
+    if (nextType !== "number") {
+      setFormData(
+        (currentForm) => ({
+          ...currentForm,
+
+          fields:
+            currentForm.fields.map(
+              (field) =>
+                field.id === fieldId
+                  ? {
+                      ...field,
+                      metricKey: "",
+                      metric: null,
+                    }
+                  : field
+            ),
+        })
+      );
+    }
+
+    setMetricErrors(
+      (currentErrors) =>
+        currentErrors.filter(
+          (currentError) =>
+            currentError.fieldId !==
+            fieldId
+        )
+    );
+
+    setError("");
+  };
+
+  /*
+   * The display label stays flexible, but the selected metric key is
+   * stable. A small metric snapshot is saved with the field to make
+   * submitted templates easier to inspect in Firestore.
+   */
+  const handleMetricChange = (
+    fieldId,
+    metricKey
+  ) => {
+    const selectedMetric =
+      getSourceMetric(
+        metricKey
+      );
+
+    setFormData(
+      (currentForm) => ({
+        ...currentForm,
+
+        fields:
+          currentForm.fields.map(
+            (field) =>
+              field.id === fieldId
+                ? {
+                    ...field,
+
+                    metricKey,
+
+                    metric:
+                      selectedMetric
+                        ? {
+                            key:
+                              selectedMetric.key,
+                            label:
+                              selectedMetric.label,
+                            unit:
+                              selectedMetric.unit,
+                          }
+                        : null,
+                  }
+                : field
+          ),
+      })
+    );
+
+    setMetricErrors(
+      (currentErrors) =>
+        currentErrors.filter(
+          (currentError) =>
+            currentError.fieldId !==
+            fieldId
+        )
+    );
+
+    setError("");
   };
 
   /*
@@ -469,6 +614,35 @@ const FormBuilder = ({
 
   const handlePublish = async () => {
     setError("");
+
+    /*
+     * Drafts may remain incomplete, but a published form must not
+     * contain an unknown, duplicated or incompatible metric mapping.
+     */
+    const metricValidation =
+      validateMetricMappings(
+        formData.fields
+      );
+
+    if (
+      !metricValidation.isValid
+    ) {
+      setMetricErrors(
+        metricValidation.errors
+      );
+
+      setActiveTab("fields");
+
+      setError(
+        metricValidation.errors[0]
+          ?.message ||
+          "Please correct the calculation metric mappings."
+      );
+
+      return;
+    }
+
+    setMetricErrors([]);
 
     try {
       await onPublish(formData);
@@ -1264,6 +1438,81 @@ const FormBuilder = ({
                 </Button>
               </div>
 
+              <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white">
+                    <Calculator className="h-4 w-4 text-navy-700" />
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h4 className="text-sm font-semibold text-navy-950">
+                          Calculation Mapping
+                        </h4>
+
+                        <p className="mt-1 text-xs leading-5 text-slate-600">
+                          Map number fields to stable metrics. The field label may change, but calculations will continue to use the selected metric key.
+                        </p>
+                      </div>
+
+                      <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
+                        {mappedSourceMetricKeys.length} of{" "}
+                        {CALCULATION_SOURCE_METRICS.length} mapped
+                      </span>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {fieldBasedCalculationReadiness.map(
+                        (metric) => {
+                          const missingLabels =
+                            metric.missingSourceMetrics
+                              .map(
+                                (metricKey) =>
+                                  getSourceMetric(
+                                    metricKey
+                                  )?.label ||
+                                  metricKey
+                              )
+                              .join(", ");
+
+                          return (
+                            <div
+                              key={metric.key}
+                              className={`rounded-md border px-3 py-2 ${
+                                metric.ready
+                                  ? "border-emerald-200 bg-emerald-50"
+                                  : "border-slate-200 bg-white"
+                              }`}
+                            >
+                              <p
+                                className={`text-xs font-semibold ${
+                                  metric.ready
+                                    ? "text-emerald-700"
+                                    : "text-slate-600"
+                                }`}
+                              >
+                                {metric.label}
+                              </p>
+
+                              <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
+                                {metric.ready
+                                  ? "Ready to calculate"
+                                  : `Needs: ${missingLabels}`}
+                              </p>
+                            </div>
+                          );
+                        }
+                      )}
+                    </div>
+
+                    <p className="mt-3 text-[11px] leading-4 text-slate-500">
+                      Submission compliance and reporting timeliness are calculated automatically from report tasks, deadlines and submission timestamps.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               <div className="space-y-3">
                 {formData.fields.map(
                   (field, index) => (
@@ -1357,11 +1606,9 @@ const FormBuilder = ({
                           <select
                             value={field.type}
                             onChange={(event) =>
-                              changes.updateFormField(
+                              handleFieldTypeChange(
                                 field.id,
-                                "type",
-                                event.target.value,
-                                setFormData
+                                event.target.value
                               )
                             }
                             className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 opacity-100 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
@@ -1442,6 +1689,125 @@ const FormBuilder = ({
                             className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 opacity-100 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
                           />
                         </div>
+
+                        {field.type === "number" &&
+                          (() => {
+                            const metricKey =
+                              getFieldMetricKey(
+                                field
+                              );
+
+                            const availableMetrics =
+                              getAvailableMetricOptions({
+                                fields:
+                                  formData.fields,
+                                fieldId:
+                                  field.id,
+                                fieldType:
+                                  field.type,
+                              });
+
+                            const selectedMetric =
+                              getSourceMetric(
+                                metricKey
+                              );
+
+                            const fieldMetricError =
+                              metricErrors.find(
+                                (metricError) =>
+                                  metricError.fieldId ===
+                                  field.id
+                              );
+
+                            return (
+                              <div className="col-span-12 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <div>
+                                    <label
+                                      htmlFor={`metric-${field.id}`}
+                                      className="block text-xs font-semibold text-slate-700"
+                                    >
+                                      Calculation Metric
+                                    </label>
+
+                                    <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
+                                      Optional. Select what this number means when it should be used in dashboards and calculations.
+                                    </p>
+                                  </div>
+
+                                  {selectedMetric && (
+                                    <span className="rounded-full bg-navy-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-navy-700">
+                                      {selectedMetric.unit}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <select
+                                  id={`metric-${field.id}`}
+                                  value={metricKey}
+                                  onChange={(event) =>
+                                    handleMetricChange(
+                                      field.id,
+                                      event.target.value
+                                    )
+                                  }
+                                  className={`mt-2 w-full rounded-md border bg-white px-2.5 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100 ${
+                                    fieldMetricError
+                                      ? "border-red-300"
+                                      : "border-slate-300"
+                                  }`}
+                                >
+                                  <option value="">
+                                    Do not use this field for calculations
+                                  </option>
+
+                                  {availableMetrics.map(
+                                    (metric) => (
+                                      <option
+                                        key={
+                                          metric.key
+                                        }
+                                        value={
+                                          metric.key
+                                        }
+                                      >
+                                        {
+                                          metric.label
+                                        }
+                                      </option>
+                                    )
+                                  )}
+                                </select>
+
+                                {selectedMetric && (
+                                  <div className="mt-2 rounded-md border border-navy-100 bg-white px-3 py-2">
+                                    <p className="text-xs font-medium text-navy-800">
+                                      Key:{" "}
+                                      <span className="font-mono text-[11px]">
+                                        {
+                                          selectedMetric.key
+                                        }
+                                      </span>
+                                    </p>
+
+                                    <p className="mt-1 text-[11px] leading-4 text-slate-500">
+                                      {
+                                        selectedMetric.description
+                                      }
+                                    </p>
+                                  </div>
+                                )}
+
+                                {fieldMetricError && (
+                                  <p className="mt-2 text-xs font-medium text-red-600">
+                                    {
+                                      fieldMetricError.message
+                                    }
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })()}
 
                         {field.type === "number" && (
                           <div className="col-span-12">
@@ -1590,6 +1956,26 @@ const FormBuilder = ({
                             </p>
                           </div>
                         )}
+
+                        {field.type !== "number" &&
+                          metricErrors
+                            .filter(
+                              (metricError) =>
+                                metricError.fieldId ===
+                                field.id
+                            )
+                            .map(
+                              (metricError) => (
+                                <div
+                                  key={`${field.id}-${metricError.metricKey}`}
+                                  className="col-span-12 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700"
+                                >
+                                  {
+                                    metricError.message
+                                  }
+                                </div>
+                              )
+                            )}
                       </div>
                     </div>
                   )

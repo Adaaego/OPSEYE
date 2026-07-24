@@ -1,106 +1,184 @@
 import { useState } from "react";
 import { ChevronLeft } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+
 import { Logo } from "../logos/logo";
 import { OnboardingStep1 } from "./onboarding/onboardingStep1";
 import { OnboardingStep2 } from "./onboarding/onboardingStep2";
 import { OnboardingStep3 } from "./onboarding/onboardingStep3";
 import { OnboardingStep4 } from "./onboarding/onboardingStep4";
-import { createOnboardingData, ORGANIZATION_TYPES } from "../../lib/types";
-import { submitOnboarding } from "../../lib/functions";
-import { useNavigate } from "react-router-dom";
-import { auth } from "../../firebase/firebase";
 
+import {
+  createOnboardingData,
+  ORGANIZATION_TYPES,
+} from "../../lib/types";
 
-const OnboardingPage = ({ email, onComplete }) => {
-  const [step, setStep] = useState(1);
-  const [data, setData] = useState(createOnboardingData());
-  const navigate = useNavigate();
+import {
+  submitOnboarding,
+} from "../../lib/functions";
 
-  const [submitting, setSubmitting] = useState(false);
-  const [submissionError, setSubmissionError] = useState("");
+import {
+  auth,
+} from "../../firebase/firebase";
 
-  const handleOrgTypeSelect = (organizationType) => {
-    setData((previousData) => ({
-      ...previousData,
-      organizationType,
-      ministryDetails:
-        organizationType === ORGANIZATION_TYPES.MINISTRY
-          ? previousData.ministryDetails
-          : null,
-      companyDetails:
-        organizationType === ORGANIZATION_TYPES.COMPANY
-          ? previousData.companyDetails
-          : null,
-    }));
+const OnboardingPage = ({
+  onComplete,
+}) => {
+  const [step, setStep] =
+    useState(1);
+
+  const [data, setData] =
+    useState(
+      createOnboardingData()
+    );
+
+  const [submitting, setSubmitting] =
+    useState(false);
+
+  const [
+    submissionError,
+    setSubmissionError,
+  ] = useState("");
+
+  const navigate =
+    useNavigate();
+
+  const handleOrgTypeSelect = (
+    organizationType
+  ) => {
+    setData(
+      (previousData) => ({
+        ...previousData,
+        organizationType,
+
+        ministryDetails:
+          organizationType ===
+          ORGANIZATION_TYPES.MINISTRY
+            ? previousData.ministryDetails
+            : null,
+
+        companyDetails:
+          organizationType ===
+          ORGANIZATION_TYPES.COMPANY
+            ? previousData.companyDetails
+            : null,
+      })
+    );
   };
 
-  const handleOrgDetails = (details) => {
-    setData((previousData) => {
-      if (previousData.organizationType === ORGANIZATION_TYPES.MINISTRY) {
+  const handleOrgDetails = (
+    details
+  ) => {
+    setData(
+      (previousData) => {
+        if (
+          previousData.organizationType ===
+          ORGANIZATION_TYPES.MINISTRY
+        ) {
+          return {
+            ...previousData,
+            ministryDetails:
+              details,
+            companyDetails:
+              null,
+          };
+        }
+
         return {
           ...previousData,
-          ministryDetails: details,
-          companyDetails: null,
+          ministryDetails:
+            null,
+          companyDetails:
+            details,
         };
       }
-
-      return {
-        ...previousData,
-        ministryDetails: null,
-        companyDetails: details,
-      };
-    });
+    );
 
     setStep(3);
   };
 
-  const handleUserProfile = (profile) => {
-    setData((previousData) => ({
-      ...previousData,
-      userProfile: profile,
-    }));
+  const handleUserProfile = (
+    profile
+  ) => {
+    setData(
+      (previousData) => ({
+        ...previousData,
+        userProfile:
+          profile,
+      })
+    );
 
     setStep(4);
   };
 
-  const handleOnboardingSubmit = async () => {
-    setSubmissionError("");
+  const handleOnboardingSubmit =
+    async () => {
+      setSubmissionError("");
 
-    const currentUser = auth.currentUser;
+      const currentUser =
+        auth.currentUser;
 
-    if (!currentUser?.uid) {
-      setSubmissionError(
-        "We could not find your signed-in account. Please sign in again."
-      );
+      if (!currentUser?.uid) {
+        setSubmissionError(
+          "We could not find your signed-in account. Please sign in again."
+        );
+
+        return;
+      }
+
+      try {
+        setSubmitting(true);
+
+        /*
+         * submitOnboarding creates the organization, updates the user,
+         * and creates the linked company fuel-price record in one batch.
+         */
+        const result =
+          await submitOnboarding(
+            currentUser.uid,
+            {
+              ...data,
+              otpVerified:
+                true,
+              completedAt:
+                Date.now(),
+            }
+          );
+
+        onComplete?.(
+          result
+        );
+
+        navigate(
+          "/energy-dashboard"
+        );
+      } catch (error) {
+        console.error(
+          "Unable to complete onboarding:",
+          error
+        );
+
+        setSubmissionError(
+          error.message ||
+            "We could not complete your onboarding. Please try again."
+        );
+      } finally {
+        setSubmitting(false);
+      }
+    };
+
+  const handleBack = () => {
+    if (submitting) {
       return;
     }
 
-    try {
-      setSubmitting(true);
-
-      // The submission function validates the data, creates the
-      // organization and updates the existing user document.
-      await submitOnboarding(currentUser.uid, {
-        ...data,
-        otpVerified: true,
-        completedAt: Date.now(),
-      });
-
-      navigate("/energy-dashboard");
-    } catch (error) {
-      console.error("Unable to complete onboarding:", error);
-
-      setSubmissionError(
-        error.message ||
-          "We could not complete your onboarding. Please try again."
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleBack = () => {
-    setStep((currentStep) => Math.max(currentStep - 1, 1));
+    setStep(
+      (currentStep) =>
+        Math.max(
+          currentStep - 1,
+          1
+        )
+    );
   };
 
   return (
@@ -129,7 +207,8 @@ const OnboardingPage = ({ email, onComplete }) => {
                 <button
                   type="button"
                   onClick={handleBack}
-                  className="flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-900"
+                  disabled={submitting}
+                  className="flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-900 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <ChevronLeft className="h-4 w-4" />
                   Back
@@ -146,7 +225,8 @@ const OnboardingPage = ({ email, onComplete }) => {
             <div
               className="h-full bg-gradient-to-r from-blue-900 to-blue-800 transition-all duration-300"
               style={{
-                width: `${(step / 4) * 100}%`,
+                width:
+                  `${(step / 4) * 100}%`,
               }}
             />
           </div>
@@ -154,37 +234,72 @@ const OnboardingPage = ({ email, onComplete }) => {
           <div className="rounded-xl border border-blue-100 bg-white p-8 shadow-lg">
             {step === 1 && (
               <OnboardingStep1
-                selected={data.organizationType}
-                onSelect={handleOrgTypeSelect}
-                onContinue={() => setStep(2)}
+                selected={
+                  data.organizationType
+                }
+                onSelect={
+                  handleOrgTypeSelect
+                }
+                onContinue={() =>
+                  setStep(2)
+                }
               />
             )}
 
-            {step === 2 && data.organizationType && (
-              <OnboardingStep2
-                organizationType={data.organizationType}
-                ministryDetails={data.ministryDetails}
-                companyDetails={data.companyDetails}
-                onSave={handleOrgDetails}
-                onBack={() => setStep(1)}
-              />
-            )}
+            {step === 2 &&
+              data.organizationType && (
+                <OnboardingStep2
+                  organizationType={
+                    data.organizationType
+                  }
+                  ministryDetails={
+                    data.ministryDetails
+                  }
+                  companyDetails={
+                    data.companyDetails
+                  }
+                  onSave={
+                    handleOrgDetails
+                  }
+                  onBack={() =>
+                    setStep(1)
+                  }
+                />
+              )}
 
             {step === 3 && (
               <OnboardingStep3
-                userProfile={data.userProfile}
-                onSave={handleUserProfile}
-                onBack={() => setStep(2)}
+                userProfile={
+                  data.userProfile
+                }
+                onSave={
+                  handleUserProfile
+                }
+                onBack={() =>
+                  setStep(2)
+                }
               />
             )}
 
             {step === 4 && (
               <OnboardingStep4
-                email={data.userProfile?.workEmail || ""}
-                onComplete={handleOnboardingSubmit}
-                onBack={() => setStep(3)}
-                submitting={submitting}
-                submissionError={submissionError}
+                email={
+                  data.userProfile
+                    ?.workEmail ||
+                  ""
+                }
+                onComplete={
+                  handleOnboardingSubmit
+                }
+                onBack={() =>
+                  setStep(3)
+                }
+                submitting={
+                  submitting
+                }
+                submissionError={
+                  submissionError
+                }
               />
             )}
           </div>
@@ -197,11 +312,17 @@ const OnboardingPage = ({ email, onComplete }) => {
         </span>
 
         <div className="flex items-center gap-5 font-mono text-[11px] text-blue-500">
-          <a className="cursor-pointer hover:text-blue-900">Privacy</a>
+          <a className="cursor-pointer hover:text-blue-900">
+            Privacy
+          </a>
 
-          <a className="cursor-pointer hover:text-blue-900">Terms</a>
+          <a className="cursor-pointer hover:text-blue-900">
+            Terms
+          </a>
 
-          <a className="cursor-pointer hover:text-blue-900">Support</a>
+          <a className="cursor-pointer hover:text-blue-900">
+            Support
+          </a>
         </div>
       </footer>
     </div>
