@@ -4,6 +4,7 @@ import {
   useMemo,
   useState,
 } from "react";
+
 import {
   AlertTriangle,
   ArrowUpDown,
@@ -12,13 +13,18 @@ import {
   ChevronRight,
   Eye,
 } from "lucide-react";
+
 import {
   collection,
   doc,
   getDoc,
   getDocs,
 } from "firebase/firestore";
-import { db } from "../../firebase/firebase";
+
+import {
+  db,
+} from "../../firebase/firebase";
+
 import {
   Card,
   PageHeader,
@@ -28,60 +34,179 @@ import {
   SearchInput,
   Select,
 } from "../ui/interface";
-import { Button } from "../ui/Button";
+
+import {
+  Button,
+} from "../ui/Button";
+
 import OperatorDetail from "./OperatorDetail";
+
 import {
   getCompanyById,
   getCompanyByNormalizedName,
 } from "../../lib/companies";
 
-const normalizeValue = (value) => {
+import {
+  calculateSubmissionCompliance,
+  calculateSubmissionMetrics,
+  calculateWorkforcePercentages,
+} from "../../lib/calculation-metrics";
+
+const ORGANIZATIONS_COLLECTION =
+  "organizations";
+
+const REPORT_SUBMISSIONS_COLLECTION =
+  "reportSubmissions";
+
+const USERS_COLLECTION =
+  "users";
+
+const COMPANY_FUEL_PRICES_COLLECTION =
+  "companyFuelPrices";
+
+/*
+ * These statuses mean a scheduled report has been submitted.
+ *
+ * Pending, draft, missing and overdue records remain expected reports
+ * and are included in the compliance calculation.
+ */
+const SUBMITTED_REPORT_STATUSES =
+  new Set([
+    "submitted",
+    "under_review",
+    "pending_review",
+    "approved",
+    "closed",
+    "passed",
+  ]);
+
+const normalizeValue = (
+  value
+) => {
   return String(value ?? "")
     .trim()
     .toLowerCase();
 };
 
-const formatNumber = (value) => {
+const normalizeStatus = (
+  value
+) => {
+  return normalizeValue(
+    value
+  ).replace(
+    /[\s-]+/g,
+    "_"
+  );
+};
+
+const toNumber = (
+  value
+) => {
   if (
     value === null ||
     value === undefined ||
     value === ""
   ) {
-    return "—";
+    return 0;
   }
 
-  return new Intl.NumberFormat("en-US").format(
-    value
-  );
+  const number =
+    Number(value);
+
+  return Number.isFinite(
+    number
+  )
+    ? number
+    : 0;
 };
 
-const formatUpdatedAt = (updatedAt) => {
-  if (!updatedAt) {
-    return "No data loaded";
+/*
+ * Date-only values such as "2026-07-24" are parsed locally.
+ *
+ * Using new Date("2026-07-24") directly may move the reporting date
+ * into the previous day in some time zones.
+ */
+const toDate = (
+  value
+) => {
+  if (!value) {
+    return null;
+  }
+
+  if (
+    typeof value?.toDate ===
+    "function"
+  ) {
+    return value.toDate();
+  }
+
+  if (
+    typeof value ===
+      "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(
+      value
+    )
+  ) {
+    const [
+      year,
+      month,
+      day,
+    ] = value
+      .split("-")
+      .map(Number);
+
+    return new Date(
+      year,
+      month - 1,
+      day
+    );
   }
 
   const date =
-    typeof updatedAt?.toDate === "function"
-      ? updatedAt.toDate()
-      : new Date(updatedAt);
+    new Date(value);
 
-  if (Number.isNaN(date.getTime())) {
-    return "No data loaded";
+  return Number.isNaN(
+    date.getTime()
+  )
+    ? null
+    : date;
+};
+
+const isSameDay = (
+  firstValue,
+  secondValue
+) => {
+  const firstDate =
+    toDate(firstValue);
+
+  const secondDate =
+    toDate(secondValue);
+
+  if (
+    !firstDate ||
+    !secondDate
+  ) {
+    return false;
   }
 
-  const time = date.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
+  return (
+    firstDate.getFullYear() ===
+      secondDate.getFullYear() &&
+    firstDate.getMonth() ===
+      secondDate.getMonth() &&
+    firstDate.getDate() ===
+      secondDate.getDate()
+  );
+};
 
-  const day = date.toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-
-  return `Data as of ${time} · ${day}`;
+const getOrganizationId = (
+  organization
+) => {
+  return (
+    organization?.organizationId ||
+    organization?.id ||
+    ""
+  );
 };
 
 const getOrganizationCategory = (
@@ -91,61 +216,6 @@ const getOrganizationCategory = (
     organization?.organizationCategory ||
       organization?.category ||
       organization?.orgType
-  );
-};
-
-/*
- * Resolves the operator logo from the fixed company directory.
- *
- * companyId is checked first because it is the stable link saved
- * during onboarding. The normalized-name fallback supports older
- * organization records created before companyId was introduced.
- */
-const getOrganizationLogo = (organization) => {
-  const companyById = getCompanyById(
-    organization?.companyId
-  );
-
-  if (companyById?.logo) {
-    return companyById.logo;
-  }
-
-  const normalizedName =
-    organization?.normalizedName ||
-    normalizeValue(organization?.name);
-
-  if (!normalizedName) {
-    return "";
-  }
-
-  return (
-    getCompanyByNormalizedName(normalizedName)
-      ?.logo || ""
-  );
-};
-
-const isCompany = (organization) => {
-  return (
-    getOrganizationCategory(organization) ===
-    "company"
-  );
-};
-
-const isMinistry = (organization) => {
-  return (
-    getOrganizationCategory(organization) ===
-    "ministry"
-  );
-};
-
-
-const getOrganizationId = (
-  organization
-) => {
-  return (
-    organization?.organizationId ||
-    organization?.id ||
-    ""
   );
 };
 
@@ -159,15 +229,39 @@ const getOrganizationLevel = (
   );
 };
 
+const isCompany = (
+  organization
+) => {
+  return (
+    getOrganizationCategory(
+      organization
+    ) === "company"
+  );
+};
+
+const isMinistry = (
+  organization
+) => {
+  return (
+    getOrganizationCategory(
+      organization
+    ) === "ministry"
+  );
+};
+
 /*
- * An enterprise is the top-level operator record. Its country,
- * region and branch organizations are displayed as children rather
- * than as separate operators in the main table.
+ * Enterprise organizations are shown as the main operator rows.
+ *
+ * Country, region and branch records remain children of the operator.
  */
 const isEnterpriseOperator = (
   organization
 ) => {
-  if (!isCompany(organization)) {
+  if (
+    !isCompany(
+      organization
+    )
+  ) {
     return false;
   }
 
@@ -177,7 +271,8 @@ const isEnterpriseOperator = (
     );
 
   const rootEnterpriseId =
-    organization?.rootEnterpriseId;
+    organization
+      ?.rootEnterpriseId;
 
   return (
     getOrganizationLevel(
@@ -195,11 +290,10 @@ const isEnterpriseOperator = (
 };
 
 /*
- * Returns true when an organization belongs to the selected
- * organization's subtree.
+ * Checks whether an organization belongs to a selected hierarchy.
  *
- * ancestorIds is the preferred hierarchy field. parentId and
- * rootEnterpriseId are retained as fallbacks for existing records.
+ * ancestorIds is the preferred relationship. parentId and
+ * rootEnterpriseId support existing records that do not have it yet.
  */
 const isOrganizationOrDescendant = (
   organization,
@@ -235,64 +329,284 @@ const isOrganizationOrDescendant = (
 };
 
 /*
- * Builds the child list shown when an operator row is expanded.
- * Existing branch/report data can still be merged into this list later.
+ * Some calculations call this helper before a matching report exists,
+ * for example when a branch has no submission or when the workforce
+ * comparison has no previous report. Return null instead of reading
+ * date fields from undefined.
  */
-const buildOrganizationChildren = (
-  enterprise,
-  organizations
+const getReportDate = (
+  report
 ) => {
-  const enterpriseId =
-    getOrganizationId(
-      enterprise
+  if (!report) {
+    return null;
+  }
+
+  return (
+    toDate(
+      report.reportingDate
+    ) ||
+    toDate(
+      report.reportDate
+    ) ||
+    toDate(
+      report.periodStart
+    ) ||
+    toDate(
+      report.windowOpensAt
+    ) ||
+    toDate(
+      report.scheduledFor
+    ) ||
+    toDate(
+      report.deadlineAt
+    ) ||
+    toDate(
+      report.createdAt
+    )
+  );
+};
+
+const getSubmittedAt = (
+  report
+) => {
+  return (
+    toDate(
+      report?.submittedAt
+    ) ||
+    toDate(
+      report?.submissionTime
+    ) ||
+    toDate(
+      report?.updatedAt
+    ) ||
+    getReportDate(
+      report
+    )
+  );
+};
+
+// Returns an empty field list when a report snapshot is unavailable.
+const getReportFields = (
+  report
+) => {
+  if (!report) {
+    return [];
+  }
+
+  return (
+    report.formSnapshot?.fields ||
+    report.templateSnapshot?.fields ||
+    report.formTemplate?.fields ||
+    report.fields ||
+    []
+  );
+};
+
+// Returns an empty value object when a report snapshot is unavailable.
+const getReportValues = (
+  report
+) => {
+  if (!report) {
+    return {};
+  }
+
+  return (
+    report.fieldValues ||
+    report.responses ||
+    report.answers ||
+    report.values ||
+    {}
+  );
+};
+
+// Keeps the reporting-history table safe when a report name is missing.
+const getReportName = (
+  report
+) => {
+  if (!report) {
+    return "Scheduled report";
+  }
+
+  return (
+    report.reportName ||
+    report.formName ||
+    report.templateName ||
+    report.formSnapshot?.name ||
+    "Scheduled report"
+  );
+};
+
+const formatNumber = (
+  value,
+  maximumFractionDigits = 0
+) => {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return "—";
+  }
+
+  return new Intl.NumberFormat(
+    "en-GB",
+    {
+      maximumFractionDigits,
+    }
+  ).format(value);
+};
+
+const formatCurrency = (
+  value
+) => {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return "—";
+  }
+
+  return new Intl.NumberFormat(
+    "en-GB",
+    {
+      style: "currency",
+      currency: "GHS",
+      maximumFractionDigits: 2,
+    }
+  ).format(value);
+};
+
+const formatDate = (
+  value
+) => {
+  const date =
+    toDate(value);
+
+  if (!date) {
+    return "—";
+  }
+
+  return date.toLocaleDateString(
+    "en-GB",
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }
+  );
+};
+
+const formatTime = (
+  value
+) => {
+  const date =
+    toDate(value);
+
+  if (!date) {
+    return "—";
+  }
+
+  return date.toLocaleTimeString(
+    "en-GB",
+    {
+      hour: "2-digit",
+      minute: "2-digit",
+    }
+  );
+};
+
+const formatUpdatedAt = (
+  updatedAt
+) => {
+  const date =
+    toDate(updatedAt);
+
+  if (!date) {
+    return "No data loaded";
+  }
+
+  const time =
+    date.toLocaleTimeString(
+      "en-GB",
+      {
+        hour: "2-digit",
+        minute: "2-digit",
+      }
     );
 
-  return organizations
-    .filter(
-      (organization) =>
-        getOrganizationId(
-          organization
-        ) !== enterpriseId &&
-        isOrganizationOrDescendant(
-          organization,
-          enterpriseId
-        )
-    )
-    .map(
-      (organization) => ({
-        ...organization,
-        id:
-          getOrganizationId(
-            organization
-          ),
-        name:
-          organization.name ||
-          "Unnamed organization",
-        branch:
-          organization.name ||
-          "Unnamed organization",
-        region:
-          organization.regionName ||
-          organization.region ||
-          "",
-        status:
-          organization.status ||
-          "active",
-      })
+  const day =
+    date.toLocaleDateString(
+      "en-GB",
+      {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+      }
     );
+
+  return `Data as of ${time} · ${day}`;
+};
+
+/*
+ * The stable companyId is the primary logo lookup.
+ *
+ * Name matching remains as a fallback for older organization records.
+ */
+const getOrganizationLogo = (
+  organization
+) => {
+  const companyById =
+    getCompanyById(
+      organization?.companyId
+    );
+
+  if (
+    companyById?.logo
+  ) {
+    return companyById.logo;
+  }
+
+  const normalizedName =
+    organization
+      ?.normalizedName ||
+    normalizeValue(
+      organization?.name
+    );
+
+  if (!normalizedName) {
+    return "";
+  }
+
+  return (
+    getCompanyByNormalizedName(
+      normalizedName
+    )?.logo ||
+    ""
+  );
 };
 
 const CompanyLogo = ({
   name,
   logoUrl,
 }) => {
-  const initials = String(name || "Company")
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+  const initials =
+    String(
+      name ||
+        "Company"
+    )
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(
+        (part) =>
+          part[0]
+      )
+      .join("")
+      .slice(
+        0,
+        2
+      )
+      .toUpperCase();
 
   return (
     <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white">
@@ -319,12 +633,17 @@ const SortHeader = ({
   onSort,
 }) => {
   const isActive =
-    activeSortKey === sortKey;
+    activeSortKey ===
+    sortKey;
 
   return (
     <th
       className="cursor-pointer select-none whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-slate-500 hover:text-navy-700"
-      onClick={() => onSort(sortKey)}
+      onClick={() =>
+        onSort(
+          sortKey
+        )
+      }
     >
       <span className="inline-flex items-center gap-1">
         {label}
@@ -336,7 +655,8 @@ const SortHeader = ({
               : "opacity-40"
           } ${
             isActive &&
-            sortDirection === "desc"
+            sortDirection ===
+              "desc"
               ? "rotate-180"
               : ""
           }`}
@@ -349,8 +669,12 @@ const SortHeader = ({
 const OperatorsTab = ({
   currentUser = null,
 
-  // Future report metrics can be passed here and will be
-  // merged with the matching organization records.
+  /*
+   * This optional prop remains for backwards compatibility.
+   *
+   * Firestore calculations override duplicate metric fields so this
+   * page always displays the submitted report data as the source of truth.
+   */
   operators = [],
 
   regions = [],
@@ -359,8 +683,28 @@ const OperatorsTab = ({
   onSelectOperator = () => {},
 }) => {
   const [
+    allOrganizations,
+    setAllOrganizations,
+  ] = useState([]);
+
+  const [
     visibleOrganizations,
     setVisibleOrganizations,
+  ] = useState([]);
+
+  const [
+    reportSubmissions,
+    setReportSubmissions,
+  ] = useState([]);
+
+  const [
+    organizationUsers,
+    setOrganizationUsers,
+  ] = useState([]);
+
+  const [
+    companyFuelPrices,
+    setCompanyFuelPrices,
   ] = useState([]);
 
   const [
@@ -368,605 +712,1679 @@ const OperatorsTab = ({
     setCurrentOrganization,
   ] = useState(null);
 
-  const [organizationsLoadedAt, setOrganizationsLoadedAt] =
-    useState(null);
+  const [
+    organizationsLoadedAt,
+    setOrganizationsLoadedAt,
+  ] = useState(null);
 
-  const [loading, setLoading] =
-    useState(true);
+  const [
+    loading,
+    setLoading,
+  ] = useState(true);
 
-  const [loadError, setLoadError] =
-    useState("");
+  const [
+    loadError,
+    setLoadError,
+  ] = useState("");
 
-  const [search, setSearch] =
-    useState("");
+  const [
+    search,
+    setSearch,
+  ] = useState("");
 
-  const [regionFilter, setRegionFilter] =
-    useState("");
+  const [
+    regionFilter,
+    setRegionFilter,
+  ] = useState("");
 
-  const [statusFilter, setStatusFilter] =
-    useState("");
+  const [
+    statusFilter,
+    setStatusFilter,
+  ] = useState("");
 
   const [
     expandedOperatorId,
     setExpandedOperatorId,
   ] = useState(null);
 
-  const [sortKey, setSortKey] =
-    useState(null);
+  const [
+    sortKey,
+    setSortKey,
+  ] = useState(null);
 
-  const [sortDirection, setSortDirection] =
-    useState("asc");
+  const [
+    sortDirection,
+    setSortDirection,
+  ] = useState("asc");
 
-  // Stores the operator whose full detail page is currently open.
-  const [selectedOperator, setSelectedOperator] =
-    useState(null);
-
-  useEffect(() => {
-    let requestIsActive = true;
-
-    const loadOrganizations = async () => {
-      try {
-        setLoading(true);
-        setLoadError("");
-
-        if (!currentUser?.uid) {
-          throw new Error(
-            "No signed-in user was found."
-          );
-        }
-
-        /*
-         * The organizationId is normally stored in the
-         * Firestore user profile rather than Firebase Auth.
-         */
-        let organizationId =
-          currentUser?.profile?.organizationId ||
-          currentUser?.organizationId ||
-          "";
-
-        if (!organizationId) {
-          const userSnapshot = await getDoc(
-            doc(db, "users", currentUser.uid)
-          );
-
-          if (userSnapshot.exists()) {
-            organizationId =
-              userSnapshot.data()
-                ?.organizationId || "";
-          }
-        }
-
-        if (!organizationId) {
-          throw new Error(
-            "This user is not linked to an organization."
-          );
-        }
-
-        /*
-         * Load the organization collection once so filtering can
-         * use organizationCategory, sector, industrySegment and
-         * country exactly as they exist in your documents.
-         */
-        const organizationsSnapshot =
-          await getDocs(
-            collection(db, "organizations")
-          );
-
-        const organizations =
-          organizationsSnapshot.docs.map(
-            (organizationDocument) => ({
-              id: organizationDocument.id,
-              ...organizationDocument.data(),
-            })
-          );
-
-        const signedInOrganization =
-          organizations.find(
-            (organization) =>
-              organization.id ===
-                organizationId ||
-              organization.organizationId ===
-                organizationId
-          );
-
-        if (!signedInOrganization) {
-          throw new Error(
-            "The user's organization could not be found."
-          );
-        }
-
-        let matchingCompanies = [];
-
-        if (
-          isMinistry(signedInOrganization)
-        ) {
-          /*
-           * Ministry access is global across operators.
-           *
-           * The Ministry sees every registered enterprise operator,
-           * regardless of sector, segment or country. Each operator row
-           * carries its complete child hierarchy for expansion.
-           */
-          matchingCompanies =
-            organizations
-              .filter(
-                isEnterpriseOperator
-              )
-              .map(
-                (enterprise) => ({
-                  ...enterprise,
-                  branches:
-                    buildOrganizationChildren(
-                      enterprise,
-                      organizations
-                    ),
-                })
-              );
-        } else if (
-          isCompany(signedInOrganization)
-        ) {
-          /*
-           * Operator access is limited to the signed-in organization
-           * and its descendants.
-           *
-           * Enterprise users see their company plus every country,
-           * region and branch below it. A user linked to a child
-           * organization only sees that child organization and the
-           * organizations beneath it.
-           */
-          const signedInOrganizationId =
-            getOrganizationId(
-              signedInOrganization
-            );
-
-          const accessibleHierarchy =
-            organizations.filter(
-              (organization) =>
-                isOrganizationOrDescendant(
-                  organization,
-                  signedInOrganizationId
-                )
-            );
-
-          matchingCompanies = [
-            {
-              ...signedInOrganization,
-              branches:
-                accessibleHierarchy
-                  .filter(
-                    (organization) =>
-                      getOrganizationId(
-                        organization
-                      ) !==
-                      signedInOrganizationId
-                  )
-                  .map(
-                    (organization) => ({
-                      ...organization,
-                      id:
-                        getOrganizationId(
-                          organization
-                        ),
-                      name:
-                        organization.name ||
-                        "Unnamed organization",
-                      branch:
-                        organization.name ||
-                        "Unnamed organization",
-                      region:
-                        organization.regionName ||
-                        organization.region ||
-                        "",
-                      status:
-                        organization.status ||
-                        "active",
-                    })
-                  ),
-            },
-          ];
-        } else {
-          throw new Error(
-            "The organization category must be ministry or company."
-          );
-        }
-
-        if (!requestIsActive) {
-          return;
-        }
-
-        setCurrentOrganization(
-          signedInOrganization
-        );
-
-        setVisibleOrganizations(
-          matchingCompanies
-        );
-
-        setOrganizationsLoadedAt(
-          new Date()
-        );
-      } catch (error) {
-        console.error(
-          "Error loading organizations for Operators:",
-          error
-        );
-
-        if (requestIsActive) {
-          setVisibleOrganizations([]);
-          setCurrentOrganization(null);
-
-          setLoadError(
-            error?.message ||
-              "Organizations could not be loaded."
-          );
-        }
-      } finally {
-        if (requestIsActive) {
-          setLoading(false);
-        }
-      }
-    };
-
-    loadOrganizations();
-
-    return () => {
-      requestIsActive = false;
-    };
-  }, [currentUser]);
+  const [
+    selectedOperator,
+    setSelectedOperator,
+  ] = useState(null);
 
   /*
-   * Organization identity and logos come from the organizations
-   * collection. Report metrics can later be merged from the
-   * operators prop using organizationId.
+   * The Operators page loads the same Firestore collections used by
+   * the Overview page.
+   *
+   * All operator totals are calculated here once and the completed
+   * selected operator object is passed directly to OperatorDetail.
+   * OperatorDetail therefore does not need another Firestore hook.
    */
-  const mergedOperators = useMemo(() => {
-    return visibleOrganizations.map(
-      (organization) => {
-        const matchingMetrics =
-          operators.find((operator) => {
-            const operatorOrganizationId =
-              operator.organizationId ||
-              operator.operatorId ||
-              operator.id;
+  useEffect(() => {
+    let requestIsActive =
+      true;
 
-            return (
-              operatorOrganizationId ===
-                organization.organizationId ||
-              operatorOrganizationId ===
-                organization.id ||
-              normalizeValue(
-                operator.name ||
-                  operator.operatorName
-              ) ===
-                normalizeValue(
-                  organization.name
-                )
+    const loadOperatorData =
+      async () => {
+        try {
+          setLoading(true);
+          setLoadError("");
+
+          if (
+            !currentUser?.uid
+          ) {
+            throw new Error(
+              "No signed-in user was found."
             );
-          }) || {};
+          }
 
-        const organizationChildren =
-          Array.isArray(
-            organization.branches
-          )
-            ? organization.branches
-            : [];
-
-        const metricChildren =
-          Array.isArray(
-            matchingMetrics.branches
-          )
-            ? matchingMetrics.branches
-            : [];
-
-        /*
-         * Firestore supplies the organization hierarchy while report
-         * metrics may supply submission and production details.
-         *
-         * Merge children by organization ID or normalized name so
-         * the expanded rows retain both identity and report values.
-         */
-        const mergedChildren =
-          organizationChildren.map(
-            (child) => {
-              const matchingChildMetrics =
-                metricChildren.find(
-                  (metricChild) => {
-                    const childId =
-                      getOrganizationId(
-                        child
-                      );
-
-                    const metricChildId =
-                      getOrganizationId(
-                        metricChild
-                      ) ||
-                      metricChild.branchId;
-
-                    return (
-                      (
-                        childId &&
-                        metricChildId &&
-                        childId ===
-                          metricChildId
-                      ) ||
-                      normalizeValue(
-                        child.name ||
-                          child.branch
-                      ) ===
-                        normalizeValue(
-                          metricChild.name ||
-                            metricChild.branch
-                        )
-                    );
-                  }
-                ) || {};
-
-              return {
-                ...child,
-                ...matchingChildMetrics,
-
-                id:
-                  getOrganizationId(
-                    child
-                  ),
-                name:
-                  child.name,
-                branch:
-                  child.name,
-                region:
-                  child.regionName ||
-                  child.region ||
-                  matchingChildMetrics.region ||
-                  "",
-              };
-            }
-          );
-
-        return {
-          ...organization,
-          ...matchingMetrics,
-
-          // Keep organization identity fields from Firestore.
-          id: organization.id,
-          organizationId:
-            organization.organizationId,
-          companyId:
-            organization.companyId,
-          name: organization.name,
-          country: organization.country,
-          sector: organization.sector,
-          industrySegment:
-            organization.industrySegment,
-          rootEnterpriseId:
-            organization.rootEnterpriseId,
-          ancestorIds:
-            organization.ancestorIds,
-          branches:
-            mergedChildren,
-          branchCount:
-            mergedChildren.length,
-          logoUrl:
-            getOrganizationLogo(
-              organization
-            ),
-          organizationStatus:
-            organization.status,
-        };
-      }
-    );
-  }, [
-    visibleOrganizations,
-    operators,
-  ]);
-
-  const regionOptions = useMemo(() => {
-    if (regions.length > 0) {
-      return regions
-        .map((region) =>
-          typeof region === "string"
-            ? region
-            : region.name ||
-              region.region
-        )
-        .filter(Boolean);
-    }
-
-    return [
-      ...new Set(
-        mergedOperators
-          .flatMap((operator) =>
-            Array.isArray(operator.branches)
-              ? operator.branches
-              : []
-          )
-          .map((branch) => branch.region)
-          .filter(Boolean)
-      ),
-    ];
-  }, [mergedOperators, regions]);
-
-  const statusOptions = useMemo(() => {
-    return [
-      ...new Set(
-        mergedOperators
-          .map(
-            (operator) =>
-              operator.status ||
-              operator.organizationStatus
-          )
-          .filter(Boolean)
-      ),
-    ];
-  }, [mergedOperators]);
-
-  const filteredOperators = useMemo(() => {
-    const normalizedSearch =
-      normalizeValue(search);
-
-    const filtered =
-      mergedOperators.filter(
-        (operator) => {
-          const operatorName =
-            operator.name ||
-            operator.operatorName ||
+          let organizationId =
+            currentUser
+              ?.profile
+              ?.organizationId ||
+            currentUser
+              ?.organizationId ||
             "";
 
-          const operatorBranches =
-            Array.isArray(operator.branches)
-              ? operator.branches
-              : [];
+          if (
+            !organizationId
+          ) {
+            const userSnapshot =
+              await getDoc(
+                doc(
+                  db,
+                  USERS_COLLECTION,
+                  currentUser.uid
+                )
+              );
 
-          const matchesSearch =
-            !normalizedSearch ||
-            [
-              operatorName,
-              operator.country,
-              operator.sector,
-              operator.industrySegment,
-            ].some((value) =>
-              normalizeValue(value).includes(
-                normalizedSearch
-              )
+            if (
+              userSnapshot.exists()
+            ) {
+              organizationId =
+                userSnapshot.data()
+                  ?.organizationId ||
+                "";
+            }
+          }
+
+          if (
+            !organizationId
+          ) {
+            throw new Error(
+              "This user is not linked to an organization."
+            );
+          }
+
+          /*
+           * These collections are read together so organizations,
+           * scheduled reports, submitters and price references belong
+           * to one consistent page load.
+           */
+          const [
+            organizationsSnapshot,
+            reportsSnapshot,
+            usersSnapshot,
+            pricesSnapshot,
+          ] =
+            await Promise.all([
+              getDocs(
+                collection(
+                  db,
+                  ORGANIZATIONS_COLLECTION
+                )
+              ),
+              getDocs(
+                collection(
+                  db,
+                  REPORT_SUBMISSIONS_COLLECTION
+                )
+              ),
+              getDocs(
+                collection(
+                  db,
+                  USERS_COLLECTION
+                )
+              ),
+              getDocs(
+                collection(
+                  db,
+                  COMPANY_FUEL_PRICES_COLLECTION
+                )
+              ),
+            ]);
+
+          const organizations =
+            organizationsSnapshot.docs.map(
+              (
+                organizationDocument
+              ) => ({
+                id:
+                  organizationDocument.id,
+                ...organizationDocument.data(),
+              })
+            );
+
+          const reports =
+            reportsSnapshot.docs.map(
+              (
+                reportDocument
+              ) => ({
+                id:
+                  reportDocument.id,
+                ...reportDocument.data(),
+              })
+            );
+
+          const users =
+            usersSnapshot.docs.map(
+              (
+                userDocument
+              ) => ({
+                id:
+                  userDocument.id,
+                ...userDocument.data(),
+              })
+            );
+
+          const prices =
+            pricesSnapshot.docs.map(
+              (
+                priceDocument
+              ) => ({
+                id:
+                  priceDocument.id,
+                ...priceDocument.data(),
+              })
+            );
+
+          const signedInOrganization =
+            organizations.find(
+              (
+                organization
+              ) =>
+                getOrganizationId(
+                  organization
+                ) ===
+                organizationId
+            );
+
+          if (
+            !signedInOrganization
+          ) {
+            throw new Error(
+              "The user's organization could not be found."
+            );
+          }
+
+          let matchingCompanies =
+            [];
+
+          if (
+            isMinistry(
+              signedInOrganization
+            )
+          ) {
+            /*
+             * Ministry users see every enterprise operator.
+             *
+             * The full child hierarchy is attached to each enterprise
+             * so its report data can be included in totals and details.
+             */
+            matchingCompanies =
+              organizations.filter(
+                isEnterpriseOperator
+              );
+          } else if (
+            isCompany(
+              signedInOrganization
+            )
+          ) {
+            /*
+             * Operator users see only their own organization and the
+             * descendants below it.
+             *
+             * They never receive another enterprise in this list.
+             */
+            matchingCompanies = [
+              signedInOrganization,
+            ];
+          } else {
+            throw new Error(
+              "The organization category must be ministry or company."
+            );
+          }
+
+          if (
+            !requestIsActive
+          ) {
+            return;
+          }
+
+          setAllOrganizations(
+            organizations
+          );
+
+          setVisibleOrganizations(
+            matchingCompanies
+          );
+
+          setReportSubmissions(
+            reports
+          );
+
+          setOrganizationUsers(
+            users
+          );
+
+          setCompanyFuelPrices(
+            prices
+          );
+
+          setCurrentOrganization(
+            signedInOrganization
+          );
+
+          setOrganizationsLoadedAt(
+            new Date()
+          );
+        } catch (error) {
+          console.error(
+            "Error loading operator data:",
+            error
+          );
+
+          if (
+            requestIsActive
+          ) {
+            setAllOrganizations(
+              []
+            );
+
+            setVisibleOrganizations(
+              []
+            );
+
+            setReportSubmissions(
+              []
+            );
+
+            setOrganizationUsers(
+              []
+            );
+
+            setCompanyFuelPrices(
+              []
+            );
+
+            setCurrentOrganization(
+              null
+            );
+
+            setLoadError(
+              error?.message ||
+                "Operator data could not be loaded."
+            );
+          }
+        } finally {
+          if (
+            requestIsActive
+          ) {
+            setLoading(false);
+          }
+        }
+      };
+
+    loadOperatorData();
+
+    return () => {
+      requestIsActive =
+        false;
+    };
+  }, [
+    currentUser,
+  ]);
+
+  const organizationMap =
+    useMemo(() => {
+      return new Map(
+        allOrganizations.map(
+          (
+            organization
+          ) => [
+            getOrganizationId(
+              organization
+            ),
+            organization,
+          ]
+        )
+      );
+    }, [
+      allOrganizations,
+    ]);
+
+  const userMap =
+    useMemo(() => {
+      return new Map(
+        organizationUsers.map(
+          (user) => [
+            user.uid ||
+              user.id,
+            user,
+          ]
+        )
+      );
+    }, [
+      organizationUsers,
+    ]);
+
+  const priceMap =
+    useMemo(() => {
+      return new Map(
+        companyFuelPrices.map(
+          (price) => [
+            price.organizationId ||
+              price.id,
+            price,
+          ]
+        )
+      );
+    }, [
+      companyFuelPrices,
+    ]);
+
+  /*
+   * Every report is enriched once with its organization, submitter,
+   * price record and formula-backed metrics.
+   *
+   * Saved sourceMetrics/calculatedMetrics are preferred. Older reports
+   * are rebuilt from fields, fieldValues and companyFuelPrices.
+   */
+  const enrichedReports =
+    useMemo(() => {
+      return reportSubmissions.map(
+        (report) => {
+          const organization =
+            organizationMap.get(
+              report.organizationId
             ) ||
-            operatorBranches.some(
-              (branch) => {
-                const branchName =
-                  branch.name ||
-                  branch.branch ||
-                  "";
+            {};
 
-                return normalizeValue(
-                  branchName
-                ).includes(
-                  normalizedSearch
-                );
-              }
+          const enterpriseId =
+            organization
+              .rootEnterpriseId ||
+            getOrganizationId(
+              organization
+            ) ||
+            report.organizationId;
+
+          const enterprise =
+            organizationMap.get(
+              enterpriseId
+            ) ||
+            organization;
+
+          const priceRecord =
+            report.pricingSnapshot ||
+            priceMap.get(
+              report.organizationId
+            ) ||
+            priceMap.get(
+              enterpriseId
+            ) ||
+            {};
+
+          const calculatedFallback =
+            calculateSubmissionMetrics({
+              fields:
+                getReportFields(
+                  report
+                ),
+              fieldValues:
+                getReportValues(
+                  report
+                ),
+              petrolPrice:
+                priceRecord.petrolPrice ??
+                priceRecord.petrolPricePerLitre ??
+                0,
+              dieselPrice:
+                priceRecord.dieselPrice ??
+                priceRecord.dieselPricePerLitre ??
+                0,
+              nationalVolume: 0,
+            });
+
+          const submittedByUser =
+            userMap.get(
+              report.submittedBy ||
+                report.submittedById
             );
 
-          const matchesRegion =
-            !regionFilter ||
-            operatorBranches.some(
-              (branch) =>
-                branch.region ===
-                regionFilter
-            );
+          return {
+            ...report,
 
-          const operatorStatus =
-            operator.status ||
-            operator.organizationStatus;
+            organization,
+            enterprise,
+            enterpriseId,
 
-          const matchesStatus =
-            !statusFilter ||
-            operatorStatus ===
-              statusFilter;
+            companyId:
+              report.companyId ||
+              enterprise.companyId ||
+              organization.companyId,
 
+            operatorName:
+              report.operatorName ||
+              enterprise.name ||
+              organization.name,
+
+            region:
+              report.regionName ||
+              report.region ||
+              organization.regionName ||
+              organization.region ||
+              "",
+
+            sourceMetrics: {
+              ...calculatedFallback.sourceMetrics,
+              ...(
+                report.sourceMetrics ||
+                report.metricValues ||
+                report.metrics?.source ||
+                {}
+              ),
+            },
+
+            calculatedMetrics: {
+              ...calculatedFallback.calculatedMetrics,
+              ...(
+                report.calculatedMetrics ||
+                report.metrics?.calculated ||
+                {}
+              ),
+            },
+
+            submittedByName:
+              report.submittedByName ||
+              submittedByUser?.fullName ||
+              submittedByUser?.name ||
+              "",
+
+            reportDate:
+              getReportDate(
+                report
+              ),
+          };
+        }
+      );
+    }, [
+      organizationMap,
+      priceMap,
+      reportSubmissions,
+      userMap,
+    ]);
+
+  /*
+   * Creates the full detail object for one visible operator.
+   *
+   * This is the single source for both the Operators table and the
+   * Operator Detail page.
+   */
+  const buildOperatorData = (
+    organization
+  ) => {
+    const organizationId =
+      getOrganizationId(
+        organization
+      );
+
+    const hierarchyOrganizations =
+      allOrganizations.filter(
+        (
+          candidate
+        ) =>
+          isOrganizationOrDescendant(
+            candidate,
+            organizationId
+          )
+      );
+
+    const hierarchyIds =
+      new Set(
+        [
+          organizationId,
+          ...hierarchyOrganizations.map(
+            getOrganizationId
+          ),
+        ].filter(Boolean)
+      );
+
+    const isEnterprise =
+      isEnterpriseOperator(
+        organization
+      );
+
+    const organizationCompanyId =
+      normalizeValue(
+        organization.companyId
+      );
+
+    const scopedReports =
+      enrichedReports.filter(
+        (report) => {
+          if (
+            hierarchyIds.has(
+              report.organizationId
+            )
+          ) {
+            return true;
+          }
+
+          /*
+           * companyId fallback is safe only for enterprise records.
+           * A child user must not receive parent or sibling reports.
+           */
           return (
-            matchesSearch &&
-            matchesRegion &&
-            matchesStatus
+            isEnterprise &&
+            Boolean(
+              organizationCompanyId
+            ) &&
+            normalizeValue(
+              report.companyId
+            ) ===
+              organizationCompanyId
           );
         }
       );
 
-    if (!sortKey) {
-      return filtered;
+    const today =
+      new Date();
+
+    const expectedToday =
+      scopedReports.filter(
+        (report) =>
+          report.reportDate &&
+          isSameDay(
+            report.reportDate,
+            today
+          )
+      );
+
+    const submittedToday =
+      expectedToday.filter(
+        (report) =>
+          SUBMITTED_REPORT_STATUSES.has(
+            normalizeStatus(
+              report.status
+            )
+          )
+      );
+
+    const petrolVolumeToday =
+      submittedToday.reduce(
+        (
+          total,
+          report
+        ) =>
+          total +
+          toNumber(
+            report.sourceMetrics
+              .petrol_volume_sold
+          ),
+        0
+      );
+
+    const dieselVolumeToday =
+      submittedToday.reduce(
+        (
+          total,
+          report
+        ) =>
+          total +
+          toNumber(
+            report.sourceMetrics
+              .diesel_volume_sold
+          ),
+        0
+      );
+
+    const productionToday =
+      submittedToday.reduce(
+        (
+          total,
+          report
+        ) =>
+          total +
+          toNumber(
+            report.calculatedMetrics
+              .total_volume_sold
+          ),
+        0
+      );
+
+    const estimatedDailyRevenue =
+      submittedToday.reduce(
+        (
+          total,
+          report
+        ) =>
+          total +
+          toNumber(
+            report.calculatedMetrics
+              .estimated_daily_revenue
+          ),
+        0
+      );
+
+    const compliance =
+      calculateSubmissionCompliance({
+        reportsSubmitted:
+          submittedToday.length,
+        reportsExpected:
+          expectedToday.length,
+      });
+
+    /*
+     * The latest workforce report from each organization is used.
+     *
+     * This prevents a branch's workforce from being counted repeatedly
+     * when several different forms are submitted.
+     */
+    const latestWorkforceByOrganization =
+      new Map();
+
+    scopedReports
+      .filter(
+        (report) =>
+          SUBMITTED_REPORT_STATUSES.has(
+            normalizeStatus(
+              report.status
+            )
+          )
+      )
+      .forEach(
+        (report) => {
+          const local =
+            toNumber(
+              report.sourceMetrics
+                .local_employee_count
+            );
+
+          const expat =
+            toNumber(
+              report.sourceMetrics
+                .expat_employee_count
+            );
+
+          if (
+            local <= 0 &&
+            expat <= 0
+          ) {
+            return;
+          }
+
+          const current =
+            latestWorkforceByOrganization.get(
+              report.organizationId
+            );
+
+          const currentTime =
+            getSubmittedAt(
+              current
+            )?.getTime() ||
+            0;
+
+          const reportTime =
+            getSubmittedAt(
+              report
+            )?.getTime() ||
+            0;
+
+          if (
+            !current ||
+            reportTime >=
+              currentTime
+          ) {
+            latestWorkforceByOrganization.set(
+              report.organizationId,
+              report
+            );
+          }
+        }
+      );
+
+    const workforce =
+      Array.from(
+        latestWorkforceByOrganization.values()
+      ).reduce(
+        (
+          totals,
+          report
+        ) => ({
+          local:
+            totals.local +
+            toNumber(
+              report.sourceMetrics
+                .local_employee_count
+            ),
+          expat:
+            totals.expat +
+            toNumber(
+              report.sourceMetrics
+                .expat_employee_count
+            ),
+        }),
+        {
+          local: 0,
+          expat: 0,
+        }
+      );
+
+    const workforcePercentages =
+      calculateWorkforcePercentages({
+        localEmployees:
+          workforce.local,
+        expatEmployees:
+          workforce.expat,
+      });
+
+    const submittedScopedReports =
+      scopedReports.filter(
+        (report) =>
+          SUBMITTED_REPORT_STATUSES.has(
+            normalizeStatus(
+              report.status
+            )
+          )
+      );
+
+    /*
+     * Daily production and revenue normally come from today's submitted
+     * reports. When nothing has been submitted today, keep displaying
+     * the most recent submitted figures until a newer report replaces them.
+     *
+     * The reporting date is stored with the value so the UI can clearly
+     * show when a figure has been carried forward.
+     */
+    const latestSubmittedReport =
+      [...submittedScopedReports]
+        .filter(
+          (report) =>
+            toNumber(
+              report.calculatedMetrics
+                .total_volume_sold
+            ) > 0 ||
+            toNumber(
+              report.sourceMetrics
+                .petrol_volume_sold
+            ) > 0 ||
+            toNumber(
+              report.sourceMetrics
+                .diesel_volume_sold
+            ) > 0
+        )
+        .sort(
+          (
+            first,
+            second
+          ) =>
+            (
+              getSubmittedAt(
+                second
+              )?.getTime() ||
+              0
+            ) -
+            (
+              getSubmittedAt(
+                first
+              )?.getTime() ||
+              0
+            )
+        )[0] ||
+      null;
+
+    const hasTodayProduction =
+      productionToday > 0 ||
+      petrolVolumeToday > 0 ||
+      dieselVolumeToday > 0;
+
+    const displayedPetrolVolume =
+      hasTodayProduction
+        ? petrolVolumeToday
+        : toNumber(
+            latestSubmittedReport
+              ?.sourceMetrics
+              ?.petrol_volume_sold
+          );
+
+    const displayedDieselVolume =
+      hasTodayProduction
+        ? dieselVolumeToday
+        : toNumber(
+            latestSubmittedReport
+              ?.sourceMetrics
+              ?.diesel_volume_sold
+          );
+
+    const displayedProduction =
+      hasTodayProduction
+        ? productionToday
+        : toNumber(
+            latestSubmittedReport
+              ?.calculatedMetrics
+              ?.total_volume_sold
+          );
+
+    const displayedRevenue =
+      hasTodayProduction
+        ? estimatedDailyRevenue
+        : toNumber(
+            latestSubmittedReport
+              ?.calculatedMetrics
+              ?.estimated_daily_revenue
+          );
+
+    const productionDataDate =
+      hasTodayProduction
+        ? today
+        : getReportDate(
+            latestSubmittedReport
+          ) ||
+          getSubmittedAt(
+            latestSubmittedReport
+          );
+
+    const productionIsCarriedForward =
+      !hasTodayProduction &&
+      displayedProduction > 0;
+
+    const production7Day =
+      Array.from(
+        {
+          length: 7,
+        },
+        (
+          _,
+          index
+        ) => {
+          const date =
+            new Date();
+
+          date.setHours(
+            0,
+            0,
+            0,
+            0
+          );
+
+          date.setDate(
+            date.getDate() -
+              (
+                6 -
+                index
+              )
+          );
+
+          const production =
+            submittedScopedReports
+              .filter(
+                (report) =>
+                  report.reportDate &&
+                  isSameDay(
+                    report.reportDate,
+                    date
+                  )
+              )
+              .reduce(
+                (
+                  total,
+                  report
+                ) =>
+                  total +
+                  toNumber(
+                    report.calculatedMetrics
+                      .total_volume_sold
+                  ),
+                0
+              );
+
+          return {
+            date,
+            day:
+              date.toLocaleDateString(
+                "en-GB",
+                {
+                  weekday:
+                    "short",
+                }
+              ),
+            production,
+          };
+        }
+      );
+
+    const production6Month =
+      Array.from(
+        {
+          length: 6,
+        },
+        (
+          _,
+          index
+        ) => {
+          const date =
+            new Date(
+              today.getFullYear(),
+              today.getMonth() -
+                (
+                  5 -
+                  index
+                ),
+              1
+            );
+
+          const value =
+            submittedScopedReports
+              .filter(
+                (report) =>
+                  report.reportDate &&
+                  report.reportDate.getFullYear() ===
+                    date.getFullYear() &&
+                  report.reportDate.getMonth() ===
+                    date.getMonth()
+              )
+              .reduce(
+                (
+                  total,
+                  report
+                ) =>
+                  total +
+                  toNumber(
+                    report.calculatedMetrics
+                      .total_volume_sold
+                  ),
+                0
+              );
+
+          return {
+            period:
+              date.toLocaleDateString(
+                "en-GB",
+                {
+                  month:
+                    "short",
+                  year:
+                    "2-digit",
+                }
+              ),
+            value,
+          };
+        }
+      );
+
+    const reportingHistory =
+      [...scopedReports]
+        .sort(
+          (
+            first,
+            second
+          ) =>
+            (
+              getSubmittedAt(
+                second
+              )?.getTime() ||
+              0
+            ) -
+            (
+              getSubmittedAt(
+                first
+              )?.getTime() ||
+              0
+            )
+        )
+        .slice(
+          0,
+          50
+        )
+        .map(
+          (report) => {
+            const submittedAt =
+              getSubmittedAt(
+                report
+              );
+
+            return {
+              ...report,
+              reportType:
+                getReportName(
+                  report
+                ),
+              submittedBy:
+                report.submittedByName,
+              date:
+                formatDate(
+                  submittedAt ||
+                    report.reportDate
+                ),
+              time:
+                formatTime(
+                  submittedAt
+                ),
+              production:
+                toNumber(
+                  report.calculatedMetrics
+                    .total_volume_sold
+                ),
+              estimatedRevenue:
+                toNumber(
+                  report.calculatedMetrics
+                    .estimated_daily_revenue
+                ),
+            };
+          }
+        );
+
+    /*
+     * Child rows combine organization identity with today's report
+     * status, production and submitter information.
+     */
+    const branches =
+      hierarchyOrganizations
+        .filter(
+          (
+            child
+          ) =>
+            getOrganizationId(
+              child
+            ) !==
+            organizationId
+        )
+        .map(
+          (child) => {
+            const childId =
+              getOrganizationId(
+                child
+              );
+
+            const childExpected =
+              expectedToday.filter(
+                (report) =>
+                  report.organizationId ===
+                    childId
+              );
+
+            const childSubmitted =
+              childExpected.filter(
+                (report) =>
+                  SUBMITTED_REPORT_STATUSES.has(
+                    normalizeStatus(
+                      report.status
+                    )
+                  )
+              );
+
+            const latestSubmission =
+              [...childSubmitted].sort(
+                (
+                  first,
+                  second
+                ) =>
+                  (
+                    getSubmittedAt(
+                      second
+                    )?.getTime() ||
+                    0
+                  ) -
+                  (
+                    getSubmittedAt(
+                      first
+                    )?.getTime() ||
+                    0
+                  )
+              )[0];
+
+            const production =
+              childSubmitted.reduce(
+                (
+                  total,
+                  report
+                ) =>
+                  total +
+                  toNumber(
+                    report.calculatedMetrics
+                      .total_volume_sold
+                  ),
+                0
+              );
+
+            let status =
+              child.status ||
+              "active";
+
+            if (
+              childExpected.length >
+              0
+            ) {
+              status =
+                childSubmitted.length ===
+                childExpected.length
+                  ? "submitted"
+                  : childSubmitted.length >
+                      0
+                    ? "partial"
+                    : childExpected.some(
+                        (report) =>
+                          normalizeStatus(
+                            report.status
+                          ) ===
+                          "overdue"
+                      )
+                      ? "overdue"
+                      : "missing";
+            }
+
+            return {
+              ...child,
+              id:
+                childId,
+              branch:
+                child.name ||
+                "Unnamed organization",
+              region:
+                child.regionName ||
+                child.region ||
+                child.country ||
+                "",
+              status,
+              submittedBy:
+                latestSubmission
+                  ?.submittedByName ||
+                "",
+              submissionTime:
+                formatTime(
+                  getSubmittedAt(
+                    latestSubmission
+                  )
+                ),
+              production,
+              submissionsToday:
+                `${childSubmitted.length}/${childExpected.length}`,
+            };
+          }
+        );
+
+    const latestReportDate =
+      scopedReports
+        .map(
+          getSubmittedAt
+        )
+        .filter(Boolean)
+        .sort(
+          (
+            first,
+            second
+          ) =>
+            second -
+            first
+        )[0] ||
+      organizationsLoadedAt;
+
+    let status =
+      organization.status ||
+      "active";
+
+    if (
+      expectedToday.length >
+      0
+    ) {
+      status =
+        submittedToday.length ===
+        expectedToday.length
+          ? "submitted"
+          : submittedToday.length >
+              0
+            ? "partial"
+            : expectedToday.some(
+                (report) =>
+                  normalizeStatus(
+                    report.status
+                  ) ===
+                  "overdue"
+              )
+              ? "overdue"
+              : "missing";
     }
 
-    return [...filtered].sort(
-      (
-        firstOperator,
-        secondOperator
-      ) => {
-        const firstValue =
-          firstOperator[sortKey] ?? "";
+    const externalOperator =
+      operators.find(
+        (candidate) => {
+          const candidateId =
+            candidate.organizationId ||
+            candidate.operatorId ||
+            candidate.id;
 
-        const secondValue =
-          secondOperator[sortKey] ?? "";
+          return (
+            candidateId ===
+              organizationId ||
+            normalizeValue(
+              candidate.name ||
+                candidate.operatorName
+            ) ===
+              normalizeValue(
+                organization.name
+              )
+          );
+        }
+      ) ||
+      {};
 
-        if (
-          typeof firstValue === "number" ||
-          typeof secondValue === "number"
-        ) {
+    return {
+      ...externalOperator,
+      ...organization,
+
+      id:
+        organization.id,
+      organizationId,
+      companyId:
+        organization.companyId,
+      name:
+        organization.name,
+      country:
+        organization.country,
+      sector:
+        organization.sector,
+      industrySegment:
+        organization.industrySegment,
+      rootEnterpriseId:
+        organization.rootEnterpriseId,
+      ancestorIds:
+        organization.ancestorIds,
+
+      logoUrl:
+        getOrganizationLogo(
+          organization
+        ),
+
+      organizationStatus:
+        organization.status,
+      status,
+
+      branches,
+      branchCount:
+        branches.length,
+
+      petrolVolumeToday:
+        displayedPetrolVolume,
+      dieselVolumeToday:
+        displayedDieselVolume,
+      productionToday:
+        displayedProduction,
+      estimatedDailyRevenue:
+        displayedRevenue,
+      productionDataDate,
+      productionIsCarriedForward,
+
+      compliance,
+      submissionsSubmittedToday:
+        submittedToday.length,
+      submissionsExpectedToday:
+        expectedToday.length,
+      submissionsToday:
+        `${submittedToday.length}/${expectedToday.length}`,
+
+      workforce: {
+        local:
+          workforce.local,
+        expat:
+          workforce.expat,
+        localPercentage:
+          workforcePercentages
+            .localWorkforcePercentage,
+        expatPercentage:
+          workforcePercentages
+            .expatWorkforcePercentage,
+        total:
+          workforcePercentages
+            .totalWorkforce,
+      },
+
+      localWorkforce:
+        workforce.local,
+      expatWorkforce:
+        workforce.expat,
+      localWorkforcePct:
+        workforcePercentages
+          .localWorkforcePercentage,
+
+      production7Day,
+      production6Month,
+      reportingHistory,
+
+      productionCaption:
+        displayedProduction > 0
+          ? `${formatNumber(
+              displayedPetrolVolume
+            )} L petrol · ${formatNumber(
+              displayedDieselVolume
+            )} L diesel${
+              productionIsCarriedForward &&
+              productionDataDate
+                ? ` · Last reported ${formatDate(
+                    productionDataDate
+                  )}`
+                : ""
+            }`
+          : "No production data available",
+
+      revenueCaption:
+        displayedRevenue > 0
+          ? productionIsCarriedForward &&
+            productionDataDate
+            ? `Last reported ${formatDate(
+                productionDataDate
+              )}`
+            : "Calculated from today's submitted volumes"
+          : "No calculated revenue available",
+
+      complianceCaption:
+        expectedToday.length >
+        0
+          ? `${submittedToday.length} of ${expectedToday.length} expected reports submitted`
+          : "No reports scheduled for today",
+
+      updatedAt:
+        latestReportDate,
+    };
+  };
+
+  const mergedOperators =
+    useMemo(() => {
+      return visibleOrganizations.map(
+        buildOperatorData
+      );
+    }, [
+      allOrganizations,
+      enrichedReports,
+      operators,
+      organizationsLoadedAt,
+      visibleOrganizations,
+    ]);
+
+  const regionOptions =
+    useMemo(() => {
+      if (
+        regions.length >
+        0
+      ) {
+        return regions
+          .map(
+            (region) =>
+              typeof region ===
+              "string"
+                ? region
+                : region.name ||
+                  region.region
+          )
+          .filter(Boolean);
+      }
+
+      return [
+        ...new Set(
+          mergedOperators
+            .flatMap(
+              (operator) =>
+                operator.branches
+            )
+            .map(
+              (branch) =>
+                branch.region
+            )
+            .filter(Boolean)
+        ),
+      ];
+    }, [
+      mergedOperators,
+      regions,
+    ]);
+
+  const statusOptions =
+    useMemo(() => {
+      return [
+        ...new Set(
+          mergedOperators
+            .map(
+              (operator) =>
+                operator.status ||
+                operator.organizationStatus
+            )
+            .filter(Boolean)
+        ),
+      ];
+    }, [
+      mergedOperators,
+    ]);
+
+  const filteredOperators =
+    useMemo(() => {
+      const normalizedSearch =
+        normalizeValue(
+          search
+        );
+
+      const filtered =
+        mergedOperators.filter(
+          (operator) => {
+            const matchesSearch =
+              !normalizedSearch ||
+              [
+                operator.name,
+                operator.country,
+                operator.sector,
+                operator.industrySegment,
+              ].some(
+                (value) =>
+                  normalizeValue(
+                    value
+                  ).includes(
+                    normalizedSearch
+                  )
+              ) ||
+              operator.branches.some(
+                (branch) =>
+                  normalizeValue(
+                    branch.name ||
+                      branch.branch
+                  ).includes(
+                    normalizedSearch
+                  )
+              );
+
+            const matchesRegion =
+              !regionFilter ||
+              operator.branches.some(
+                (branch) =>
+                  branch.region ===
+                  regionFilter
+              );
+
+            const matchesStatus =
+              !statusFilter ||
+              (
+                operator.status ||
+                operator.organizationStatus
+              ) ===
+                statusFilter;
+
+            return (
+              matchesSearch &&
+              matchesRegion &&
+              matchesStatus
+            );
+          }
+        );
+
+      if (!sortKey) {
+        return filtered;
+      }
+
+      return [
+        ...filtered,
+      ].sort(
+        (
+          firstOperator,
+          secondOperator
+        ) => {
+          const firstValue =
+            firstOperator[
+              sortKey
+            ] ??
+            "";
+
+          const secondValue =
+            secondOperator[
+              sortKey
+            ] ??
+            "";
+
+          if (
+            typeof firstValue ===
+              "number" ||
+            typeof secondValue ===
+              "number"
+          ) {
+            const comparison =
+              (
+                Number(
+                  firstValue
+                ) ||
+                0
+              ) -
+              (
+                Number(
+                  secondValue
+                ) ||
+                0
+              );
+
+            return sortDirection ===
+              "asc"
+              ? comparison
+              : -comparison;
+          }
+
           const comparison =
-            (Number(firstValue) || 0) -
-            (Number(secondValue) || 0);
+            String(
+              firstValue
+            )
+              .toLowerCase()
+              .localeCompare(
+                String(
+                  secondValue
+                ).toLowerCase()
+              );
 
-          return sortDirection === "asc"
+          return sortDirection ===
+            "asc"
             ? comparison
             : -comparison;
         }
+      );
+    }, [
+      mergedOperators,
+      regionFilter,
+      search,
+      sortDirection,
+      sortKey,
+      statusFilter,
+    ]);
 
-        const comparison = String(
-          firstValue
-        )
-          .toLowerCase()
-          .localeCompare(
-            String(
-              secondValue
-            ).toLowerCase()
+  const flaggedOperators =
+    useMemo(() => {
+      if (
+        complianceThreshold ===
+          null ||
+        complianceThreshold ===
+          undefined
+      ) {
+        return [];
+      }
+
+      return mergedOperators.filter(
+        (operator) => {
+          const compliance =
+            Number(
+              operator.compliance
+            );
+
+          return (
+            Number.isFinite(
+              compliance
+            ) &&
+            compliance <
+              complianceThreshold
           );
+        }
+      );
+    }, [
+      complianceThreshold,
+      mergedOperators,
+    ]);
 
-        return sortDirection === "asc"
-          ? comparison
-          : -comparison;
+  const scopeDescription =
+    useMemo(() => {
+      if (
+        !currentOrganization
+      ) {
+        return "";
       }
-    );
-  }, [
-    mergedOperators,
-    search,
-    regionFilter,
-    statusFilter,
-    sortKey,
-    sortDirection,
-  ]);
 
-  const flaggedOperators = useMemo(() => {
-    if (
-      complianceThreshold === null ||
-      complianceThreshold === undefined
-    ) {
-      return [];
-    }
-
-    return mergedOperators.filter(
-      (operator) => {
-        const compliance = Number(
-          operator.compliance
-        );
-
-        return (
-          Number.isFinite(compliance) &&
-          compliance <
-            complianceThreshold
-        );
+      if (
+        isMinistry(
+          currentOrganization
+        )
+      ) {
+        return "Showing every registered operator and its child organizations.";
       }
-    );
-  }, [
-    mergedOperators,
-    complianceThreshold,
-  ]);
 
-  const scopeDescription = useMemo(() => {
-    if (!currentOrganization) {
+      if (
+        isCompany(
+          currentOrganization
+        )
+      ) {
+        return `Showing ${
+          currentOrganization.name ||
+          "your organization"
+        } and its child organizations only.`;
+      }
+
       return "";
-    }
+    }, [
+      currentOrganization,
+    ]);
 
-    if (isMinistry(currentOrganization)) {
-      return "Showing every registered operator and its child organizations.";
-    }
-
-    if (isCompany(currentOrganization)) {
-      return `Showing ${currentOrganization.name || "your organization"} and its child organizations only.`;
-    }
-
-    return "";
-  }, [currentOrganization]);
-
-  const toggleSort = (key) => {
-    if (sortKey === key) {
+  const toggleSort = (
+    key
+  ) => {
+    if (
+      sortKey ===
+      key
+    ) {
       setSortDirection(
-        (currentDirection) =>
-          currentDirection === "asc"
+        (
+          currentDirection
+        ) =>
+          currentDirection ===
+          "asc"
             ? "desc"
             : "asc"
       );
@@ -974,69 +2392,68 @@ const OperatorsTab = ({
       return;
     }
 
-    setSortKey(key);
-    setSortDirection("asc");
+    setSortKey(
+      key
+    );
+
+    setSortDirection(
+      "asc"
+    );
   };
 
   const toggleOperator = (
     operatorId
   ) => {
     setExpandedOperatorId(
-      (currentOperatorId) =>
-        currentOperatorId === operatorId
+      (
+        currentOperatorId
+      ) =>
+        currentOperatorId ===
+        operatorId
           ? null
           : operatorId
     );
   };
 
-  const handleSelectOperator = (operator) => {
-    setSelectedOperator(operator);
-    onSelectOperator?.(operator);
+  const handleSelectOperator = (
+    operator
+  ) => {
+    setSelectedOperator(
+      operator
+    );
+
+    onSelectOperator?.(
+      operator
+    );
   };
 
   /*
-   * OperatorDetail replaces the list inside the Operators tab.
-   * The back action restores the operator table without changing
-   * the active sidebar page.
+   * OperatorDetail receives one complete object that has already been
+   * calculated from Firestore.
+   *
+   * It performs presentation only and does not issue duplicate reads.
    */
-  if (selectedOperator) {
-    const selectedBranches = Array.isArray(
-      selectedOperator.branches
-    )
-      ? selectedOperator.branches
-      : [];
-
-    const selectedWorkforce =
-      selectedOperator.workforce || {
-        local:
-          selectedOperator.localWorkforce ??
-          selectedOperator.localWorkforceCount,
-        expat:
-          selectedOperator.expatWorkforce ??
-          selectedOperator.expatWorkforceCount,
-        localPercentage:
-          selectedOperator.localWorkforcePct,
-      };
-
+  if (
+    selectedOperator
+  ) {
     return (
       <OperatorDetail
-        operator={selectedOperator}
-        production7Day={
-          selectedOperator.production7Day || []
+        operator={
+          selectedOperator
         }
-        production6Month={
-          selectedOperator.production6Month || []
+        regions={
+          regions
         }
-        reportingHistory={
-          selectedOperator.reportingHistory || []
-        }
-        branches={selectedBranches}
-        regions={regions}
-        workforce={selectedWorkforce}
         updatedAt={
-          updatedAt || organizationsLoadedAt
+          selectedOperator.updatedAt ||
+          updatedAt ||
+          organizationsLoadedAt
         }
-        onBack={() => setSelectedOperator(null)}
+        onBack={() =>
+          setSelectedOperator(
+            null
+          )
+        }
       />
     );
   }
@@ -1065,15 +2482,19 @@ const OperatorsTab = ({
         </div>
       )}
 
-      {flaggedOperators.length > 0 && (
+      {flaggedOperators.length >
+        0 && (
         <div className="mb-5 flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
 
           <div className="min-w-0 flex-1">
             <p className="text-sm text-amber-800">
               <span className="font-semibold">
-                {flaggedOperators.length}{" "}
-                {flaggedOperators.length === 1
+                {
+                  flaggedOperators.length
+                }{" "}
+                {flaggedOperators.length ===
+                1
                   ? "operator requires"
                   : "operators require"}{" "}
                 attention
@@ -1082,14 +2503,15 @@ const OperatorsTab = ({
               {" — "}
 
               {flaggedOperators
-                .map((operator) => {
-                  const operatorName =
-                    operator.name ||
-                    operator.operatorName ||
-                    "Unnamed operator";
-
-                  return `${operatorName} is at ${operator.compliance}% compliance`;
-                })
+                .map(
+                  (
+                    operator
+                  ) =>
+                    `${operator.name || "Unnamed operator"} is at ${formatNumber(
+                      operator.compliance,
+                      1
+                    )}% compliance`
+                )
                 .join(", ")}
               .
             </p>
@@ -1111,29 +2533,45 @@ const OperatorsTab = ({
 
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <SearchInput
-          value={search}
-          onChange={setSearch}
+          value={
+            search
+          }
+          onChange={
+            setSearch
+          }
           placeholder="Search operators or branches…"
         />
 
         <Select
-          value={regionFilter}
-          onChange={setRegionFilter}
-          options={regionOptions}
+          value={
+            regionFilter
+          }
+          onChange={
+            setRegionFilter
+          }
+          options={
+            regionOptions
+          }
           placeholder="All Regions"
         />
 
         <Select
-          value={statusFilter}
-          onChange={setStatusFilter}
-          options={statusOptions}
+          value={
+            statusFilter
+          }
+          onChange={
+            setStatusFilter
+          }
+          options={
+            statusOptions
+          }
           placeholder="All Statuses"
         />
       </div>
 
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1100px]">
+          <table className="w-full min-w-[1160px]">
             <thead>
               <tr className="border-b border-slate-200">
                 <th
@@ -1144,29 +2582,61 @@ const OperatorsTab = ({
                 <SortHeader
                   label="Operator"
                   sortKey="name"
-                  activeSortKey={sortKey}
-                  sortDirection={sortDirection}
-                  onSort={toggleSort}
+                  activeSortKey={
+                    sortKey
+                  }
+                  sortDirection={
+                    sortDirection
+                  }
+                  onSort={
+                    toggleSort
+                  }
                 />
 
                 <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-slate-500">
-                  Branches
+                  Children
                 </th>
 
                 <SortHeader
-                  label="Today's Production"
+                  label="Latest Production"
                   sortKey="productionToday"
-                  activeSortKey={sortKey}
-                  sortDirection={sortDirection}
-                  onSort={toggleSort}
+                  activeSortKey={
+                    sortKey
+                  }
+                  sortDirection={
+                    sortDirection
+                  }
+                  onSort={
+                    toggleSort
+                  }
+                />
+
+                <SortHeader
+                  label="Latest Estimated Revenue"
+                  sortKey="estimatedDailyRevenue"
+                  activeSortKey={
+                    sortKey
+                  }
+                  sortDirection={
+                    sortDirection
+                  }
+                  onSort={
+                    toggleSort
+                  }
                 />
 
                 <SortHeader
                   label="Local Workforce %"
                   sortKey="localWorkforcePct"
-                  activeSortKey={sortKey}
-                  sortDirection={sortDirection}
-                  onSort={toggleSort}
+                  activeSortKey={
+                    sortKey
+                  }
+                  sortDirection={
+                    sortDirection
+                  }
+                  onSort={
+                    toggleSort
+                  }
                 />
 
                 <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-slate-500">
@@ -1176,9 +2646,15 @@ const OperatorsTab = ({
                 <SortHeader
                   label="Compliance"
                   sortKey="compliance"
-                  activeSortKey={sortKey}
-                  sortDirection={sortDirection}
-                  onSort={toggleSort}
+                  activeSortKey={
+                    sortKey
+                  }
+                  sortDirection={
+                    sortDirection
+                  }
+                  onSort={
+                    toggleSort
+                  }
                 />
 
                 <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-slate-500">
@@ -1195,7 +2671,9 @@ const OperatorsTab = ({
               {loading ? (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={
+                      10
+                    }
                     className="px-4 py-14 text-center"
                   >
                     <span className="mx-auto block h-6 w-6 animate-spin rounded-full border-2 border-navy-200 border-t-navy-700" />
@@ -1208,17 +2686,13 @@ const OperatorsTab = ({
               ) : filteredOperators.length >
                 0 ? (
                 filteredOperators.map(
-                  (operator) => {
+                  (
+                    operator
+                  ) => {
                     const operatorId =
                       operator.organizationId ||
                       operator.id ||
-                      operator.operatorId ||
                       operator.name;
-
-                    const operatorName =
-                      operator.name ||
-                      operator.operatorName ||
-                      "Unnamed operator";
 
                     const operatorBranches =
                       Array.isArray(
@@ -1226,10 +2700,6 @@ const OperatorsTab = ({
                       )
                         ? operator.branches
                         : [];
-
-                    const branchCount =
-                      operator.branchCount ??
-                      operatorBranches.length;
 
                     const isExpanded =
                       expandedOperatorId ===
@@ -1240,34 +2710,53 @@ const OperatorsTab = ({
                       operator.organizationStatus;
 
                     const requiresAttention =
-                      displayStatus ===
-                        "partial" ||
-                      displayStatus ===
-                        "missing";
+                      [
+                        "partial",
+                        "missing",
+                        "overdue",
+                      ].includes(
+                        normalizeStatus(
+                          displayStatus
+                        )
+                      );
 
                     return (
-                      <Fragment key={operatorId}>
+                      <Fragment
+                        key={
+                          operatorId
+                        }
+                      >
                         <tr
                           className={`border-b border-slate-100 text-[13px] text-navy-900 transition-colors ${
                             requiresAttention
                               ? "bg-amber-50/40 hover:bg-amber-50/70"
                               : "cursor-pointer hover:bg-slate-50"
                           }`}
-                          onClick={() => handleSelectOperator(operator)}
+                          onClick={() =>
+                            handleSelectOperator(
+                              operator
+                            )
+                          }
                         >
                           <td className="px-4 py-3">
                             <button
                               type="button"
-                              onClick={(event) => {
+                              onClick={(
+                                event
+                              ) => {
                                 event.stopPropagation();
 
-                                toggleOperator(operatorId);
+                                toggleOperator(
+                                  operatorId
+                                );
                               }}
-                              aria-expanded={isExpanded}
+                              aria-expanded={
+                                isExpanded
+                              }
                               aria-label={
                                 isExpanded
-                                  ? `Collapse ${operatorName}`
-                                  : `Expand ${operatorName}`
+                                  ? `Collapse ${operator.name}`
+                                  : `Expand ${operator.name}`
                               }
                               className="rounded p-1 transition-colors hover:bg-slate-200"
                             >
@@ -1282,12 +2771,19 @@ const OperatorsTab = ({
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-3">
                               <CompanyLogo
-                                name={operatorName}
-                                logoUrl={operator.logoUrl}
+                                name={
+                                  operator.name
+                                }
+                                logoUrl={
+                                  operator.logoUrl
+                                }
                               />
+
                               <div className="min-w-0">
                                 <p className="whitespace-nowrap font-medium text-navy-900">
-                                  {operatorName}
+                                  {
+                                    operator.name
+                                  }
                                 </p>
 
                                 {(operator.country ||
@@ -1297,8 +2793,12 @@ const OperatorsTab = ({
                                       operator.country,
                                       operator.industrySegment,
                                     ]
-                                      .filter(Boolean)
-                                      .join(" · ")}
+                                      .filter(
+                                        Boolean
+                                      )
+                                      .join(
+                                        " · "
+                                      )}
                                   </p>
                                 )}
                               </div>
@@ -1306,39 +2806,104 @@ const OperatorsTab = ({
                           </td>
 
                           <td className="whitespace-nowrap px-4 py-3">
-                            {formatNumber(branchCount)}{" "}
-                            {branchCount === 1 ? "branch" : "branches"}
+                            {formatNumber(
+                              operator.branchCount
+                            )}{" "}
+                            {operator.branchCount ===
+                            1
+                              ? "child"
+                              : "children"}
                           </td>
 
                           <td className="whitespace-nowrap px-4 py-3 tabular-nums">
-                            {operator.productionToday !== null &&
-                            operator.productionToday !== undefined
+                            {operator.productionToday >
+                            0 ? (
+                              <div>
+                                <p>
+                                  {formatNumber(
+                                    operator.productionToday
+                                  )}{" "}
+                                  L
+                                </p>
+
+                                {operator.productionIsCarriedForward &&
+                                  operator.productionDataDate && (
+                                    <p className="mt-0.5 text-[10px] text-slate-400">
+                                      Last reported{" "}
+                                      {formatDate(
+                                        operator.productionDataDate
+                                      )}
+                                    </p>
+                                  )}
+                              </div>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+
+                          <td className="whitespace-nowrap px-4 py-3 tabular-nums">
+                            {operator.estimatedDailyRevenue >
+                            0 ? (
+                              <div>
+                                <p>
+                                  {formatCurrency(
+                                    operator.estimatedDailyRevenue
+                                  )}
+                                </p>
+
+                                {operator.productionIsCarriedForward &&
+                                  operator.productionDataDate && (
+                                    <p className="mt-0.5 text-[10px] text-slate-400">
+                                      Last reported{" "}
+                                      {formatDate(
+                                        operator.productionDataDate
+                                      )}
+                                    </p>
+                                  )}
+                              </div>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+
+                          <td className="whitespace-nowrap px-4 py-3 tabular-nums">
+                            {operator.workforce
+                              ?.total >
+                            0
                               ? `${formatNumber(
-                                  operator.productionToday
-                                )} bbl/day`
-                              : "—"}
-                          </td>
-
-                          <td className="whitespace-nowrap px-4 py-3 tabular-nums">
-                            {operator.localWorkforcePct !== null &&
-                            operator.localWorkforcePct !== undefined
-                              ? `${operator.localWorkforcePct}%`
+                                  operator.localWorkforcePct,
+                                  1
+                                )}%`
                               : "—"}
                           </td>
 
                           <td className="whitespace-nowrap px-4 py-3">
-                            <EmptyCell value={operator.submissionsToday} />
+                            <EmptyCell
+                              value={
+                                operator.submissionsExpectedToday >
+                                0
+                                  ? operator.submissionsToday
+                                  : null
+                              }
+                            />
                           </td>
 
                           <td className="whitespace-nowrap px-4 py-3 tabular-nums">
-                            {operator.compliance !== null &&
-                            operator.compliance !== undefined
-                              ? `${operator.compliance}%`
+                            {operator.submissionsExpectedToday >
+                            0
+                              ? `${formatNumber(
+                                  operator.compliance,
+                                  1
+                                )}%`
                               : "—"}
                           </td>
 
                           <td className="px-4 py-3">
-                            <StatusBadge status={displayStatus} />
+                            <StatusBadge
+                              status={
+                                displayStatus
+                              }
+                            />
                           </td>
 
                           <td className="px-4 py-3">
@@ -1346,10 +2911,14 @@ const OperatorsTab = ({
                               variant="ghost"
                               size="sm"
                               className="text-slate-600 hover:bg-slate-100 hover:text-navy-950"
-                              onClick={(event) => {
+                              onClick={(
+                                event
+                              ) => {
                                 event.stopPropagation();
 
-                                handleSelectOperator(operator);
+                                handleSelectOperator(
+                                  operator
+                                );
                               }}
                             >
                               <Eye className="h-4 w-4" />
@@ -1360,57 +2929,79 @@ const OperatorsTab = ({
 
                         {isExpanded && (
                           <tr className="bg-slate-50/60">
-                            <td colSpan={9} className="px-4 py-3">
+                            <td
+                              colSpan={
+                                10
+                              }
+                              className="px-4 py-3"
+                            >
                               <div className="ml-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
                                 <div className="border-b border-slate-200 px-4 py-3">
                                   <p className="text-sm font-semibold text-navy-900">
-                                    Branch submissions
+                                    Child organization submissions
                                   </p>
 
                                   <p className="mt-0.5 text-xs text-slate-500">
-                                    Submission details for {operatorName}.
+                                    Today&apos;s reporting status and production for {operator.name}.
                                   </p>
                                 </div>
 
-                                {operatorBranches.length > 0 ? (
+                                {operatorBranches.length >
+                                0 ? (
                                   <Table
                                     headers={[
-                                      "Branch",
+                                      "Organization",
                                       "Region",
                                       "Status",
                                       "Submitted By",
                                       "Time",
-                                      "Production (bbl/day)",
+                                      "Production (L)",
                                     ]}
-                                    rows={operatorBranches}
+                                    rows={
+                                      operatorBranches
+                                    }
                                     accentKey="status"
-                                    renderRow={(branch) => (
+                                    renderRow={(
+                                      branch
+                                    ) => (
                                       <>
                                         <td className="whitespace-nowrap px-4 py-2.5 font-medium text-navy-900">
                                           <EmptyCell
-                                            value={branch.name || branch.branch}
-                                          />
-                                        </td>
-
-                                        <td className="whitespace-nowrap px-4 py-2.5">
-                                          <EmptyCell value={branch.region} />
-                                        </td>
-
-                                        <td className="px-4 py-2.5">
-                                          <StatusBadge status={branch.status} />
-                                        </td>
-
-                                        <td className="whitespace-nowrap px-4 py-2.5">
-                                          <EmptyCell
-                                            value={branch.submittedBy}
+                                            value={
+                                              branch.name ||
+                                              branch.branch
+                                            }
                                           />
                                         </td>
 
                                         <td className="whitespace-nowrap px-4 py-2.5">
                                           <EmptyCell
                                             value={
-                                              branch.submissionTime ||
-                                              branch.time
+                                              branch.region
+                                            }
+                                          />
+                                        </td>
+
+                                        <td className="px-4 py-2.5">
+                                          <StatusBadge
+                                            status={
+                                              branch.status
+                                            }
+                                          />
+                                        </td>
+
+                                        <td className="whitespace-nowrap px-4 py-2.5">
+                                          <EmptyCell
+                                            value={
+                                              branch.submittedBy
+                                            }
+                                          />
+                                        </td>
+
+                                        <td className="whitespace-nowrap px-4 py-2.5">
+                                          <EmptyCell
+                                            value={
+                                              branch.submissionTime
                                             }
                                           />
                                         </td>
@@ -1418,8 +3009,8 @@ const OperatorsTab = ({
                                         <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">
                                           <EmptyCell
                                             value={
-                                              branch.production !== null &&
-                                              branch.production !== undefined
+                                              branch.production >
+                                              0
                                                 ? formatNumber(
                                                     branch.production
                                                   )
@@ -1433,12 +3024,11 @@ const OperatorsTab = ({
                                 ) : (
                                   <div className="px-4 py-10 text-center">
                                     <p className="text-sm font-medium text-slate-500">
-                                      No branch records available
+                                      No child organizations available
                                     </p>
 
                                     <p className="mt-1 text-xs text-slate-400">
-                                      Branch submissions will appear here once
-                                      reports are submitted.
+                                      Child organizations will appear here when they are added to the hierarchy.
                                     </p>
                                   </div>
                                 )}
@@ -1453,7 +3043,9 @@ const OperatorsTab = ({
               ) : (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={
+                      10
+                    }
                     className="px-4 py-14 text-center"
                   >
                     <Building2 className="mx-auto h-8 w-8 text-slate-300" />
@@ -1463,8 +3055,7 @@ const OperatorsTab = ({
                     </p>
 
                     <p className="mt-1 text-xs text-slate-400">
-                      No operator organizations are available
-                      within your access scope.
+                      No operator organizations are available within your access scope.
                     </p>
                   </td>
                 </tr>
@@ -1474,8 +3065,12 @@ const OperatorsTab = ({
         </div>
 
         <div className="border-t border-slate-200 px-4 py-3 text-xs text-slate-500">
-          Showing {filteredOperators.length} of{" "}
-          {mergedOperators.length} operators
+          Showing {
+            filteredOperators.length
+          } of{" "}
+          {
+            mergedOperators.length
+          } operators
         </div>
       </Card>
     </div>

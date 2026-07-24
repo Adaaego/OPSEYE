@@ -1,4 +1,8 @@
-import { useMemo, useState } from "react";
+import {
+  useMemo,
+  useState,
+} from "react";
+
 import {
   BarChart,
   Bar,
@@ -8,13 +12,18 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+
 import {
   ArrowLeft,
   BarChart3,
   Building2,
   Download,
 } from "lucide-react";
-import { CHART_COLORS } from "../../lib/util";
+
+import {
+  CHART_COLORS,
+} from "../../lib/util";
+
 import {
   Card,
   KpiCard,
@@ -25,31 +34,168 @@ import {
   EmptyCell,
   Select,
 } from "../ui/interface";
-import { Button } from "../ui/Button";
 
-// Supports CHART_COLORS whether it is exported as an array or an object.
-const COLOR_PALETTE = Array.isArray(CHART_COLORS)
-  ? CHART_COLORS
-  : Object.values(CHART_COLORS ?? {});
+import {
+  Button,
+} from "../ui/Button";
 
-// Returns the operator's saved colour or a default chart colour.
-const getChartColor = (operator) => {
-  if (operator?.chartColor) {
+/*
+ * OperatorDetail receives a completed operator object from OperatorsTab.
+ *
+ * All Firestore loading, report filtering and formula calculations have
+ * already happened before this component renders.
+ */
+const COLOR_PALETTE =
+  Array.isArray(
+    CHART_COLORS
+  )
+    ? CHART_COLORS
+    : Object.values(
+        CHART_COLORS ??
+          {}
+      );
+
+const getChartColor = (
+  operator
+) => {
+  if (
+    operator?.chartColor
+  ) {
     return operator.chartColor;
   }
 
   if (
     operator?.name &&
-    !Array.isArray(CHART_COLORS) &&
-    CHART_COLORS?.[operator.name]
+    !Array.isArray(
+      CHART_COLORS
+    ) &&
+    CHART_COLORS?.[
+      operator.name
+    ]
   ) {
-    return CHART_COLORS[operator.name];
+    return CHART_COLORS[
+      operator.name
+    ];
   }
 
-  return COLOR_PALETTE[0] || "#1e293b";
+  return (
+    COLOR_PALETTE[0] ||
+    "#1e293b"
+  );
 };
 
-const EmptyState = ({ message }) => {
+const formatNumber = (
+  value,
+  maximumFractionDigits = 0
+) => {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return "—";
+  }
+
+  return new Intl.NumberFormat(
+    "en-GB",
+    {
+      maximumFractionDigits,
+    }
+  ).format(value);
+};
+
+const formatCurrency = (
+  value
+) => {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return "—";
+  }
+
+  return new Intl.NumberFormat(
+    "en-GB",
+    {
+      style: "currency",
+      currency: "GHS",
+      maximumFractionDigits: 2,
+    }
+  ).format(value);
+};
+
+const formatUpdatedAt = (
+  updatedAt
+) => {
+  if (!updatedAt) {
+    return "No data loaded";
+  }
+
+  const date =
+    typeof updatedAt?.toDate ===
+    "function"
+      ? updatedAt.toDate()
+      : new Date(
+          updatedAt
+        );
+
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+    return "No data loaded";
+  }
+
+  const time =
+    date.toLocaleTimeString(
+      "en-GB",
+      {
+        hour: "2-digit",
+        minute: "2-digit",
+      }
+    );
+
+  const day =
+    date.toLocaleDateString(
+      "en-GB",
+      {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+      }
+    );
+
+  return `Data as of ${time} · ${day}`;
+};
+
+const clampPercentage = (
+  value
+) => {
+  const percentage =
+    Number(value);
+
+  if (
+    !Number.isFinite(
+      percentage
+    )
+  ) {
+    return 0;
+  }
+
+  return Math.min(
+    Math.max(
+      percentage,
+      0
+    ),
+    100
+  );
+};
+
+const EmptyState = ({
+  message,
+}) => {
   return (
     <div className="flex min-h-48 flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-6 text-center">
       <BarChart3 className="mb-3 h-7 w-7 text-slate-400" />
@@ -59,72 +205,24 @@ const EmptyState = ({ message }) => {
       </p>
 
       <p className="mt-1 text-xs text-slate-400">
-        This section will update when data becomes available.
+        This section will update when submitted report data becomes available.
       </p>
     </div>
   );
 };
 
-// Displays a placeholder when a value has not been provided.
-const formatNumber = (value) => {
+const OperatorAvatar = ({
+  name,
+  logoUrl,
+}) => {
   if (
-    value === null ||
-    value === undefined ||
-    value === ""
+    logoUrl
   ) {
-    return "—";
-  }
-
-  return new Intl.NumberFormat("en-US").format(value);
-};
-
-// Converts a Firestore timestamp or JavaScript date into readable text.
-const formatUpdatedAt = (updatedAt) => {
-  if (!updatedAt) {
-    return "No data loaded";
-  }
-
-  const date =
-    typeof updatedAt?.toDate === "function"
-      ? updatedAt.toDate()
-      : new Date(updatedAt);
-
-  if (Number.isNaN(date.getTime())) {
-    return "No data loaded";
-  }
-
-  const time = date.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-
-  const day = date.toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-
-  return `Data as of ${time} · ${day}`;
-};
-
-// Keeps percentage-based widths between zero and one hundred.
-const clampPercentage = (value) => {
-  const percentage = Number(value);
-
-  if (!Number.isFinite(percentage)) {
-    return 0;
-  }
-
-  return Math.min(Math.max(percentage, 0), 100);
-};
-
-const OperatorAvatar = ({ name, logoUrl }) => {
-  // Displays the operator logo when available and an icon as a fallback.
-  if (logoUrl) {
     return (
       <img
-        src={logoUrl}
+        src={
+          logoUrl
+        }
         alt={`${name} logo`}
         className="h-12 w-12 rounded-xl border border-slate-200 bg-white object-contain p-1"
       />
@@ -140,70 +238,121 @@ const OperatorAvatar = ({ name, logoUrl }) => {
 
 const OperatorDetail = ({
   operator = null,
-  production7Day = [],
-  production6Month = [],
-  reportingHistory = [],
-  branches = [],
   regions = [],
-  workforce = {},
   updatedAt = null,
   onBack = () => {},
   onExport = null,
 }) => {
-  // Stores the filters selected for the branches table.
-  const [branchRegion, setBranchRegion] = useState("");
-  const [branchStatus, setBranchStatus] = useState("");
-
-  // Uses the supplied regions or creates the list from the branch records.
-  const regionOptions = useMemo(() => {
-    if (regions.length > 0) {
-      return regions
-        .map((region) =>
-          typeof region === "string"
-            ? region
-            : region.name || region.region
-        )
-        .filter(Boolean);
-    }
-
-    return [
-      ...new Set(
-        branches
-          .map((branch) => branch.region)
-          .filter(Boolean)
-      ),
-    ];
-  }, [regions, branches]);
-
-  // Creates the filter options from the statuses found in the branch records.
-  const branchStatusOptions = useMemo(() => {
-    return [
-      ...new Set(
-        branches
-          .map((branch) => branch.status)
-          .filter(Boolean)
-      ),
-    ];
-  }, [branches]);
-
-  // Applies both branch filters without changing the original records.
-  const filteredBranches = useMemo(() => {
-    return branches.filter((branch) => {
-      const matchesRegion =
-        !branchRegion ||
-        branch.region === branchRegion;
-
-      const matchesStatus =
-        !branchStatus ||
-        branch.status === branchStatus;
-
-      return matchesRegion && matchesStatus;
-    });
-  }, [
-    branches,
+  const [
     branchRegion,
+    setBranchRegion,
+  ] = useState("");
+
+  const [
     branchStatus,
-  ]);
+    setBranchStatus,
+  ] = useState("");
+
+  /*
+   * These values were produced from Firestore inside OperatorsTab.
+   *
+   * Keeping this component prop-driven prevents duplicate Firestore
+   * reads when the user opens an operator.
+   */
+  const production7Day =
+    operator?.production7Day ||
+    [];
+
+  const production6Month =
+    operator?.production6Month ||
+    [];
+
+  const reportingHistory =
+    operator?.reportingHistory ||
+    [];
+
+  const branches =
+    operator?.branches ||
+    [];
+
+  const workforce =
+    operator?.workforce ||
+    {};
+
+  const regionOptions =
+    useMemo(() => {
+      if (
+        regions.length >
+        0
+      ) {
+        return regions
+          .map(
+            (region) =>
+              typeof region ===
+              "string"
+                ? region
+                : region.name ||
+                  region.region
+          )
+          .filter(Boolean);
+      }
+
+      return [
+        ...new Set(
+          branches
+            .map(
+              (branch) =>
+                branch.region
+            )
+            .filter(Boolean)
+        ),
+      ];
+    }, [
+      branches,
+      regions,
+    ]);
+
+  const branchStatusOptions =
+    useMemo(() => {
+      return [
+        ...new Set(
+          branches
+            .map(
+              (branch) =>
+                branch.status
+            )
+            .filter(Boolean)
+        ),
+      ];
+    }, [
+      branches,
+    ]);
+
+  const filteredBranches =
+    useMemo(() => {
+      return branches.filter(
+        (branch) => {
+          const matchesRegion =
+            !branchRegion ||
+            branch.region ===
+              branchRegion;
+
+          const matchesStatus =
+            !branchStatus ||
+            branch.status ===
+              branchStatus;
+
+          return (
+            matchesRegion &&
+            matchesStatus
+          );
+        }
+      );
+    }, [
+      branches,
+      branchRegion,
+      branchStatus,
+    ]);
 
   if (!operator) {
     return (
@@ -214,7 +363,11 @@ const OperatorDetail = ({
           Operator not found.
         </p>
 
-        <Button onClick={onBack}>
+        <Button
+          onClick={
+            onBack
+          }
+        >
           Back to Operators
         </Button>
       </div>
@@ -227,78 +380,122 @@ const OperatorDetail = ({
     "Unnamed operator";
 
   const operatorColor =
-    getChartColor(operator);
+    getChartColor(
+      operator
+    );
 
   const localWorkforce =
-    Number(workforce.local) || 0;
+    Number(
+      workforce.local
+    ) ||
+    0;
 
   const expatWorkforce =
-    Number(workforce.expat) || 0;
+    Number(
+      workforce.expat
+    ) ||
+    0;
 
   const totalWorkforce =
-    localWorkforce + expatWorkforce;
+    Number(
+      workforce.total
+    ) ||
+    localWorkforce +
+      expatWorkforce;
 
-  // Uses the saved percentage first and calculates it when only totals exist.
   const localWorkforcePercentage =
-    workforce.localPercentage !== null &&
-    workforce.localPercentage !== undefined
-      ? clampPercentage(
-          workforce.localPercentage
-        )
-      : workforce.localPct !== null &&
-          workforce.localPct !== undefined
-        ? clampPercentage(workforce.localPct)
-        : totalWorkforce > 0
-          ? (localWorkforce / totalWorkforce) *
-            100
-          : 0;
+    clampPercentage(
+      workforce.localPercentage ??
+      operator.localWorkforcePct
+    );
 
   const expatWorkforcePercentage =
-    totalWorkforce > 0
-      ? 100 - localWorkforcePercentage
-      : 0;
+    clampPercentage(
+      workforce.expatPercentage ??
+      (
+        totalWorkforce >
+        0
+          ? 100 -
+            localWorkforcePercentage
+          : 0
+      )
+    );
 
   const hasWorkforceData =
-    totalWorkforce > 0;
+    totalWorkforce >
+    0;
 
   const productionToday =
-    operator.productionToday !== null &&
-    operator.productionToday !== undefined
-      ? `${formatNumber(
-          operator.productionToday
-        )} bbl/day`
-      : "—";
+    Number(
+      operator.productionToday
+    ) ||
+    0;
+
+  const petrolVolumeToday =
+    Number(
+      operator.petrolVolumeToday
+    ) ||
+    0;
+
+  const dieselVolumeToday =
+    Number(
+      operator.dieselVolumeToday
+    ) ||
+    0;
+
+  const estimatedDailyRevenue =
+    Number(
+      operator.estimatedDailyRevenue
+    ) ||
+    0;
+
+  const submissionsExpected =
+    Number(
+      operator.submissionsExpectedToday
+    ) ||
+    0;
+
+  const submissionsSubmitted =
+    Number(
+      operator.submissionsSubmittedToday
+    ) ||
+    0;
 
   const compliance =
-    operator.compliance !== null &&
-    operator.compliance !== undefined
-      ? `${operator.compliance}%`
-      : "—";
-
-  const localWorkforceValue =
-    hasWorkforceData
-      ? `${localWorkforcePercentage.toFixed(
-          1
-        )}%`
-      : "—";
+    Number(
+      operator.compliance
+    );
 
   const localWorkforceColour =
-    !Array.isArray(CHART_COLORS) &&
+    !Array.isArray(
+      CHART_COLORS
+    ) &&
     CHART_COLORS?.local
       ? CHART_COLORS.local
       : operatorColor;
 
   const expatWorkforceColour =
-    !Array.isArray(CHART_COLORS) &&
+    !Array.isArray(
+      CHART_COLORS
+    ) &&
     CHART_COLORS?.expat
       ? CHART_COLORS.expat
       : "#cbd5e1";
+
+  const handleExport =
+    () => {
+      onExport?.(
+        operator
+      );
+    };
 
   return (
     <div>
       <button
         type="button"
-        onClick={onBack}
+        onClick={
+          onBack
+        }
         className="mb-4 flex items-center gap-2 text-sm text-slate-500 transition-colors hover:text-navy-900"
       >
         <ArrowLeft className="h-4 w-4" />
@@ -307,19 +504,30 @@ const OperatorDetail = ({
 
       <div className="mb-6 flex items-start gap-3">
         <OperatorAvatar
-          name={operatorName}
-          logoUrl={operator.logoUrl}
+          name={
+            operatorName
+          }
+          logoUrl={
+            operator.logoUrl
+          }
         />
 
         <div className="min-w-0 flex-1">
           <PageHeader
-            title={operatorName}
-            timestamp={formatUpdatedAt(updatedAt)}
+            title={
+              operatorName
+            }
+            timestamp={formatUpdatedAt(
+              updatedAt ||
+                operator.updatedAt
+            )}
             action={
               onExport ? (
                 <Button
                   variant="secondary"
-                  onClick={onExport}
+                  onClick={
+                    handleExport
+                  }
                 >
                   <Download className="h-4 w-4" />
                   Export
@@ -327,44 +535,91 @@ const OperatorDetail = ({
               ) : null
             }
           />
+
+          <p className="-mt-4 text-xs text-slate-500">
+            Figures include this operator and every child organization below it. Production and revenue keep the latest submitted values until a newer report is received.
+          </p>
         </div>
       </div>
 
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
-          label="Today's Production"
-          value={productionToday}
-          caption={operator.productionCaption}
+          label="Latest Production"
+          value={
+            productionToday >
+            0
+              ? `${formatNumber(
+                  productionToday
+                )} L`
+              : "—"
+          }
+          caption={
+            operator.productionCaption ||
+            `${formatNumber(
+              petrolVolumeToday
+            )} L petrol · ${formatNumber(
+              dieselVolumeToday
+            )} L diesel`
+          }
+        />
+
+        <KpiCard
+          label="Latest Estimated Revenue"
+          value={
+            estimatedDailyRevenue >
+            0
+              ? formatCurrency(
+                  estimatedDailyRevenue
+                )
+              : "—"
+          }
+          caption={
+            operator.revenueCaption ||
+            "Calculated from submitted volumes and linked company fuel prices"
+          }
         />
 
         <KpiCard
           label="Compliance"
-          value={compliance}
-          caption={operator.complianceCaption}
+          value={
+            submissionsExpected >
+            0 &&
+            Number.isFinite(
+              compliance
+            )
+              ? `${formatNumber(
+                  compliance,
+                  1
+                )}%`
+              : "—"
+          }
+          caption={
+            submissionsExpected >
+            0
+              ? `${submissionsSubmitted} of ${submissionsExpected} expected reports submitted`
+              : "No reports scheduled for today"
+          }
         />
 
         <KpiCard
           label="Local Workforce"
-          value={localWorkforceValue}
+          value={
+            hasWorkforceData
+              ? `${formatNumber(
+                  localWorkforcePercentage,
+                  1
+                )}%`
+              : "—"
+          }
           caption={
             hasWorkforceData
               ? `${formatNumber(
                   localWorkforce
                 )} of ${formatNumber(
                   totalWorkforce
-                )} staff`
+                )} workers`
               : null
           }
-        />
-
-        <KpiCard
-          label="Submissions Today"
-          value={
-            operator.submissionsToday ??
-            operator.submissionCount ??
-            "—"
-          }
-          caption={operator.submissionsCaption}
         />
       </div>
 
@@ -374,13 +629,23 @@ const OperatorDetail = ({
         </SectionHeader>
 
         <Card className="p-5">
-          {production7Day.length > 0 ? (
+          {production7Day.some(
+            (record) =>
+              Number(
+                record.production
+              ) >
+              0
+          ) ? (
             <ResponsiveContainer
               width="100%"
-              height={280}
+              height={
+                280
+              }
             >
               <BarChart
-                data={production7Day}
+                data={
+                  production7Day
+                }
                 margin={{
                   top: 8,
                   right: 8,
@@ -413,21 +678,30 @@ const OperatorDetail = ({
                   }}
                   axisLine={false}
                   tickLine={false}
-                  tickFormatter={(value) =>
-                    value >= 1000
-                      ? `${Math.round(
-                          value / 1000
+                  tickFormatter={(
+                    value
+                  ) =>
+                    value >=
+                    1000
+                      ? `${formatNumber(
+                          value /
+                            1000,
+                          1
                         )}k`
-                      : formatNumber(value)
+                      : formatNumber(
+                          value
+                        )
                   }
                 />
 
                 <Tooltip
-                  formatter={(value) => [
+                  formatter={(
+                    value
+                  ) => [
                     `${formatNumber(
                       value
-                    )} bbl/day`,
-                    "",
+                    )} litres`,
+                    "Production",
                   ]}
                   contentStyle={{
                     fontSize: 13,
@@ -439,9 +713,18 @@ const OperatorDetail = ({
 
                 <Bar
                   dataKey="production"
-                  fill={operatorColor}
-                  radius={[3, 3, 0, 0]}
-                  maxBarSize={48}
+                  fill={
+                    operatorColor
+                  }
+                  radius={[
+                    3,
+                    3,
+                    0,
+                    0,
+                  ]}
+                  maxBarSize={
+                    48
+                  }
                 />
               </BarChart>
             </ResponsiveContainer>
@@ -457,13 +740,23 @@ const OperatorDetail = ({
         </SectionHeader>
 
         <Card className="p-5">
-          {production6Month.length > 0 ? (
+          {production6Month.some(
+            (record) =>
+              Number(
+                record.value
+              ) >
+              0
+          ) ? (
             <ResponsiveContainer
               width="100%"
-              height={260}
+              height={
+                260
+              }
             >
               <BarChart
-                data={production6Month}
+                data={
+                  production6Month
+                }
                 margin={{
                   top: 8,
                   right: 8,
@@ -496,21 +789,30 @@ const OperatorDetail = ({
                   }}
                   axisLine={false}
                   tickLine={false}
-                  tickFormatter={(value) =>
-                    value >= 1000
-                      ? `${Math.round(
-                          value / 1000
+                  tickFormatter={(
+                    value
+                  ) =>
+                    value >=
+                    1000
+                      ? `${formatNumber(
+                          value /
+                            1000,
+                          1
                         )}k`
-                      : formatNumber(value)
+                      : formatNumber(
+                          value
+                        )
                   }
                 />
 
                 <Tooltip
-                  formatter={(value) => [
+                  formatter={(
+                    value
+                  ) => [
                     `${formatNumber(
                       value
-                    )} bbl/day`,
-                    "",
+                    )} litres`,
+                    "Production",
                   ]}
                   contentStyle={{
                     fontSize: 13,
@@ -522,9 +824,18 @@ const OperatorDetail = ({
 
                 <Bar
                   dataKey="value"
-                  fill={operatorColor}
-                  radius={[3, 3, 0, 0]}
-                  maxBarSize={48}
+                  fill={
+                    operatorColor
+                  }
+                  radius={[
+                    3,
+                    3,
+                    0,
+                    0,
+                  ]}
+                  maxBarSize={
+                    48
+                  }
                 />
               </BarChart>
             </ResponsiveContainer>
@@ -540,7 +851,8 @@ const OperatorDetail = ({
         </SectionHeader>
 
         <Card className="overflow-hidden">
-          {reportingHistory.length > 0 ? (
+          {reportingHistory.length >
+          0 ? (
             <Table
               headers={[
                 "Region",
@@ -549,44 +861,76 @@ const OperatorDetail = ({
                 "Submitted By",
                 "Date",
                 "Time",
+                "Production (L)",
               ]}
-              rows={reportingHistory}
+              rows={
+                reportingHistory
+              }
               accentKey="status"
-              renderRow={(report) => (
+              renderRow={(
+                report
+              ) => (
                 <>
                   <td className="whitespace-nowrap px-4 py-3">
                     <EmptyCell
-                      value={report.region}
+                      value={
+                        report.region
+                      }
                     />
                   </td>
 
-                  <td className="whitespace-nowrap px-4 py-3">
+                  <td className="px-4 py-3">
                     <EmptyCell
-                      value={report.reportType}
+                      value={
+                        report.reportType
+                      }
                     />
                   </td>
 
                   <td className="px-4 py-3">
                     <StatusBadge
-                      status={report.status}
+                      status={
+                        report.status
+                      }
                     />
                   </td>
 
                   <td className="whitespace-nowrap px-4 py-3">
                     <EmptyCell
-                      value={report.submittedBy}
+                      value={
+                        report.submittedBy
+                      }
                     />
                   </td>
 
                   <td className="whitespace-nowrap px-4 py-3">
                     <EmptyCell
-                      value={report.date}
+                      value={
+                        report.date
+                      }
                     />
                   </td>
 
                   <td className="whitespace-nowrap px-4 py-3">
                     <EmptyCell
-                      value={report.time}
+                      value={
+                        report.time
+                      }
+                    />
+                  </td>
+
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                    <EmptyCell
+                      value={
+                        Number(
+                          report.production
+                        ) >
+                        0
+                          ? formatNumber(
+                              report.production
+                            )
+                          : null
+                      }
                     />
                   </td>
                 </>
@@ -599,38 +943,61 @@ const OperatorDetail = ({
       </div>
 
       <div className="mb-8">
-        <SectionHeader>Branches</SectionHeader>
+        <SectionHeader>
+          Child Organizations
+        </SectionHeader>
+
+        <p className="-mt-2 mb-4 text-xs text-slate-500">
+          Today&apos;s reporting status and production for organizations below this operator.
+        </p>
 
         <div className="mb-4 flex flex-wrap items-center gap-3">
           <Select
-            value={branchRegion}
-            onChange={setBranchRegion}
-            options={regionOptions}
+            value={
+              branchRegion
+            }
+            onChange={
+              setBranchRegion
+            }
+            options={
+              regionOptions
+            }
             placeholder="All Regions"
           />
 
           <Select
-            value={branchStatus}
-            onChange={setBranchStatus}
-            options={branchStatusOptions}
+            value={
+              branchStatus
+            }
+            onChange={
+              setBranchStatus
+            }
+            options={
+              branchStatusOptions
+            }
             placeholder="All Statuses"
           />
         </div>
 
         <Card className="overflow-hidden">
-          {filteredBranches.length > 0 ? (
+          {filteredBranches.length >
+          0 ? (
             <Table
               headers={[
-                "Branch",
+                "Organization",
                 "Region",
                 "Status",
                 "Submitted By",
                 "Time",
-                "Production (bbl/day)",
+                "Production (L)",
               ]}
-              rows={filteredBranches}
+              rows={
+                filteredBranches
+              }
               accentKey="status"
-              renderRow={(branch) => (
+              renderRow={(
+                branch
+              ) => (
                 <>
                   <td className="whitespace-nowrap px-4 py-3 font-medium text-navy-900">
                     <EmptyCell
@@ -643,27 +1010,32 @@ const OperatorDetail = ({
 
                   <td className="whitespace-nowrap px-4 py-3">
                     <EmptyCell
-                      value={branch.region}
+                      value={
+                        branch.region
+                      }
                     />
                   </td>
 
                   <td className="px-4 py-3">
                     <StatusBadge
-                      status={branch.status}
-                    />
-                  </td>
-
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <EmptyCell
-                      value={branch.submittedBy}
+                      status={
+                        branch.status
+                      }
                     />
                   </td>
 
                   <td className="whitespace-nowrap px-4 py-3">
                     <EmptyCell
                       value={
-                        branch.submissionTime ||
-                        branch.time
+                        branch.submittedBy
+                      }
+                    />
+                  </td>
+
+                  <td className="whitespace-nowrap px-4 py-3">
+                    <EmptyCell
+                      value={
+                        branch.submissionTime
                       }
                     />
                   </td>
@@ -671,9 +1043,10 @@ const OperatorDetail = ({
                   <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
                     <EmptyCell
                       value={
-                        branch.production !== null &&
-                        branch.production !==
-                          undefined
+                        Number(
+                          branch.production
+                        ) >
+                        0
                           ? formatNumber(
                               branch.production
                             )
@@ -685,13 +1058,15 @@ const OperatorDetail = ({
               )}
             />
           ) : (
-            <EmptyState message="Branch records matching the selected filters will appear here" />
+            <EmptyState message="Child organization records matching the selected filters will appear here" />
           )}
         </Card>
       </div>
 
       <div>
-        <SectionHeader>Workforce</SectionHeader>
+        <SectionHeader>
+          Workforce
+        </SectionHeader>
 
         <Card className="p-5">
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
@@ -702,7 +1077,9 @@ const OperatorDetail = ({
 
               <p className="mt-1 text-2xl font-medium tabular-nums text-navy-950">
                 {hasWorkforceData
-                  ? formatNumber(localWorkforce)
+                  ? formatNumber(
+                      localWorkforce
+                    )
                   : "—"}
               </p>
             </div>
@@ -714,7 +1091,9 @@ const OperatorDetail = ({
 
               <p className="mt-1 text-2xl font-medium tabular-nums text-navy-950">
                 {hasWorkforceData
-                  ? formatNumber(expatWorkforce)
+                  ? formatNumber(
+                      expatWorkforce
+                    )
                   : "—"}
               </p>
             </div>
@@ -726,7 +1105,8 @@ const OperatorDetail = ({
 
               <p className="mt-1 text-2xl font-medium tabular-nums text-navy-950">
                 {hasWorkforceData
-                  ? `${localWorkforcePercentage.toFixed(
+                  ? `${formatNumber(
+                      localWorkforcePercentage,
                       1
                     )}%`
                   : "—"}
@@ -740,15 +1120,18 @@ const OperatorDetail = ({
                 <div
                   className="flex items-center justify-center px-2 text-xs font-medium text-white"
                   style={{
-                    width: `${localWorkforcePercentage}%`,
+                    width:
+                      `${localWorkforcePercentage}%`,
                     backgroundColor:
                       localWorkforceColour,
                   }}
                 >
-                  {localWorkforcePercentage >= 20
+                  {localWorkforcePercentage >=
+                  20
                     ? `${formatNumber(
                         localWorkforce
-                      )} (${localWorkforcePercentage.toFixed(
+                      )} (${formatNumber(
+                        localWorkforcePercentage,
                         1
                       )}%)`
                     : ""}
@@ -757,15 +1140,18 @@ const OperatorDetail = ({
                 <div
                   className="flex items-center justify-center px-2 text-xs font-medium text-slate-600"
                   style={{
-                    width: `${expatWorkforcePercentage}%`,
+                    width:
+                      `${expatWorkforcePercentage}%`,
                     backgroundColor:
                       expatWorkforceColour,
                   }}
                 >
-                  {expatWorkforcePercentage >= 20
+                  {expatWorkforcePercentage >=
+                  20
                     ? `${formatNumber(
                         expatWorkforce
-                      )} (${expatWorkforcePercentage.toFixed(
+                      )} (${formatNumber(
+                        expatWorkforcePercentage,
                         1
                       )}%)`
                     : ""}
