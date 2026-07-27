@@ -2,6 +2,21 @@ import goilLogo from "../components/images/goil-logo.png";
 import shellLogo from "../components/images/shell-logo.png";
 import totalEnergiesLogo from "../components/images/totalenergies-logo.png";
 
+export const REGIONS = [
+  {
+    id: "greater-accra",
+    name: "Greater Accra Region",
+  },
+  {
+    id: "ashanti",
+    name: "Ashanti Region",
+  },
+  {
+    id: "western",
+    name: "Western Region",
+  },
+];
+
 // Company information is kept in a separate file because this list
 // may grow significantly as more organizations join the platform.
 export const COMPANIES = [
@@ -12,6 +27,7 @@ export const COMPANIES = [
       sector: "Energy",
       industrySegment: "Downstream",
       logo: goilLogo,
+      regionId: "greater-accra",
     },
     {
       id: "shell",
@@ -20,6 +36,7 @@ export const COMPANIES = [
       sector: "Energy",
       industrySegment: "Downstream",
       logo: shellLogo,
+      regionId: "ashanti",
     },
     {
       id: "totalenergies",
@@ -28,6 +45,7 @@ export const COMPANIES = [
       sector: "Energy",
       industrySegment: "Downstream",
       logo: totalEnergiesLogo,
+      regionId: "western",
     },
   ];
 

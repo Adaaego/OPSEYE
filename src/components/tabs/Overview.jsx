@@ -57,7 +57,9 @@ import {
 import {
   getCompanyById,
   getCompanyByNormalizedName,
+  REGIONS
 } from "../../lib/companies";
+
 
 import {
   calculateSubmissionCompliance,
@@ -140,6 +142,111 @@ const normalizeStatus = (
   ).replace(
     /[\s-]+/g,
     "_"
+  );
+};
+
+/*
+ * Region IDs are the stable links stored on organization documents.
+ *
+ * Normalising separators lets older values such as "greater_accra"
+ * continue to match the canonical "greater-accra" region ID.
+ */
+const normalizeRegionId = (
+  value
+) => {
+  return normalizeValue(
+    value
+  ).replace(
+    /[\s_]+/g,
+    "-"
+  );
+};
+
+const REGION_NAME_MAP =
+  new Map(
+    REGIONS.map(
+      (region) => [
+        normalizeRegionId(
+          region.id
+        ),
+        region.name,
+      ]
+    )
+  );
+
+const getRegionName = (
+  regionId
+) => {
+  const normalizedRegionId =
+    normalizeRegionId(
+      regionId
+    );
+
+  if (!normalizedRegionId) {
+    return "";
+  }
+
+  return (
+    REGION_NAME_MAP.get(
+      normalizedRegionId
+    ) ||
+    normalizedRegionId
+      .split("-")
+      .map(
+        (part) =>
+          part.charAt(0).toUpperCase() +
+          part.slice(1)
+      )
+      .join(" ")
+  );
+};
+
+const getOrganizationId = (
+  organization
+) => {
+  return (
+    organization?.organizationId ||
+    organization?.id ||
+    ""
+  );
+};
+
+/*
+ * A company user can see its own organization and organizations below it.
+ *
+ * ancestorIds is the preferred relationship for deep hierarchies.
+ * parentId and rootEnterpriseId support existing organization records.
+ */
+const belongsToOrganizationHierarchy = (
+  organization,
+  parentOrganizationId
+) => {
+  if (!parentOrganizationId) {
+    return false;
+  }
+
+  const organizationId =
+    getOrganizationId(
+      organization
+    );
+
+  const ancestorIds =
+    Array.isArray(
+      organization?.ancestorIds
+    )
+      ? organization.ancestorIds
+      : [];
+
+  return (
+    organizationId ===
+      parentOrganizationId ||
+    organization?.parentId ===
+      parentOrganizationId ||
+    organization?.rootEnterpriseId ===
+      parentOrganizationId ||
+    ancestorIds.includes(
+      parentOrganizationId
+    )
   );
 };
 
@@ -1082,6 +1189,36 @@ const Overviews = () => {
     };
   }, []);
 
+  const organizationMap =
+    useMemo(() => {
+      return new Map(
+        organizations.map(
+          (organization) => [
+            getOrganizationId(
+              organization
+            ),
+            organization,
+          ]
+        )
+      );
+    }, [
+      organizations,
+    ]);
+
+  const currentOrganization =
+    useMemo(() => {
+      return (
+        organizationMap.get(
+          currentUserProfile
+            ?.organizationId
+        ) ||
+        null
+      );
+    }, [
+      currentUserProfile,
+      organizationMap,
+    ]);
+
   const isMinistryUser =
     useMemo(() => {
       const role =
@@ -1089,36 +1226,27 @@ const Overviews = () => {
           currentUserProfile?.role
         );
 
-      const organizationType =
+      const organizationCategory =
         normalizeStatus(
-          currentUserProfile?.organizationType
+          currentOrganization
+            ?.organizationCategory ||
+          currentOrganization
+            ?.category ||
+          currentUserProfile
+            ?.organizationType
         );
 
       return (
+        organizationCategory ===
+          "ministry" ||
         role ===
           "ministry" ||
         role ===
-          "ministry_admin" ||
-        organizationType ===
-          "ministry"
+          "ministry_admin"
       );
     }, [
+      currentOrganization,
       currentUserProfile,
-    ]);
-
-  const organizationMap =
-    useMemo(() => {
-      return new Map(
-        organizations.map(
-          (organization) => [
-            organization.organizationId ||
-              organization.id,
-            organization,
-          ]
-        )
-      );
-    }, [
-      organizations,
     ]);
 
   const userMap =
@@ -1154,87 +1282,79 @@ const Overviews = () => {
   const visibleOrganizations =
     useMemo(() => {
       if (
-        !currentUserProfile
+        !currentUserProfile ||
+        !currentOrganization
       ) {
         return [];
       }
 
-      const userSector =
-        normalizeValue(
-          currentUserProfile.sector
-        );
-
       const userOrganizationId =
-        currentUserProfile.organizationId;
+        getOrganizationId(
+          currentOrganization
+        );
 
       const userCompanyId =
         normalizeValue(
+          currentOrganization.companyId ||
           currentUserProfile.companyId
         );
+
+      const userIsEnterprise =
+        normalizeStatus(
+          currentOrganization.type ||
+          currentOrganization
+            .organizationType
+        ) ===
+        "enterprise";
 
       if (
         isMinistryUser
       ) {
+        /*
+         * Ministry users see every operator organization and all children.
+         *
+         * Region and sector do not reduce the ministry's visibility.
+         */
         return organizations.filter(
-          (organization) => {
-            const organizationSector =
-              normalizeValue(
-                organization.sector
-              );
-
-            const category =
-              normalizeStatus(
-                organization.organizationCategory ||
-                  organization.type
-              );
-
-            const isCompanyOrganization =
-              ![
-                "ministry",
-              ].includes(
-                category
-              );
-
-            return (
-              isCompanyOrganization &&
-              (
-                !userSector ||
-                organizationSector ===
-                  userSector
-              )
-            );
-          }
+          (organization) =>
+            normalizeStatus(
+              organization
+                .organizationCategory ||
+              organization.category
+            ) !==
+            "ministry"
         );
       }
 
       return organizations.filter(
         (organization) => {
-          const organizationId =
-            organization.organizationId ||
-            organization.id;
+          if (
+            belongsToOrganizationHierarchy(
+              organization,
+              userOrganizationId
+            )
+          ) {
+            return true;
+          }
 
-          const rootEnterpriseId =
-            organization.rootEnterpriseId;
-
-          const organizationCompanyId =
+          /*
+           * companyId is only a compatibility fallback for enterprise
+           * users. Child-organization users must not receive sibling data.
+           */
+          return (
+            userIsEnterprise &&
+            Boolean(
+              userCompanyId
+            ) &&
             normalizeValue(
               organization.companyId
-            );
-
-          return (
-            organizationId ===
-              userOrganizationId ||
-            rootEnterpriseId ===
-              userOrganizationId ||
-            (
-              userCompanyId &&
-              organizationCompanyId ===
-                userCompanyId
-            )
+            ) ===
+              userCompanyId
           );
         }
       );
     }, [
+      currentOrganization,
       currentUserProfile,
       isMinistryUser,
       organizations,
@@ -1256,18 +1376,23 @@ const Overviews = () => {
   const visibleReports =
     useMemo(() => {
       if (
-        !currentUserProfile
+        !currentUserProfile ||
+        !currentOrganization
       ) {
         return [];
       }
 
-      const userSector =
-        normalizeValue(
-          currentUserProfile.sector
-        );
+      const userIsEnterprise =
+        normalizeStatus(
+          currentOrganization.type ||
+          currentOrganization
+            .organizationType
+        ) ===
+        "enterprise";
 
       const userCompanyId =
         normalizeValue(
+          currentOrganization.companyId ||
           currentUserProfile.companyId
         );
 
@@ -1282,22 +1407,23 @@ const Overviews = () => {
           }
 
           /*
-           * These fallbacks keep older report tasks visible when they
-           * were created before organization hierarchy fields were added.
+           * Ministry users can review every operator report.
+           *
+           * Firestore security rules must enforce the same permission;
+           * client-side filtering alone is not database security.
            */
           if (
             isMinistryUser
           ) {
-            return (
-              !userSector ||
-              normalizeValue(
-                report.sector
-              ) ===
-                userSector
-            );
+            return true;
           }
 
+          /*
+           * Supports older enterprise reports created before hierarchy
+           * identifiers were copied onto the report document.
+           */
           return (
+            userIsEnterprise &&
             Boolean(
               userCompanyId
             ) &&
@@ -1309,6 +1435,7 @@ const Overviews = () => {
         }
       );
     }, [
+      currentOrganization,
       currentUserProfile,
       isMinistryUser,
       reportSubmissions,
@@ -1401,6 +1528,13 @@ const Overviews = () => {
                 report.submittedById
             );
 
+          const regionId =
+            normalizeRegionId(
+              report.regionId ||
+              organization.regionId ||
+              enterprise.regionId
+            );
+
           return {
             ...report,
 
@@ -1423,11 +1557,18 @@ const Overviews = () => {
               enterprise.normalizedName ||
               organization.normalizedName,
 
+            /*
+             * regionId is read from the Firestore organization record
+             * and used as the stable grouping key for regional reporting.
+             */
+            regionId,
+
             region:
+              getRegionName(
+                regionId
+              ) ||
               report.regionName ||
               report.region ||
-              organization.regionName ||
-              organization.region ||
               "",
 
             submittedByName:
@@ -2106,84 +2247,240 @@ const Overviews = () => {
 
   const regionalPerformance =
     useMemo(() => {
-      const regions =
+      const reportsByRegion =
         new Map();
 
-      latestSnapshotReports.forEach(
+      enrichedReports.forEach(
         (report) => {
-          const regionName =
-            report.region ||
-            "";
+          const regionId =
+            normalizeRegionId(
+              report.regionId
+            );
 
-          if (!regionName) {
+          if (!regionId) {
             return;
           }
 
-          const region =
-            regions.get(
-              regionName
-            ) || {
-              region:
-                regionName,
-              reportsExpected: 0,
-              reportsSubmitted: 0,
-              productionToday: 0,
-              operators:
-                new Set(),
-            };
+          const existingReports =
+            reportsByRegion.get(
+              regionId
+            ) ||
+            [];
 
-          region.reportsExpected +=
-            1;
-
-          region.operators.add(
-            report.enterprise?.name ||
-              report.organizationName
+          existingReports.push(
+            report
           );
 
-          if (
-            SUBMITTED_REPORT_STATUSES.has(
-              normalizeStatus(
-                report.status
-              )
-            )
-          ) {
-            region.reportsSubmitted +=
-              1;
-
-            region.productionToday +=
-              toNumber(
-                report.calculatedMetrics
-                  .total_volume_sold
-              );
-          }
-
-          regions.set(
-            regionName,
-            region
+          reportsByRegion.set(
+            regionId,
+            existingReports
           );
         }
       );
 
-      return Array.from(
-        regions.values()
-      ).map(
-        (region) => ({
-          ...region,
-          complianceRate:
-            calculateSubmissionCompliance({
-              reportsSubmitted:
-                region.reportsSubmitted,
-              reportsExpected:
-                region.reportsExpected,
-            }),
-          operators:
-            Array.from(
-              region.operators
-            ),
-        })
+      /*
+       * Include every region assigned to an organization in the current
+       * user's visibility scope, even when no report has been submitted.
+       */
+      const visibleRegionIds =
+        new Set(
+          visibleOrganizations
+            .map(
+              (organization) =>
+                normalizeRegionId(
+                  organization.regionId
+                )
+            )
+            .filter(Boolean)
+        );
+
+      reportsByRegion.forEach(
+        (
+          _regionReports,
+          regionId
+        ) => {
+          visibleRegionIds.add(
+            regionId
+          );
+        }
       );
+
+      const regionOrder =
+        new Map(
+          REGIONS.map(
+            (
+              region,
+              index
+            ) => [
+              normalizeRegionId(
+                region.id
+              ),
+              index,
+            ]
+          )
+        );
+
+      return Array.from(
+        visibleRegionIds
+      )
+        .map(
+          (regionId) => {
+            const regionReports =
+              reportsByRegion.get(
+                regionId
+              ) ||
+              [];
+
+            /*
+             * Each region keeps its own latest submitted production date.
+             *
+             * This prevents a region from appearing blank merely because
+             * another region submitted a newer report.
+             */
+            const productionReports =
+              regionReports.filter(
+                (report) =>
+                  SUBMITTED_REPORT_STATUSES.has(
+                    normalizeStatus(
+                      report.status
+                    )
+                  ) &&
+                  report.reportDate &&
+                  toNumber(
+                    report.calculatedMetrics
+                      .total_volume_sold
+                  ) >
+                    0
+              );
+
+            const latestRegionDate =
+              productionReports
+                .map(
+                  (report) =>
+                    report.reportDate
+                )
+                .sort(
+                  (
+                    first,
+                    second
+                  ) =>
+                    second -
+                    first
+                )[0] ||
+              null;
+
+            const regionSnapshotReports =
+              latestRegionDate
+                ? regionReports.filter(
+                    (report) =>
+                      report.reportDate &&
+                      isSameDay(
+                        report.reportDate,
+                        latestRegionDate
+                      )
+                  )
+                : [];
+
+            const submittedRegionReports =
+              regionSnapshotReports.filter(
+                (report) =>
+                  SUBMITTED_REPORT_STATUSES.has(
+                    normalizeStatus(
+                      report.status
+                    )
+                  )
+              );
+
+            const production =
+              submittedRegionReports.reduce(
+                (
+                  total,
+                  report
+                ) =>
+                  total +
+                  toNumber(
+                    report.calculatedMetrics
+                      .total_volume_sold
+                  ),
+                0
+              );
+
+            const operators =
+              new Set(
+                submittedRegionReports.map(
+                  (report) =>
+                    report.enterprise?.name ||
+                    report.organizationName
+                )
+              );
+
+            return {
+              regionId,
+
+              region:
+                getRegionName(
+                  regionId
+                ),
+
+              hasData:
+                Boolean(
+                  latestRegionDate
+                ),
+
+              lastReportedDate:
+                latestRegionDate,
+
+              lastReportedDateLabel:
+                formatReportingDate(
+                  latestRegionDate
+                ),
+
+              reportsExpected:
+                regionSnapshotReports.length,
+
+              reportsSubmitted:
+                submittedRegionReports.length,
+
+              production,
+
+              complianceRate:
+                regionSnapshotReports.length
+                  ? calculateSubmissionCompliance({
+                      reportsSubmitted:
+                        submittedRegionReports.length,
+                      reportsExpected:
+                        regionSnapshotReports.length,
+                    })
+                  : null,
+
+              operators:
+                Array.from(
+                  operators
+                ).filter(Boolean),
+            };
+          }
+        )
+        .sort(
+          (
+            first,
+            second
+          ) =>
+            (
+              regionOrder.get(
+                first.regionId
+              ) ??
+              999
+            ) -
+            (
+              regionOrder.get(
+                second.regionId
+              ) ??
+              999
+            )
+        );
     }, [
-      latestSnapshotReports,
+      enrichedReports,
+      visibleOrganizations,
     ]);
 
   const updatedAt =
@@ -3010,13 +3307,7 @@ const Overviews = () => {
         </div>
 
         <div className="mb-8">
-          <SectionHeader
-            description={
-              latestProductionDateLabel
-                ? `Latest available regional reporting snapshot · ${latestProductionDateLabel}`
-                : "Regional performance will appear when submitted reports include region information."
-            }
-          >
+          <SectionHeader description="Performance is grouped using each organization's Firestore regionId.">
             Regional Performance
           </SectionHeader>
 
@@ -3030,17 +3321,27 @@ const Overviews = () => {
                     }
                     className="p-5"
                   >
-                    <div className="flex items-center justify-between gap-3">
-                      <h3 className="text-sm font-semibold text-slate-900">
-                        {region.region}
-                      </h3>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-semibold text-slate-900">
+                          {region.region}
+                        </h3>
+
+                        <p className="mt-1 text-[11px] text-slate-400">
+                          {region.lastReportedDateLabel
+                            ? `Last reported ${region.lastReportedDateLabel}`
+                            : "No reports submitted yet"}
+                        </p>
+                      </div>
 
                       <span
-                        className="h-2 w-2 rounded-full"
+                        className="mt-1 h-2 w-2 rounded-full"
                         style={{
                           backgroundColor:
-                            region.complianceRate >=
-                            80
+                            !region.hasData
+                              ? "#CBD5E1"
+                              : region.complianceRate >=
+                                80
                               ? FOREST
                               : region.complianceRate >=
                                 50
@@ -3057,10 +3358,11 @@ const Overviews = () => {
                         </span>
 
                         <span className="text-sm font-medium tabular-nums text-slate-900">
-                          {formatNumber(
-                            region.productionToday
-                          )}{" "}
-                          L
+                          {region.hasData
+                            ? `${formatNumber(
+                                region.production
+                              )} L`
+                            : "—"}
                         </span>
                       </div>
 
@@ -3073,8 +3375,10 @@ const Overviews = () => {
                           className="text-sm font-semibold tabular-nums"
                           style={{
                             color:
-                              region.complianceRate >=
-                              80
+                              !region.hasData
+                                ? "#94A3B8"
+                                : region.complianceRate >=
+                                  80
                                 ? FOREST
                                 : region.complianceRate >=
                                   50
@@ -3082,9 +3386,11 @@ const Overviews = () => {
                                 : BURGUNDY,
                           }}
                         >
-                          {formatPercentage(
-                            region.complianceRate
-                          )}
+                          {region.hasData
+                            ? formatPercentage(
+                                region.complianceRate
+                              )
+                            : "—"}
                         </span>
                       </div>
 
@@ -3108,7 +3414,7 @@ const Overviews = () => {
             </div>
           ) : (
             <Card className="p-5">
-              <EmptyState message="Regional performance will appear when reports include region information" />
+              <EmptyState message="Regional performance will appear when visible organizations have a regionId" />
             </Card>
           )}
         </div>
