@@ -47,7 +47,8 @@ import {
 } from "../../lib/companies";
 
 import {
-  calculateSubmissionCompliance,
+  calculateOnTimeCompliance,
+  calculateSubmissionCompletion,
   calculateSubmissionMetrics,
   calculateWorkforcePercentages,
 } from "../../lib/calculation-metrics";
@@ -73,6 +74,7 @@ const COMPANY_FUEL_PRICES_COLLECTION =
 const SUBMITTED_REPORT_STATUSES =
   new Set([
     "submitted",
+    "submitted_late",
     "under_review",
     "pending_review",
     "approved",
@@ -377,7 +379,14 @@ const getReportDate = (
   );
 };
 
-const getSubmittedAt = (
+/*
+ * Returns only a real submission timestamp.
+ *
+ * updatedAt cannot be used to decide timeliness because the scheduler also
+ * updates overdue reports. Treating that timestamp as submittedAt would make
+ * an unsubmitted overdue report appear to have been submitted late.
+ */
+const getActualSubmittedAt = (
   report
 ) => {
   return (
@@ -386,11 +395,108 @@ const getSubmittedAt = (
     ) ||
     toDate(
       report?.submissionTime
+    )
+  );
+};
+
+/*
+ * Used for sorting and data-freshness labels after a report is known to
+ * have been submitted.
+ */
+const getSubmittedAt = (
+  report
+) => {
+  return (
+    getActualSubmittedAt(
+      report
     ) ||
     toDate(
       report?.updatedAt
     ) ||
     getReportDate(
+      report
+    )
+  );
+};
+
+const getDeadlineAt = (
+  report
+) => {
+  return (
+    toDate(
+      report?.deadlineAt
+    ) ||
+    toDate(
+      report?.dueAt
+    ) ||
+    toDate(
+      report?.windowClosesAt
+    )
+  );
+};
+
+const isReportSubmitted = (
+  report
+) => {
+  return (
+    SUBMITTED_REPORT_STATUSES.has(
+      normalizeStatus(
+        report?.status
+      )
+    ) ||
+    Boolean(
+      getActualSubmittedAt(
+        report
+      )
+    )
+  );
+};
+
+const isReportSubmittedLate = (
+  report
+) => {
+  if (
+    report?.wasSubmittedLate ===
+    true
+  ) {
+    return true;
+  }
+
+  if (
+    normalizeStatus(
+      report?.status
+    ) ===
+    "submitted_late"
+  ) {
+    return true;
+  }
+
+  const submittedAt =
+    getActualSubmittedAt(
+      report
+    );
+
+  const deadlineAt =
+    getDeadlineAt(
+      report
+    );
+
+  return Boolean(
+    submittedAt &&
+    deadlineAt &&
+    submittedAt >
+      deadlineAt
+  );
+};
+
+const isReportSubmittedOnTime = (
+  report
+) => {
+  return (
+    isReportSubmitted(
+      report
+    ) &&
+    !isReportSubmittedLate(
       report
     )
   );
@@ -424,16 +530,9 @@ const isReportEligibleForCompliance = (
     return false;
   }
 
-  const isSubmitted =
-    SUBMITTED_REPORT_STATUSES.has(
-      status
-    );
-
   const deadline =
-    toDate(
-      report?.deadlineAt ||
-      report?.dueAt ||
-      report?.windowClosesAt
+    getDeadlineAt(
+      report
     );
 
   const deadlineHasPassed =
@@ -444,7 +543,9 @@ const isReportEligibleForCompliance = (
     );
 
   return (
-    isSubmitted ||
+    isReportSubmitted(
+      report
+    ) ||
     deadlineHasPassed ||
     status ===
       "overdue"
@@ -1388,12 +1489,12 @@ const OperatorsTab = ({
 
     const submittedToday =
       expectedToday.filter(
-        (report) =>
-          SUBMITTED_REPORT_STATUSES.has(
-            normalizeStatus(
-              report.status
-            )
-          )
+        isReportSubmitted
+      );
+
+    const submittedLateToday =
+      submittedToday.filter(
+        isReportSubmittedLate
       );
 
     const petrolVolumeToday =
@@ -1470,12 +1571,17 @@ const OperatorsTab = ({
 
     const complianceSubmittedReports =
       complianceEligibleReports.filter(
-        (report) =>
-          SUBMITTED_REPORT_STATUSES.has(
-            normalizeStatus(
-              report.status
-            )
-          )
+        isReportSubmitted
+      );
+
+    const complianceOnTimeReports =
+      complianceEligibleReports.filter(
+        isReportSubmittedOnTime
+      );
+
+    const complianceLateReports =
+      complianceEligibleReports.filter(
+        isReportSubmittedLate
       );
 
     const reportsExpected =
@@ -1484,9 +1590,25 @@ const OperatorsTab = ({
     const reportsSubmitted =
       complianceSubmittedReports.length;
 
-    const compliance =
-      calculateSubmissionCompliance({
+    const reportsSubmittedOnTime =
+      complianceOnTimeReports.length;
+
+    const reportsSubmittedLate =
+      complianceLateReports.length;
+
+    const submissionCompletion =
+      calculateSubmissionCompletion({
         reportsSubmitted,
+        reportsExpected,
+      });
+
+    /*
+     * The existing compliance property now represents on-time compliance.
+     * Late submissions improve completion but do not improve this score.
+     */
+    const compliance =
+      calculateOnTimeCompliance({
+        reportsSubmittedOnTime,
         reportsExpected,
       });
 
@@ -1501,12 +1623,7 @@ const OperatorsTab = ({
 
     scopedReports
       .filter(
-        (report) =>
-          SUBMITTED_REPORT_STATUSES.has(
-            normalizeStatus(
-              report.status
-            )
-          )
+        isReportSubmitted
       )
       .forEach(
         (report) => {
@@ -1596,12 +1713,7 @@ const OperatorsTab = ({
 
     const submittedScopedReports =
       scopedReports.filter(
-        (report) =>
-          SUBMITTED_REPORT_STATUSES.has(
-            normalizeStatus(
-              report.status
-            )
-          )
+        isReportSubmitted
       );
 
     /*
@@ -1921,12 +2033,12 @@ const OperatorsTab = ({
 
             const childSubmitted =
               childExpected.filter(
-                (report) =>
-                  SUBMITTED_REPORT_STATUSES.has(
-                    normalizeStatus(
-                      report.status
-                    )
-                  )
+                isReportSubmitted
+              );
+
+            const childSubmittedLate =
+              childSubmitted.filter(
+                isReportSubmittedLate
               );
 
             const latestSubmission =
@@ -1974,7 +2086,10 @@ const OperatorsTab = ({
               status =
                 childSubmitted.length ===
                 childExpected.length
-                  ? "submitted"
+                  ? childSubmittedLate.length >
+                    0
+                    ? "submitted_late"
+                    : "submitted"
                   : childSubmitted.length >
                       0
                     ? "partial"
@@ -2015,6 +2130,8 @@ const OperatorsTab = ({
               production,
               submissionsToday:
                 `${childSubmitted.length}/${childExpected.length}`,
+              submissionsLateToday:
+                childSubmittedLate.length,
             };
           }
         );
@@ -2046,7 +2163,10 @@ const OperatorsTab = ({
       status =
         submittedToday.length ===
         expectedToday.length
-          ? "submitted"
+          ? submittedLateToday.length >
+            0
+            ? "submitted_late"
+            : "submitted"
           : submittedToday.length >
               0
             ? "partial"
@@ -2130,18 +2250,26 @@ const OperatorsTab = ({
       productionDataDate,
       productionIsCarriedForward,
 
-      compliance,
-
       /*
-       * OperatorDetail reads these cumulative totals and recalculates the
-       * displayed percentage with the shared compliance helper.
+       * Compliance is the on-time score. Submission completion is retained
+       * separately because late reports still provide required ministry data.
        */
+      compliance,
+      submissionCompletion,
+
       complianceSummary: {
         reportsSubmitted,
+        reportsSubmittedOnTime,
+        reportsSubmittedLate,
         reportsExpected,
+        submissionCompletion,
+        onTimeCompliance:
+          compliance,
       },
 
       reportsSubmitted,
+      reportsSubmittedOnTime,
+      reportsSubmittedLate,
       reportsExpected,
 
       /*
@@ -2209,10 +2337,16 @@ const OperatorsTab = ({
             : "Calculated from today's submitted volumes"
           : "No calculated revenue available",
 
-      complianceCaption:
+      submissionCompletionCaption:
         reportsExpected >
         0
           ? `${reportsSubmitted} of ${reportsExpected} due reports submitted`
+          : "No completed reporting obligations yet",
+
+      complianceCaption:
+        reportsExpected >
+        0
+          ? `${reportsSubmittedOnTime} of ${reportsExpected} due reports submitted on time`
           : "No completed reporting obligations yet",
 
       updatedAt:
@@ -2757,7 +2891,7 @@ const OperatorsTab = ({
                 </th>
 
                 <SortHeader
-                  label="Compliance"
+                  label="On-time Compliance"
                   sortKey="compliance"
                   activeSortKey={
                     sortKey
@@ -3015,13 +3149,20 @@ const OperatorsTab = ({
 
                                   <p className="mt-0.5 text-[10px] text-slate-400">
                                     {formatNumber(
-                                      operator.reportsSubmitted
+                                      operator.reportsSubmittedOnTime
                                     )}{" "}
-                                    of{" "}
+                                    on time ·{" "}
                                     {formatNumber(
-                                      operator.reportsExpected
+                                      operator.reportsSubmittedLate
                                     )}{" "}
-                                    due
+                                    late
+                                  </p>
+
+                                  <p className="mt-0.5 text-[10px] text-slate-400">
+                                    {formatNumber(
+                                      operator.submissionCompletion,
+                                      1
+                                    )}% completion
                                   </p>
                                 </div>
                               )

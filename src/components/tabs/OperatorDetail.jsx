@@ -29,7 +29,8 @@ import {
 } from "../../lib/util";
 
 import {
-  calculateSubmissionCompliance,
+  calculateOnTimeCompliance,
+  calculateSubmissionCompletion,
 } from "../../lib/calculation-metrics";
 
 import {
@@ -554,16 +555,12 @@ const OperatorDetail = ({
     0;
 
   /*
-   * Reporting compliance is cumulative, not based on the latest report.
+   * Reporting performance is cumulative across this operator and all
+   * child organizations.
    *
-   * OperatorsTab should pass all reports that were due across this
-   * operator and its child organizations as:
-   *
-   * complianceSummary.reportsExpected
-   * complianceSummary.reportsSubmitted
-   *
-   * The direct report fields are retained as aliases so the data object
-   * can also use reportsExpected and reportsSubmitted at its top level.
+   * Submission completion measures whether the ministry eventually
+   * received the data. On-time compliance measures whether it arrived
+   * by the deadline.
    */
   const complianceSummary =
     operator.complianceSummary ||
@@ -583,9 +580,29 @@ const OperatorDetail = ({
     ) ||
     0;
 
-  const compliance =
-    calculateSubmissionCompliance({
+  const reportsSubmittedOnTime =
+    Number(
+      complianceSummary.reportsSubmittedOnTime ??
+      operator.reportsSubmittedOnTime
+    ) ||
+    0;
+
+  const reportsSubmittedLate =
+    Number(
+      complianceSummary.reportsSubmittedLate ??
+      operator.reportsSubmittedLate
+    ) ||
+    0;
+
+  const submissionCompletion =
+    calculateSubmissionCompletion({
       reportsSubmitted,
+      reportsExpected,
+    });
+
+  const onTimeCompliance =
+    calculateOnTimeCompliance({
+      reportsSubmittedOnTime,
       reportsExpected,
     });
 
@@ -674,7 +691,7 @@ const OperatorDetail = ({
         </div>
       </div>
 
-      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <KpiCard
           label="Latest Production"
           value={
@@ -714,24 +731,24 @@ const OperatorDetail = ({
         />
 
         <KpiCard
-          label="Compliance"
+          label="Submission Completion"
           value={
             reportsExpected >
             0 ? (
               <span
                 style={{
                   color:
-                    compliance >=
+                    submissionCompletion >=
                     80
                       ? "#166534"
-                      : compliance >=
+                      : submissionCompletion >=
                         50
                       ? "#B7791F"
                       : "#9F1239",
                 }}
               >
                 {`${formatNumber(
-                  compliance,
+                  submissionCompletion,
                   1
                 )}%`}
               </span>
@@ -746,7 +763,53 @@ const OperatorDetail = ({
                   reportsSubmitted
                 )} of ${formatNumber(
                   reportsExpected
-                )} due reports submitted`
+                )} due reports submitted${
+                  reportsSubmittedLate >
+                  0
+                    ? ` · ${formatNumber(
+                        reportsSubmittedLate
+                      )} late`
+                    : ""
+                }`
+              : "No completed reporting obligations yet"
+          }
+          icon={ClipboardList}
+        />
+
+        <KpiCard
+          label="On-time Compliance"
+          value={
+            reportsExpected >
+            0 ? (
+              <span
+                style={{
+                  color:
+                    onTimeCompliance >=
+                    80
+                      ? "#166534"
+                      : onTimeCompliance >=
+                        50
+                      ? "#B7791F"
+                      : "#9F1239",
+                }}
+              >
+                {`${formatNumber(
+                  onTimeCompliance,
+                  1
+                )}%`}
+              </span>
+            ) : (
+              "—"
+            )
+          }
+          caption={
+            reportsExpected >
+            0
+              ? `${formatNumber(
+                  reportsSubmittedOnTime
+                )} of ${formatNumber(
+                  reportsExpected
+                )} due reports submitted on time`
               : "No completed reporting obligations yet"
           }
           icon={ClipboardList}
