@@ -1176,7 +1176,7 @@ const FormBuilder = ({
                         htmlFor="submissionDeadline"
                         className="mb-1.5 block text-xs font-medium text-slate-700"
                       >
-                        Submission Closing Time
+                        Submission Deadline
                       </label>
 
                       <input
@@ -1197,8 +1197,12 @@ const FormBuilder = ({
                         className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
                       />
 
-                      <p className="mt-1 text-[11px] text-slate-500">
-                        Operators cannot submit after this closing time. Missed reports will remain visible as overdue.
+                      <p className="mt-1 text-[11px] leading-4 text-slate-500">
+                        This time determines whether a report is on time. Reports that are not submitted by the deadline remain open as overdue and can still be submitted late.
+                      </p>
+
+                      <p className="mt-1 text-[11px] leading-4 text-slate-500">
+                        Late reports improve submission completion because the Ministry receives the data, but they do not improve on-time compliance.
                       </p>
                     </div>
                   </div>
@@ -1507,7 +1511,7 @@ const FormBuilder = ({
                     </div>
 
                     <p className="mt-3 text-[11px] leading-4 text-slate-500">
-                      Submission compliance and reporting timeliness are calculated automatically from report tasks, deadlines and submission timestamps.
+                      Submission completion, on-time compliance and reporting timeliness are calculated automatically from report tasks, deadlines and submission timestamps.
                     </p>
                   </div>
                 </div>
