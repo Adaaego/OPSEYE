@@ -62,7 +62,8 @@ import {
 
 
 import {
-  calculateSubmissionCompliance,
+  calculateOnTimeCompliance,
+  calculateSubmissionCompletion,
   calculateSubmissionMetrics,
   calculateWorkforcePercentages,
 } from "../../lib/calculation-metrics";
@@ -119,11 +120,23 @@ const KPI_ICON_STYLE = {
 const SUBMITTED_REPORT_STATUSES =
   new Set([
     "submitted",
+    "submitted_late",
     "under_review",
     "pending_review",
     "approved",
     "closed",
     "passed",
+  ]);
+
+/*
+ * Cancelled and withdrawn assignments are not reporting obligations and
+ * should not lower submission completion or on-time compliance.
+ */
+const EXCLUDED_COMPLIANCE_STATUSES =
+  new Set([
+    "cancelled",
+    "canceled",
+    "withdrawn",
   ]);
 
 const normalizeValue = (
@@ -293,6 +306,158 @@ const toDate = (
   )
     ? null
     : date;
+};
+
+
+const getSubmittedAt = (
+  report
+) => {
+  return (
+    toDate(
+      report?.submittedAt
+    ) ||
+    toDate(
+      report?.submissionTime
+    )
+  );
+};
+
+const getDeadlineAt = (
+  report
+) => {
+  return (
+    toDate(
+      report?.deadlineAt
+    ) ||
+    toDate(
+      report?.dueAt
+    ) ||
+    toDate(
+      report?.windowClosesAt
+    )
+  );
+};
+
+/*
+ * A report is considered received when it has a submitted workflow status
+ * or a real submittedAt timestamp.
+ *
+ * submitted_late is deliberately included because the ministry still
+ * receives and uses the data even though the submission was not on time.
+ */
+const isReportSubmitted = (
+  report
+) => {
+  return (
+    SUBMITTED_REPORT_STATUSES.has(
+      normalizeStatus(
+        report?.status
+      )
+    ) ||
+    Boolean(
+      getSubmittedAt(
+        report
+      )
+    )
+  );
+};
+
+const isReportSubmittedLate = (
+  report
+) => {
+  if (
+    report?.wasSubmittedLate ===
+    true
+  ) {
+    return true;
+  }
+
+  if (
+    normalizeStatus(
+      report?.status
+    ) ===
+    "submitted_late"
+  ) {
+    return true;
+  }
+
+  const submittedAt =
+    getSubmittedAt(
+      report
+    );
+
+  const deadlineAt =
+    getDeadlineAt(
+      report
+    );
+
+  return Boolean(
+    submittedAt &&
+    deadlineAt &&
+    submittedAt >
+      deadlineAt
+  );
+};
+
+const isReportSubmittedOnTime = (
+  report
+) => {
+  return (
+    isReportSubmitted(
+      report
+    ) &&
+    !isReportSubmittedLate(
+      report
+    )
+  );
+};
+
+/*
+ * Compliance only includes reporting obligations that can be judged fairly.
+ *
+ * A report enters the denominator once it has been submitted or once its
+ * deadline has passed. Future assignments and open reporting windows do not
+ * reduce the score.
+ */
+const isReportEligibleForCompliance = (
+  report,
+  now = new Date()
+) => {
+  const status =
+    normalizeStatus(
+      report?.status
+    );
+
+  if (
+    EXCLUDED_COMPLIANCE_STATUSES.has(
+      status
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    isReportSubmitted(
+      report
+    )
+  ) {
+    return true;
+  }
+
+  const deadlineAt =
+    getDeadlineAt(
+      report
+    );
+
+  return (
+    status ===
+      "overdue" ||
+    Boolean(
+      deadlineAt &&
+      deadlineAt <=
+        now
+    )
+  );
 };
 
 const startOfDay = (
@@ -1618,17 +1783,13 @@ const Overviews = () => {
             second
           ) => {
             const firstSubmitted =
-              SUBMITTED_REPORT_STATUSES.has(
-                normalizeStatus(
-                  first.status
-                )
+              isReportSubmitted(
+                first
               );
 
             const secondSubmitted =
-              SUBMITTED_REPORT_STATUSES.has(
-                normalizeStatus(
-                  second.status
-                )
+              isReportSubmitted(
+                second
               );
 
             if (
@@ -1658,10 +1819,8 @@ const Overviews = () => {
     useMemo(() => {
       return todaysReports.filter(
         (report) =>
-          SUBMITTED_REPORT_STATUSES.has(
-            normalizeStatus(
-              report.status
-            )
+          isReportSubmitted(
+            report
           )
       );
     }, [
@@ -1680,10 +1839,8 @@ const Overviews = () => {
       return enrichedReports.filter(
         (report) => {
           if (
-            !SUBMITTED_REPORT_STATUSES.has(
-              normalizeStatus(
-                report.status
-              )
+            !isReportSubmitted(
+              report
             ) ||
             !report.reportDate
           ) {
@@ -1924,13 +2081,72 @@ const Overviews = () => {
     todaysReports.length -
     submittedTodaysReports.length;
 
-  const submissionCompliance =
-    calculateSubmissionCompliance({
-      reportsSubmitted:
-        submittedTodaysReports.length,
-      reportsExpected:
-        todaysReports.length,
-    });
+  /*
+   * Submission completion and on-time compliance are cumulative across all
+   * due reports in the current user's visibility scope.
+   *
+   * Late submissions improve completion because the ministry receives the
+   * data, but they do not improve the on-time compliance score.
+   */
+  const complianceSummary =
+    useMemo(() => {
+      const eligibleReports =
+        enrichedReports.filter(
+          (report) =>
+            isReportEligibleForCompliance(
+              report,
+              today
+            )
+        );
+
+      const submittedReports =
+        eligibleReports.filter(
+          isReportSubmitted
+        );
+
+      const onTimeReports =
+        eligibleReports.filter(
+          isReportSubmittedOnTime
+        );
+
+      const lateReports =
+        eligibleReports.filter(
+          isReportSubmittedLate
+        );
+
+      return {
+        reportsExpected:
+          eligibleReports.length,
+
+        reportsSubmitted:
+          submittedReports.length,
+
+        reportsSubmittedOnTime:
+          onTimeReports.length,
+
+        reportsSubmittedLate:
+          lateReports.length,
+
+        submissionCompletion:
+          calculateSubmissionCompletion({
+            reportsSubmitted:
+              submittedReports.length,
+            reportsExpected:
+              eligibleReports.length,
+          }),
+
+        onTimeCompliance:
+          calculateOnTimeCompliance({
+            reportsSubmittedOnTime:
+              onTimeReports.length,
+            reportsExpected:
+              eligibleReports.length,
+          }),
+      };
+    }, [
+      enrichedReports,
+      today,
+    ]);
 
   /*
    * Workforce totals use the latest submitted workforce values from
@@ -1945,10 +2161,8 @@ const Overviews = () => {
       enrichedReports.forEach(
         (report) => {
           if (
-            !SUBMITTED_REPORT_STATUSES.has(
-              normalizeStatus(
-                report.status
-              )
+            !isReportSubmitted(
+              report
             )
           ) {
             return;
@@ -2340,10 +2554,8 @@ const Overviews = () => {
             const productionReports =
               regionReports.filter(
                 (report) =>
-                  SUBMITTED_REPORT_STATUSES.has(
-                    normalizeStatus(
-                      report.status
-                    )
+                  isReportSubmitted(
+                    report
                   ) &&
                   report.reportDate &&
                   toNumber(
@@ -2384,11 +2596,38 @@ const Overviews = () => {
             const submittedRegionReports =
               regionSnapshotReports.filter(
                 (report) =>
-                  SUBMITTED_REPORT_STATUSES.has(
-                    normalizeStatus(
-                      report.status
-                    )
+                  isReportSubmitted(
+                    report
                   )
+              );
+
+            /*
+             * Regional reporting performance is cumulative across every
+             * report that was due in the region, not only the latest
+             * production snapshot.
+             */
+            const eligibleRegionReports =
+              regionReports.filter(
+                (report) =>
+                  isReportEligibleForCompliance(
+                    report,
+                    today
+                  )
+              );
+
+            const submittedEligibleRegionReports =
+              eligibleRegionReports.filter(
+                isReportSubmitted
+              );
+
+            const onTimeRegionReports =
+              eligibleRegionReports.filter(
+                isReportSubmittedOnTime
+              );
+
+            const lateRegionReports =
+              eligibleRegionReports.filter(
+                isReportSubmittedLate
               );
 
             const production =
@@ -2436,20 +2675,36 @@ const Overviews = () => {
                 ),
 
               reportsExpected:
-                regionSnapshotReports.length,
+                eligibleRegionReports.length,
 
               reportsSubmitted:
-                submittedRegionReports.length,
+                submittedEligibleRegionReports.length,
+
+              reportsSubmittedOnTime:
+                onTimeRegionReports.length,
+
+              reportsSubmittedLate:
+                lateRegionReports.length,
 
               production,
 
-              complianceRate:
-                regionSnapshotReports.length
-                  ? calculateSubmissionCompliance({
+              submissionCompletionRate:
+                eligibleRegionReports.length
+                  ? calculateSubmissionCompletion({
                       reportsSubmitted:
-                        submittedRegionReports.length,
+                        submittedEligibleRegionReports.length,
                       reportsExpected:
-                        regionSnapshotReports.length,
+                        eligibleRegionReports.length,
+                    })
+                  : null,
+
+              complianceRate:
+                eligibleRegionReports.length
+                  ? calculateOnTimeCompliance({
+                      reportsSubmittedOnTime:
+                        onTimeRegionReports.length,
+                      reportsExpected:
+                        eligibleRegionReports.length,
                     })
                   : null,
 
@@ -3167,23 +3422,55 @@ const Overviews = () => {
                 backgroundColor: "#F8FAFC",
               }}
             >
-              <p className="text-xs font-medium text-slate-600">
-                Submission compliance:{" "}
-                <span
-                  className="font-semibold"
-                  style={{
-                    color:
-                      submissionCompliance >=
-                      80
-                        ? FOREST
-                        : BURGUNDY,
-                  }}
-                >
-                  {formatPercentage(
-                    submissionCompliance
-                  )}
-                </span>
-              </p>
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs font-medium text-slate-600">
+                <p>
+                  Submission completion:{" "}
+                  <span
+                    className="font-semibold"
+                    style={{
+                      color:
+                        complianceSummary
+                          .submissionCompletion >=
+                        80
+                          ? FOREST
+                          : BURGUNDY,
+                    }}
+                  >
+                    {formatPercentage(
+                      complianceSummary
+                        .submissionCompletion
+                    )}
+                  </span>
+                </p>
+
+                <p>
+                  On-time compliance:{" "}
+                  <span
+                    className="font-semibold"
+                    style={{
+                      color:
+                        complianceSummary
+                          .onTimeCompliance >=
+                        80
+                          ? FOREST
+                          : BURGUNDY,
+                    }}
+                  >
+                    {formatPercentage(
+                      complianceSummary
+                        .onTimeCompliance
+                    )}
+                  </span>
+                </p>
+
+                <p className="text-slate-400">
+                  {formatNumber(
+                    complianceSummary
+                      .reportsSubmittedLate
+                  )}{" "}
+                  submitted late
+                </p>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -3368,14 +3655,30 @@ const Overviews = () => {
 
                       <div className="flex items-baseline justify-between gap-4">
                         <span className="text-xs text-slate-500">
-                          Compliance
+                          Submission completion
+                        </span>
+
+                        <span className="text-sm font-semibold tabular-nums text-slate-900">
+                          {region.reportsExpected >
+                          0
+                            ? formatPercentage(
+                                region.submissionCompletionRate
+                              )
+                            : "—"}
+                        </span>
+                      </div>
+
+                      <div className="flex items-baseline justify-between gap-4">
+                        <span className="text-xs text-slate-500">
+                          On-time compliance
                         </span>
 
                         <span
                           className="text-sm font-semibold tabular-nums"
                           style={{
                             color:
-                              !region.hasData
+                              region.reportsExpected <=
+                              0
                                 ? "#94A3B8"
                                 : region.complianceRate >=
                                   80
@@ -3386,7 +3689,8 @@ const Overviews = () => {
                                 : BURGUNDY,
                           }}
                         >
-                          {region.hasData
+                          {region.reportsExpected >
+                          0
                             ? formatPercentage(
                                 region.complianceRate
                               )
