@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import {
+  AlertTriangle,
   Building2,
   Calendar,
   CheckCircle2,
@@ -142,14 +143,32 @@ const ReportViewer = ({
   const isCompleted =
     reportStatus === "approved" ||
     reportStatus === "submitted" ||
+    reportStatus ===
+      "submitted_late" ||
     hasReachedMinistry;
 
   const isReadOnly = [
     "submitted",
+    "submitted_late",
     "under_review",
     "approved",
     "rejected",
   ].includes(reportStatus);
+
+  /*
+   * Overdue reports stay editable because the Ministry still needs the
+   * information. Submitting them improves completion, but not on-time
+   * compliance.
+   */
+  const isOverdue =
+    reportStatus ===
+    "overdue";
+
+  const wasSubmittedLate =
+    reportStatus ===
+      "submitted_late" ||
+    report?.wasSubmittedLate ===
+      true;
 
   const activeStageIndex =
     Math.min(
@@ -161,12 +180,14 @@ const ReportViewer = ({
     );
 
   const displayStatus =
-    isCompleted
-      ? "Submitted to Ministry"
-      : String(
-          report?.status ||
-            "Pending Submission"
-        ).replace(/_/g, " ");
+    wasSubmittedLate
+      ? "Submitted Late"
+      : isCompleted
+        ? "Submitted to Ministry"
+        : String(
+            report?.status ||
+              "Pending Submission"
+          ).replace(/_/g, " ");
 
   const operatorCompany =
     useMemo(
@@ -294,7 +315,16 @@ const ReportViewer = ({
     onUpdate({
       ...report,
       fieldValues: values,
-      status: "draft",
+
+      /*
+       * An overdue report remains overdue until it is submitted.
+       * Saving progress must not restore it to an ordinary draft and erase
+       * the missed-deadline state used by compliance calculations.
+       */
+      status:
+        isOverdue
+          ? "overdue"
+          : "draft",
     });
   };
 
@@ -564,15 +594,17 @@ const ReportViewer = ({
                 </p>
 
                 <p className="mt-1 text-sm font-medium text-slate-700">
-                  {isCompleted
-                    ? "Organization review completed and submitted to Ministry"
-                    : `Stage ${
-                        activeStageIndex +
-                        1
-                      } of ${
-                        displayStages.length ||
-                        1
-                      }`}
+                  {wasSubmittedLate
+                    ? "Submitted after the deadline and delivered to the Ministry"
+                    : isCompleted
+                      ? "Organization review completed and submitted to Ministry"
+                      : `Stage ${
+                          activeStageIndex +
+                          1
+                        } of ${
+                          displayStages.length ||
+                          1
+                        }`}
                 </p>
               </div>
 
@@ -681,10 +713,35 @@ const ReportViewer = ({
               )}
             </div>
 
+            {isOverdue && (
+              <div className="mt-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+
+                <p>
+                  This report missed its deadline but remains open. It can still be submitted so the Ministry receives the data, but it will be recorded as a late submission and will not improve on-time compliance.
+                </p>
+              </div>
+            )}
+
             {isCompleted && (
-              <div className="mt-4 flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
-                <CheckCircle2 className="h-4 w-4" />
-                Organization review is complete. The report has reached the Ministry for preview and reporting.
+              <div
+                className={`mt-4 flex items-start gap-2 rounded-md px-3 py-2 text-xs font-medium ${
+                  wasSubmittedLate
+                    ? "border border-amber-200 bg-amber-50 text-amber-800"
+                    : "border border-emerald-200 bg-emerald-50 text-emerald-800"
+                }`}
+              >
+                {wasSubmittedLate ? (
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                ) : (
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                )}
+
+                <p>
+                  {wasSubmittedLate
+                    ? "The report reached the Ministry after its deadline. It counts toward submission completion, but not on-time compliance."
+                    : "Organization review is complete. The report has reached the Ministry for preview and reporting."}
+                </p>
               </div>
             )}
 
@@ -985,7 +1042,9 @@ const ReportViewer = ({
 
                 {submitting
                   ? "Submitting..."
-                  : "Submit Report"}
+                  : isOverdue
+                    ? "Submit Late Report"
+                    : "Submit Report"}
               </Button>
             </>
           )}
