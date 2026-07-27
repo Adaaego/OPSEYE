@@ -52,6 +52,7 @@ const STATUS_OPTIONS = [
   "Draft",
   "Pending Submission",
   "Submitted",
+  "Submitted Late",
   "Under Review",
   "Approved",
   "Rejected",
@@ -276,7 +277,14 @@ const getWorkflowStageLabel = (report) => {
   }
 
   if (status === "overdue") {
-    return "Not Started";
+    return "Awaiting Late Submission";
+  }
+
+  if (
+    status === "submitted_late" &&
+    !report.currentStageRole
+  ) {
+    return "Submitted Late";
   }
 
   const workflowStages =
@@ -300,6 +308,7 @@ const getWorkflowStageLabel = (report) => {
 const isReadOnlyReport = (status) => {
   return [
     "submitted",
+    "submitted_late",
     "under_review",
     "approved",
     "rejected",
@@ -389,7 +398,7 @@ const OperatorsReports = ({
     let unsubscribeTemplates = null;
     let unsubscribeSubmissions = null;
 
-    let activeTemplates = [];
+    let formTemplates = [];
     let savedSubmissions = [];
     let activeUserRecord = null;
     let activeOrganization = null;
@@ -411,8 +420,15 @@ const OperatorsReports = ({
         return;
       }
 
+      /*
+       * Saved report tasks must remain visible after their template moves
+       * from active back to scheduled or archived.
+       *
+       * This is essential for overdue reports because the company must still
+       * be able to open the task and submit the required data late.
+       */
       const eligibleTemplates =
-        activeTemplates.filter(
+        formTemplates.filter(
           (formTemplate) =>
             templateMatchesOrganization(
               formTemplate,
@@ -423,6 +439,19 @@ const OperatorsReports = ({
               formTemplate,
               activeUserRecord
             )
+        );
+
+      /*
+       * Only currently active templates may create the legacy client-side
+       * pending fallback below. Historical and scheduled templates are used
+       * solely to enrich saved report submissions.
+       */
+      const activeEligibleTemplates =
+        eligibleTemplates.filter(
+          (formTemplate) =>
+            normalizeStatus(
+              formTemplate.status
+            ) === "active"
         );
 
       const templateMap = new Map(
@@ -570,7 +599,7 @@ const OperatorsReports = ({
         );
 
       const pendingReports =
-        eligibleTemplates
+        activeEligibleTemplates
           .filter(
             (formTemplate) =>
               !existingSubmissionKeys.has(
@@ -625,23 +654,23 @@ const OperatorsReports = ({
                   .submissionDeadline
                   ?.time || "",
                   assignedUserName:
-                  userRecord.fullName ||
-                  userRecord.name ||
-                  currentUser.displayName ||
+                  activeUserRecord.fullName ||
+                  activeUserRecord.name ||
+                  activeCurrentUser.displayName ||
                   "Unknown user",
                 
                 assignedUserEmail:
-                  userRecord.email ||
-                  currentUser.email ||
+                  activeUserRecord.email ||
+                  activeCurrentUser.email ||
                   "",
                 
                 assignedTo:
-                  userRecord.fullName ||
-                  userRecord.name ||
-                  currentUser.displayName ||
+                  activeUserRecord.fullName ||
+                  activeUserRecord.name ||
+                  activeCurrentUser.displayName ||
                   getRoleLabel(
-                    userRecord.role ||
-                      userRecord.userRole
+                    activeUserRecord.role ||
+                      activeUserRecord.userRole
                   ),
               assignedRole:
                 normalizeValue(
@@ -784,19 +813,12 @@ const OperatorsReports = ({
 
                       unsubscribeTemplates =
                         onSnapshot(
-                          query(
-                            collection(
-                              db,
-                              "formTemplates"
-                            ),
-                            where(
-                              "status",
-                              "==",
-                              "active"
-                            )
+                          collection(
+                            db,
+                            "formTemplates"
                           ),
                           (templatesSnapshot) => {
-                            activeTemplates =
+                            formTemplates =
                               templatesSnapshot.docs.map(
                                 (templateDocument) => ({
                                   id:
@@ -967,6 +989,7 @@ const OperatorsReports = ({
       reports.filter((report) =>
         [
           "submitted",
+          "submitted_late",
           "under_review",
         ].includes(
           normalizeStatus(
