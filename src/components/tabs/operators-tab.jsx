@@ -80,6 +80,17 @@ const SUBMITTED_REPORT_STATUSES =
     "passed",
   ]);
 
+/*
+ * Cancelled or withdrawn assignments are not reporting obligations and
+ * must not lower an operator's cumulative compliance score.
+ */
+const EXCLUDED_COMPLIANCE_STATUSES =
+  new Set([
+    "cancelled",
+    "canceled",
+    "withdrawn",
+  ]);
+
 const normalizeValue = (
   value
 ) => {
@@ -382,6 +393,61 @@ const getSubmittedAt = (
     getReportDate(
       report
     )
+  );
+};
+
+/*
+ * Compliance only counts reporting obligations that are complete enough
+ * to judge fairly.
+ *
+ * A report counts in the denominator when:
+ * - it has already been submitted, or
+ * - its submission deadline has passed.
+ *
+ * Future assignments and reports whose window is still open do not reduce
+ * compliance. Cancelled and withdrawn assignments are excluded entirely.
+ */
+const isReportEligibleForCompliance = (
+  report,
+  now = new Date()
+) => {
+  const status =
+    normalizeStatus(
+      report?.status
+    );
+
+  if (
+    EXCLUDED_COMPLIANCE_STATUSES.has(
+      status
+    )
+  ) {
+    return false;
+  }
+
+  const isSubmitted =
+    SUBMITTED_REPORT_STATUSES.has(
+      status
+    );
+
+  const deadline =
+    toDate(
+      report?.deadlineAt ||
+      report?.dueAt ||
+      report?.windowClosesAt
+    );
+
+  const deadlineHasPassed =
+    Boolean(
+      deadline &&
+      deadline <=
+        now
+    );
+
+  return (
+    isSubmitted ||
+    deadlineHasPassed ||
+    status ===
+      "overdue"
   );
 };
 
@@ -1386,12 +1452,42 @@ const OperatorsTab = ({
         0
       );
 
+    /*
+     * Cumulative compliance is calculated across every report that was due
+     * for this operator and its child organizations.
+     *
+     * One missed report therefore causes a proportional reduction instead
+     * of resetting the operator's score to zero for the latest day.
+     */
+    const complianceEligibleReports =
+      scopedReports.filter(
+        (report) =>
+          isReportEligibleForCompliance(
+            report,
+            today
+          )
+      );
+
+    const complianceSubmittedReports =
+      complianceEligibleReports.filter(
+        (report) =>
+          SUBMITTED_REPORT_STATUSES.has(
+            normalizeStatus(
+              report.status
+            )
+          )
+      );
+
+    const reportsExpected =
+      complianceEligibleReports.length;
+
+    const reportsSubmitted =
+      complianceSubmittedReports.length;
+
     const compliance =
       calculateSubmissionCompliance({
-        reportsSubmitted:
-          submittedToday.length,
-        reportsExpected:
-          expectedToday.length,
+        reportsSubmitted,
+        reportsExpected,
       });
 
     /*
@@ -2035,6 +2131,23 @@ const OperatorsTab = ({
       productionIsCarriedForward,
 
       compliance,
+
+      /*
+       * OperatorDetail reads these cumulative totals and recalculates the
+       * displayed percentage with the shared compliance helper.
+       */
+      complianceSummary: {
+        reportsSubmitted,
+        reportsExpected,
+      },
+
+      reportsSubmitted,
+      reportsExpected,
+
+      /*
+       * Today's counts remain separate because they drive the daily
+       * submission status and current operational state.
+       */
       submissionsSubmittedToday:
         submittedToday.length,
       submissionsExpectedToday:
@@ -2097,10 +2210,10 @@ const OperatorsTab = ({
           : "No calculated revenue available",
 
       complianceCaption:
-        expectedToday.length >
+        reportsExpected >
         0
-          ? `${submittedToday.length} of ${expectedToday.length} expected reports submitted`
-          : "No reports scheduled for today",
+          ? `${reportsSubmitted} of ${reportsExpected} due reports submitted`
+          : "No completed reporting obligations yet",
 
       updatedAt:
         latestReportDate,
@@ -2889,12 +3002,29 @@ const OperatorsTab = ({
                           </td>
 
                           <td className="whitespace-nowrap px-4 py-3 tabular-nums">
-                            {operator.submissionsExpectedToday >
+                            {operator.reportsExpected >
                             0
-                              ? `${formatNumber(
-                                  operator.compliance,
-                                  1
-                                )}%`
+                              ? (
+                                <div>
+                                  <p>
+                                    {`${formatNumber(
+                                      operator.compliance,
+                                      1
+                                    )}%`}
+                                  </p>
+
+                                  <p className="mt-0.5 text-[10px] text-slate-400">
+                                    {formatNumber(
+                                      operator.reportsSubmitted
+                                    )}{" "}
+                                    of{" "}
+                                    {formatNumber(
+                                      operator.reportsExpected
+                                    )}{" "}
+                                    due
+                                  </p>
+                                </div>
+                              )
                               : "—"}
                           </td>
 

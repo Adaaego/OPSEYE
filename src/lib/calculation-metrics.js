@@ -555,6 +555,11 @@ export const CALCULATION_SOURCE_METRICS = [
     reportsSubmitted = 0,
     reportsExpected = 0,
   }) => {
+    const submitted =
+      toMetricNumber(
+        reportsSubmitted
+      );
+  
     const expected =
       toMetricNumber(
         reportsExpected
@@ -564,14 +569,29 @@ export const CALCULATION_SOURCE_METRICS = [
       return 0;
     }
   
-    return roundMetricValue(
+    /*
+     * Compliance measures the operator's cumulative reporting behaviour:
+     *
+     * reports submitted
+     * ÷ reports that were due
+     * × 100
+     *
+     * The result is capped between 0% and 100% so invalid or duplicated
+     * counts cannot produce a negative value or a score above 100%.
+     */
+    const compliance =
       (
-        toMetricNumber(
-          reportsSubmitted
-        ) /
+        submitted /
         expected
       ) *
-        100
+      100;
+  
+    return Math.min(
+      100,
+      Math.max(
+        0,
+        compliance
+      )
     );
   };
   

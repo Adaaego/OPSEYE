@@ -29,6 +29,10 @@ import {
 } from "../../lib/util";
 
 import {
+  calculateSubmissionCompliance,
+} from "../../lib/calculation-metrics";
+
+import {
   PageHeader,
   StatusBadge,
   Table,
@@ -549,22 +553,41 @@ const OperatorDetail = ({
     ) ||
     0;
 
-  const submissionsExpected =
+  /*
+   * Reporting compliance is cumulative, not based on the latest report.
+   *
+   * OperatorsTab should pass all reports that were due across this
+   * operator and its child organizations as:
+   *
+   * complianceSummary.reportsExpected
+   * complianceSummary.reportsSubmitted
+   *
+   * The direct report fields are retained as aliases so the data object
+   * can also use reportsExpected and reportsSubmitted at its top level.
+   */
+  const complianceSummary =
+    operator.complianceSummary ||
+    {};
+
+  const reportsExpected =
     Number(
-      operator.submissionsExpectedToday
+      complianceSummary.reportsExpected ??
+      operator.reportsExpected
     ) ||
     0;
 
-  const submissionsSubmitted =
+  const reportsSubmitted =
     Number(
-      operator.submissionsSubmittedToday
+      complianceSummary.reportsSubmitted ??
+      operator.reportsSubmitted
     ) ||
     0;
 
   const compliance =
-    Number(
-      operator.compliance
-    );
+    calculateSubmissionCompliance({
+      reportsSubmitted,
+      reportsExpected,
+    });
 
   const localWorkforceColour =
     !Array.isArray(
@@ -693,11 +716,8 @@ const OperatorDetail = ({
         <KpiCard
           label="Compliance"
           value={
-            submissionsExpected >
-            0 &&
-            Number.isFinite(
-              compliance
-            ) ? (
+            reportsExpected >
+            0 ? (
               <span
                 style={{
                   color:
@@ -720,10 +740,14 @@ const OperatorDetail = ({
             )
           }
           caption={
-            submissionsExpected >
+            reportsExpected >
             0
-              ? `${submissionsSubmitted} of ${submissionsExpected} expected reports submitted`
-              : "No reports scheduled for today"
+              ? `${formatNumber(
+                  reportsSubmitted
+                )} of ${formatNumber(
+                  reportsExpected
+                )} due reports submitted`
+              : "No completed reporting obligations yet"
           }
           icon={ClipboardList}
         />
