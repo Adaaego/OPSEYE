@@ -16,8 +16,12 @@ import {
 import {
   ArrowLeft,
   BarChart3,
+  Banknote,
   Building2,
+  ClipboardList,
   Download,
+  Factory,
+  Users,
 } from "lucide-react";
 
 import {
@@ -25,10 +29,7 @@ import {
 } from "../../lib/util";
 
 import {
-  Card,
-  KpiCard,
   PageHeader,
-  SectionHeader,
   StatusBadge,
   Table,
   EmptyCell,
@@ -38,6 +39,99 @@ import {
 import {
   Button,
 } from "../ui/Button";
+
+/*
+ * Card, SectionHeader and KpiCard are defined locally so the page can
+ * use the same restrained government visual system as the Overview.
+ *
+ * Every KPI icon now uses one pale-blue wrapper and one deep-navy icon.
+ * This avoids decorative colour coding and keeps the dashboard minimal.
+ */
+const NAVY = "#020617";
+const ICON_BLUE = "#C8D5E8";
+
+const KPI_ICON_STYLE = {
+  backgroundColor: ICON_BLUE,
+  color: NAVY,
+};
+
+const Card = ({
+  children,
+  className = "",
+}) => {
+  return (
+    <div
+      className={`rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] ${className}`}
+    >
+      {children}
+    </div>
+  );
+};
+
+const SectionHeader = ({
+  children,
+  description = "",
+}) => {
+  return (
+    <div className="mb-4 flex items-start gap-3">
+      <span
+        className="mt-1 h-4 w-1 shrink-0 rounded-full"
+        style={{
+          backgroundColor: NAVY,
+        }}
+      />
+
+      <div>
+        <h2 className="text-base font-semibold tracking-tight text-slate-900">
+          {children}
+        </h2>
+
+        {description && (
+          <p className="mt-1 text-xs text-slate-500">
+            {description}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const KpiCard = ({
+  label,
+  value,
+  caption,
+  icon: Icon,
+}) => {
+  return (
+    <Card className="p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            {label}
+          </p>
+
+          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+            {value}
+          </p>
+        </div>
+
+        {Icon && (
+          <div
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+            style={KPI_ICON_STYLE}
+          >
+            <Icon className="h-5 w-5" />
+          </div>
+        )}
+      </div>
+
+      <p className="mt-3 text-xs leading-snug text-slate-500">
+        {caption ||
+          "No data available"}
+      </p>
+    </Card>
+  );
+};
 
 /*
  * OperatorDetail receives a completed operator object from OperatorsTab.
@@ -197,8 +291,8 @@ const EmptyState = ({
   message,
 }) => {
   return (
-    <div className="flex min-h-48 flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-6 text-center">
-      <BarChart3 className="mb-3 h-7 w-7 text-slate-400" />
+    <div className="flex min-h-48 flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50/70 px-6 text-center">
+      <BarChart3 className="mb-3 h-7 w-7 text-slate-300" />
 
       <p className="text-sm font-medium text-slate-600">
         {message}
@@ -224,13 +318,19 @@ const OperatorAvatar = ({
           logoUrl
         }
         alt={`${name} logo`}
-        className="h-12 w-12 rounded-xl border border-slate-200 bg-white object-contain p-1"
+        className="h-14 w-14 rounded-xl border border-slate-200 bg-white object-contain p-1.5 shadow-sm"
       />
     );
   }
 
   return (
-    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
+    <div
+      className="flex h-14 w-14 items-center justify-center rounded-xl shadow-sm"
+      style={{
+        backgroundColor: ICON_BLUE,
+        color: NAVY,
+      }}
+    >
       <Building2 className="h-6 w-6" />
     </div>
   );
@@ -480,7 +580,7 @@ const OperatorDetail = ({
     ) &&
     CHART_COLORS?.expat
       ? CHART_COLORS.expat
-      : "#cbd5e1";
+      : "#B7791F";
 
   const handleExport =
     () => {
@@ -496,13 +596,22 @@ const OperatorDetail = ({
         onClick={
           onBack
         }
-        className="mb-4 flex items-center gap-2 text-sm text-slate-500 transition-colors hover:text-navy-900"
+        className="mb-5 flex items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-navy-900"
       >
         <ArrowLeft className="h-4 w-4" />
         Back to Operators
       </button>
 
-      <div className="mb-6 flex items-start gap-3">
+      <p
+        className="mb-2 text-xs font-semibold uppercase tracking-widest"
+        style={{
+          color: NAVY,
+        }}
+      >
+        Operator Profile
+      </p>
+
+      <div className="mb-6 flex items-start gap-4 border-b border-slate-200 pb-6">
         <OperatorAvatar
           name={
             operatorName
@@ -561,6 +670,7 @@ const OperatorDetail = ({
               dieselVolumeToday
             )} L diesel`
           }
+          icon={Factory}
         />
 
         <KpiCard
@@ -577,6 +687,7 @@ const OperatorDetail = ({
             operator.revenueCaption ||
             "Calculated from submitted volumes and linked company fuel prices"
           }
+          icon={Banknote}
         />
 
         <KpiCard
@@ -586,12 +697,27 @@ const OperatorDetail = ({
             0 &&
             Number.isFinite(
               compliance
-            )
-              ? `${formatNumber(
+            ) ? (
+              <span
+                style={{
+                  color:
+                    compliance >=
+                    80
+                      ? "#166534"
+                      : compliance >=
+                        50
+                      ? "#B7791F"
+                      : "#9F1239",
+                }}
+              >
+                {`${formatNumber(
                   compliance,
                   1
-                )}%`
-              : "—"
+                )}%`}
+              </span>
+            ) : (
+              "—"
+            )
           }
           caption={
             submissionsExpected >
@@ -599,6 +725,7 @@ const OperatorDetail = ({
               ? `${submissionsSubmitted} of ${submissionsExpected} expected reports submitted`
               : "No reports scheduled for today"
           }
+          icon={ClipboardList}
         />
 
         <KpiCard
@@ -620,6 +747,7 @@ const OperatorDetail = ({
                 )} workers`
               : null
           }
+          icon={Users}
         />
       </div>
 
@@ -919,7 +1047,7 @@ const OperatorDetail = ({
                     />
                   </td>
 
-                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                  <td className="whitespace-nowrap px-4 py-3 tabular-nums">
                     <EmptyCell
                       value={
                         Number(
@@ -943,40 +1071,54 @@ const OperatorDetail = ({
       </div>
 
       <div className="mb-8">
-        <SectionHeader>
+        <SectionHeader description="Today&apos;s reporting status and production for organizations below this operator.">
           Child Organizations
         </SectionHeader>
 
-        <p className="-mt-2 mb-4 text-xs text-slate-500">
-          Today&apos;s reporting status and production for organizations below this operator.
-        </p>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <Select
+              value={
+                branchRegion
+              }
+              onChange={
+                setBranchRegion
+              }
+              options={
+                regionOptions
+              }
+              placeholder="All Regions"
+            />
 
-        <div className="mb-4 flex flex-wrap items-center gap-3">
-          <Select
-            value={
-              branchRegion
-            }
-            onChange={
-              setBranchRegion
-            }
-            options={
-              regionOptions
-            }
-            placeholder="All Regions"
-          />
+            <Select
+              value={
+                branchStatus
+              }
+              onChange={
+                setBranchStatus
+              }
+              options={
+                branchStatusOptions
+              }
+              placeholder="All Statuses"
+            />
+          </div>
 
-          <Select
-            value={
-              branchStatus
-            }
-            onChange={
-              setBranchStatus
-            }
-            options={
-              branchStatusOptions
-            }
-            placeholder="All Statuses"
-          />
+          <p className="text-xs font-medium text-slate-500">
+            Showing{" "}
+            <span className="font-semibold text-slate-700">
+              {formatNumber(
+                filteredBranches.length
+              )}
+            </span>{" "}
+            of{" "}
+            <span className="font-semibold text-slate-700">
+              {formatNumber(
+                branches.length
+              )}
+            </span>{" "}
+            organizations
+          </p>
         </div>
 
         <Card className="overflow-hidden">
@@ -1040,7 +1182,7 @@ const OperatorDetail = ({
                     />
                   </td>
 
-                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                  <td className="whitespace-nowrap px-4 py-3 tabular-nums">
                     <EmptyCell
                       value={
                         Number(
@@ -1069,13 +1211,13 @@ const OperatorDetail = ({
         </SectionHeader>
 
         <Card className="p-5">
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
-            <div>
-              <p className="text-xs text-slate-500">
+          <div className="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+            <div className="pb-4 sm:pb-0 sm:pr-6">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Local
               </p>
 
-              <p className="mt-1 text-2xl font-medium tabular-nums text-navy-950">
+              <p className="mt-1 text-2xl font-semibold tabular-nums text-navy-950">
                 {hasWorkforceData
                   ? formatNumber(
                       localWorkforce
@@ -1084,12 +1226,12 @@ const OperatorDetail = ({
               </p>
             </div>
 
-            <div>
-              <p className="text-xs text-slate-500">
+            <div className="py-4 sm:py-0 sm:px-6">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Expat
               </p>
 
-              <p className="mt-1 text-2xl font-medium tabular-nums text-navy-950">
+              <p className="mt-1 text-2xl font-semibold tabular-nums text-navy-950">
                 {hasWorkforceData
                   ? formatNumber(
                       expatWorkforce
@@ -1098,12 +1240,17 @@ const OperatorDetail = ({
               </p>
             </div>
 
-            <div>
-              <p className="text-xs text-slate-500">
+            <div className="pt-4 sm:pt-0 sm:pl-6">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Local %
               </p>
 
-              <p className="mt-1 text-2xl font-medium tabular-nums text-navy-950">
+              <p
+                className="mt-1 text-2xl font-semibold tabular-nums"
+                style={{
+                  color: NAVY,
+                }}
+              >
                 {hasWorkforceData
                   ? `${formatNumber(
                       localWorkforcePercentage,
@@ -1138,7 +1285,7 @@ const OperatorDetail = ({
                 </div>
 
                 <div
-                  className="flex items-center justify-center px-2 text-xs font-medium text-slate-600"
+                  className="flex items-center justify-center px-2 text-xs font-medium text-white"
                   style={{
                     width:
                       `${expatWorkforcePercentage}%`,

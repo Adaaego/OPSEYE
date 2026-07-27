@@ -76,6 +76,20 @@ const PAGE_COMPONENTS = {
   settings: AccountSettings,
 };
 
+/*
+ * Matches the dark table headers and bars used in Overview exactly.
+ * Reusing one navy keeps the government platform minimalist and avoids
+ * competing dark shades across the application shell.
+ */
+/*
+ * This is the same deep navy used by the Overview table headers.
+ *
+ * Keeping one exact hexadecimal value prevents Tailwind theme aliases
+ * such as navy-950 from rendering a slightly different shade.
+ */
+const SIDEBAR_NAVY = "#020617";
+const SIDEBAR_ICON = "#C8D5E8";
+
 const SideBar = ({
   currentUser = null,
   initialTab = "overview",
@@ -305,7 +319,7 @@ const SideBar = ({
       <>
         {/* OPSEYE branding */}
         <div
-          className={`border-b border-navy-800 py-5 ${
+          className={`border-b border-white/10 py-5 ${
             isCollapsed ? "px-2" : "px-4"
           }`}
         >
@@ -328,7 +342,7 @@ const SideBar = ({
 
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 py-4">
           {!isCollapsed && (
-            <p className="px-3 pb-2 font-mono text-[10px] uppercase tracking-widest text-navy-400">
+            <p className="px-3 pb-2 font-mono text-[10px] uppercase tracking-widest text-slate-500">
               Menu
             </p>
           )}
@@ -362,19 +376,19 @@ const SideBar = ({
                     : ""
                 } ${
                   isActive
-                    ? "bg-navy-800 text-white"
-                    : "text-navy-300 hover:bg-navy-800/50 hover:text-white"
+                    ? "bg-white/10 text-white"
+                    : "text-slate-300 hover:bg-white/5 hover:text-white"
                 }`}
               >
                 {isActive && (
-                  <span className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r bg-navy-200" />
+                  <span className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r bg-[#C8D5E8]" />
                 )}
 
                 <Icon
                   className={`h-4 w-4 shrink-0 ${
                     isActive
-                      ? "text-navy-200"
-                      : ""
+                      ? "text-[#C8D5E8]"
+                      : "text-slate-400"
                   }`}
                 />
 
@@ -395,7 +409,7 @@ const SideBar = ({
                   !currentValue
               )
             }
-            className="hidden items-center justify-center gap-2 border-t border-navy-800 px-3 py-2 text-xs text-navy-400 transition-colors hover:bg-navy-800/50 hover:text-white lg:flex"
+            className="hidden items-center justify-center gap-2 border-t border-white/10 px-3 py-2 text-xs text-slate-500 transition-colors hover:bg-white/5 hover:text-white lg:flex"
           >
             <ChevronLeft
               className={`h-3.5 w-3.5 transition-transform ${
@@ -412,7 +426,7 @@ const SideBar = ({
         )}
 
         <div
-          className={`border-t border-navy-800 p-2 ${
+          className={`border-t border-white/10 p-2 ${
             isCollapsed ? "px-2" : ""
           }`}
         >
@@ -423,18 +437,18 @@ const SideBar = ({
                 : ""
             }`}
           >
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-navy-700 text-xs font-medium text-navy-200">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-medium text-[#C8D5E8]">
               {userInitial}
             </div>
 
             {!isCollapsed && (
               <div className="min-w-0">
-                <p className="truncate text-xs font-medium text-navy-200">
+                <p className="truncate text-xs font-medium text-slate-200">
                   {userName}
                 </p>
 
                 {userJobTitle && (
-                  <p className="truncate text-[11px] text-navy-400">
+                  <p className="truncate text-[11px] text-slate-500">
                     {userJobTitle}
                   </p>
                 )}
@@ -452,7 +466,7 @@ const SideBar = ({
                   ? "Sign Out"
                   : undefined
               }
-              className={`w-full border-transparent bg-transparent text-navy-300 hover:border-red-500/20 hover:bg-red-500/10 hover:text-red-300 ${
+              className={`w-full border-transparent bg-transparent text-slate-300 hover:border-red-500/20 hover:bg-red-500/10 hover:text-red-300 ${
                 isCollapsed
                   ? "justify-center px-2"
                   : "justify-start gap-3"
@@ -473,16 +487,24 @@ const SideBar = ({
   return (
     <div className="min-h-screen bg-slate-50">
       <aside
-        className={`fixed inset-y-0 left-0 z-30 hidden flex-col border-r border-navy-800 bg-navy-950 transition-all duration-200 lg:flex ${
+        className={`fixed inset-y-0 left-0 z-30 hidden flex-col border-r border-white/10 transition-all duration-200 lg:flex ${
           collapsed ? "w-16" : "w-60"
         }`}
+        style={{
+          backgroundColor: SIDEBAR_NAVY,
+        }}
       >
         <NavContent
           isCollapsed={collapsed}
         />
       </aside>
 
-      <header className="fixed inset-x-0 top-0 z-40 flex items-center justify-between border-b border-navy-800 bg-navy-950 px-4 py-3 lg:hidden">
+      <header
+        className="fixed inset-x-0 top-0 z-40 flex items-center justify-between border-b border-white/10 px-4 py-3 lg:hidden"
+        style={{
+          backgroundColor: SIDEBAR_NAVY,
+        }}
+      >
         <div className="flex items-center gap-3">
           <LogoMark />
 
@@ -496,7 +518,7 @@ const SideBar = ({
           onClick={() =>
             setMobileOpen(true)
           }
-          className="rounded-lg p-2 text-navy-300 transition-colors hover:bg-navy-800 hover:text-white"
+          className="rounded-lg p-2 text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
           aria-label="Open menu"
         >
           <Menu className="h-5 w-5" />
@@ -514,13 +536,18 @@ const SideBar = ({
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
           />
 
-          <aside className="absolute inset-y-0 left-0 flex w-60 flex-col border-r border-navy-800 bg-navy-950">
+          <aside
+            className="absolute inset-y-0 left-0 flex w-60 flex-col border-r border-white/10"
+            style={{
+              backgroundColor: SIDEBAR_NAVY,
+            }}
+          >
             <button
               type="button"
               onClick={() =>
                 setMobileOpen(false)
               }
-              className="absolute right-4 top-4 z-10 rounded-lg p-1.5 text-navy-300 transition-colors hover:bg-navy-800 hover:text-white"
+              className="absolute right-4 top-4 z-10 rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
               aria-label="Close menu"
             >
               <X className="h-5 w-5" />
@@ -567,7 +594,7 @@ const LogoMark = () => {
         cx="24"
         cy="24"
         r="22"
-        stroke="#8ba9cc"
+        stroke={SIDEBAR_ICON}
         strokeWidth="1.5"
         opacity="0.35"
       />
@@ -576,7 +603,7 @@ const LogoMark = () => {
         cx="24"
         cy="24"
         r="15"
-        stroke="#6f91ba"
+        stroke={SIDEBAR_ICON}
         strokeWidth="1.5"
         opacity="0.6"
       />
@@ -585,7 +612,7 @@ const LogoMark = () => {
         cx="24"
         cy="24"
         r="8"
-        stroke="#5d82b0"
+        stroke={SIDEBAR_ICON}
         strokeWidth="1.5"
       />
 
@@ -593,19 +620,19 @@ const LogoMark = () => {
         cx="24"
         cy="24"
         r="2.5"
-        fill="#5d82b0"
+        fill={SIDEBAR_ICON}
       />
 
       <path
         d="M24 24 L24 2"
-        stroke="#8ba9cc"
+        stroke={SIDEBAR_ICON}
         strokeWidth="1.5"
         strokeLinecap="round"
       />
 
       <path
         d="M24 2 L24 5 M24 43 L24 46 M2 24 L5 24 M43 24 L46 24"
-        stroke="#6f91ba"
+        stroke={SIDEBAR_ICON}
         strokeWidth="1.5"
         strokeLinecap="round"
         opacity="0.5"

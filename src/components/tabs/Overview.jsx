@@ -16,8 +16,6 @@ import {
   PieChart,
   Pie,
   Sector,
-  LineChart,
-  Line,
   Legend,
 } from "recharts";
 
@@ -28,7 +26,6 @@ import {
   ClipboardList,
   Factory,
   Loader2,
-  ShieldCheck,
   TrendingDown,
   TrendingUp,
   Users,
@@ -54,6 +51,10 @@ import {
 } from "../../lib/status";
 
 import {
+  CHART_COLORS,
+} from "../../lib/util";
+
+import {
   getCompanyById,
   getCompanyByNormalizedName,
 } from "../../lib/companies";
@@ -77,6 +78,37 @@ const COMPANY_FUEL_PRICES_COLLECTION =
   "companyFuelPrices";
 
 /*
+ * The dashboard uses one restrained navy throughout the government UI.
+ * The sidebar and dark table headers use this same value so the platform
+ * reads as one consistent, minimal visual system.
+ */
+const NAVY = "#0F172A";
+const ICON_BLUE = "#C8D5E8";
+const GOLD = "#B7791F";
+const FOREST = "#166534";
+const BURGUNDY = "#9F1239";
+const SLATE_BLUE = "#3B5171";
+
+const GOV_ACCENT_PALETTE = [
+  NAVY,
+  GOLD,
+  FOREST,
+  BURGUNDY,
+  SLATE_BLUE,
+  "#8A6D3B",
+];
+
+/*
+ * Every KPI icon uses the same pale-blue wrapper and navy icon.
+ * One treatment keeps the summary cards restrained and avoids assigning
+ * decorative colours to individual government reporting metrics.
+ */
+const KPI_ICON_STYLE = {
+  backgroundColor: ICON_BLUE,
+  color: NAVY,
+};
+
+/*
  * These statuses mean an expected report has been submitted.
  *
  * Pending, draft and overdue reports remain outstanding and are
@@ -91,21 +123,6 @@ const SUBMITTED_REPORT_STATUSES =
     "closed",
     "passed",
   ]);
-
-// Brand palette shared across every chart, badge and bar in this
-// dashboard so the reporting view reads as one cohesive system with
-// the sidebar (navy, #0F172A) and its icon tint (#C8D5E8).
-const BRAND_NAVY = "#0F172A";
-const BRAND_ICON_TINT = "#C8D5E8";
-
-const BRAND_CHART_COLORS = [
-  "#0F172A",
-  "#C08829",
-  "#B4552F",
-  "#2F6F62",
-  "#5B7290",
-  "#8A5A16",
-];
 
 const normalizeValue = (
   value
@@ -263,6 +280,31 @@ const formatShortDate = (
   );
 };
 
+/*
+ * Used wherever a value is carried forward from the latest submitted
+ * production report. Showing the date prevents an older value from being
+ * mistaken for a report submitted today.
+ */
+const formatReportingDate = (
+  value
+) => {
+  const date =
+    toDate(value);
+
+  if (!date) {
+    return "";
+  }
+
+  return date.toLocaleDateString(
+    "en-GH",
+    {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }
+  );
+};
+
 const formatTime = (
   value
 ) => {
@@ -344,6 +386,10 @@ const formatPercentage = (
 const getReportDate = (
   report
 ) => {
+  if (!report) {
+    return null;
+  }
+
   return (
     toDate(
       report.reportingDate
@@ -492,9 +538,9 @@ const CustomPieSector = ({
     <Sector
       {...sectorProps}
       fill={
-        BRAND_CHART_COLORS[
+        GOV_ACCENT_PALETTE[
           index %
-            BRAND_CHART_COLORS.length
+            GOV_ACCENT_PALETTE.length
         ]
       }
     />
@@ -507,7 +553,7 @@ const Card = ({
 }) => {
   return (
     <div
-      className={`rounded-2xl border border-slate-200/80 bg-white shadow-sm ${className}`}
+      className={`rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] ${className}`}
     >
       {children}
     </div>
@@ -519,16 +565,25 @@ const SectionHeader = ({
   description = "",
 }) => {
   return (
-    <div className="mb-3">
-      <h2 className="text-base font-semibold tracking-tight text-slate-900">
-        {children}
-      </h2>
+    <div className="mb-4 flex items-start gap-3">
+      <span
+        className="mt-1 h-4 w-1 shrink-0 rounded-full"
+        style={{
+          backgroundColor: NAVY,
+        }}
+      />
 
-      {description && (
-        <p className="mt-1 text-xs text-slate-500">
-          {description}
-        </p>
-      )}
+      <div>
+        <h2 className="text-base font-semibold tracking-tight text-slate-900">
+          {children}
+        </h2>
+
+        {description && (
+          <p className="mt-1 text-xs text-slate-500">
+            {description}
+          </p>
+        )}
+      </div>
     </div>
   );
 };
@@ -537,8 +592,8 @@ const EmptyState = ({
   message,
 }) => {
   return (
-    <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-6 text-center">
-      <BarChart3 className="mb-3 h-7 w-7 text-slate-400" />
+    <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50/70 px-6 text-center">
+      <BarChart3 className="mb-3 h-7 w-7 text-slate-300" />
 
       <p className="text-sm font-medium text-slate-600">
         {message}
@@ -582,7 +637,12 @@ const OperatorLogo = ({
           className="h-full w-full object-contain p-1"
         />
       ) : (
-        <span className="text-[10px] font-bold uppercase text-slate-500">
+        <span
+          className="text-[10px] font-bold uppercase"
+          style={{
+            color: NAVY,
+          }}
+        >
           {name
             .slice(0, 2)}
         </span>
@@ -656,18 +716,12 @@ const KpiCard = ({
   trend,
   trendDirection,
   icon: Icon,
-  accentColor = BRAND_NAVY,
 }) => {
   const isPositiveTrend =
     trendDirection === "up";
 
   return (
-    <Card
-      className="p-5"
-      style={{
-        borderTop: `3px solid ${accentColor}`,
-      }}
-    >
+    <Card className="p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-sm font-medium text-slate-500">
@@ -680,11 +734,8 @@ const KpiCard = ({
         </div>
 
         <div
-          className="flex h-11 w-11 items-center justify-center rounded-xl"
-          style={{
-            backgroundColor: `${accentColor}1A`,
-            color: accentColor,
-          }}
+          className="flex h-10 w-10 items-center justify-center rounded-lg"
+          style={KPI_ICON_STYLE}
         >
           <Icon className="h-5 w-5" />
         </div>
@@ -756,7 +807,7 @@ const ProductionOperatorTick = ({
             cx={-131}
             cy={0}
             r={10}
-            fill="#e2e8f0"
+            fill="#C8D5E8"
           />
 
           <text
@@ -765,7 +816,7 @@ const ProductionOperatorTick = ({
             textAnchor="middle"
             fontSize={8}
             fontWeight={700}
-            fill="#475569"
+            fill="#0F172A"
           >
             {String(
               payload.value
@@ -781,7 +832,7 @@ const ProductionOperatorTick = ({
         y={4}
         textAnchor="start"
         fontSize={12}
-        fill="#475569"
+        fill="#334155"
       >
         {payload.value}
       </text>
@@ -1476,12 +1527,138 @@ const Overviews = () => {
       todaysReports,
     ]);
 
+  /*
+   * Production-related dashboard figures use the latest reporting date
+   * that contains a submitted production value.
+   *
+   * This keeps the dashboard useful between reporting cycles without
+   * pretending that an older value was submitted today.
+   */
+  const submittedProductionReports =
+    useMemo(() => {
+      return enrichedReports.filter(
+        (report) => {
+          if (
+            !SUBMITTED_REPORT_STATUSES.has(
+              normalizeStatus(
+                report.status
+              )
+            ) ||
+            !report.reportDate
+          ) {
+            return false;
+          }
+
+          return (
+            toNumber(
+              report.calculatedMetrics
+                .total_volume_sold
+            ) >
+              0 ||
+            toNumber(
+              report.sourceMetrics
+                .petrol_volume_sold
+            ) >
+              0 ||
+            toNumber(
+              report.sourceMetrics
+                .diesel_volume_sold
+            ) >
+              0
+          );
+        }
+      );
+    }, [
+      enrichedReports,
+    ]);
+
+  const latestProductionDate =
+    useMemo(() => {
+      const reportingDates =
+        submittedProductionReports
+          .map(
+            (report) =>
+              report.reportDate
+          )
+          .filter(Boolean)
+          .sort(
+            (
+              first,
+              second
+            ) =>
+              second -
+              first
+          );
+
+      return (
+        reportingDates[0] ||
+        null
+      );
+    }, [
+      submittedProductionReports,
+    ]);
+
+  /*
+   * Every summary in the latest production snapshot uses the same date.
+   * This makes production totals, revenue, market share and rankings
+   * directly comparable.
+   */
+  const latestProductionReports =
+    useMemo(() => {
+      if (
+        !latestProductionDate
+      ) {
+        return [];
+      }
+
+      return submittedProductionReports.filter(
+        (report) =>
+          isSameDay(
+            report.reportDate,
+            latestProductionDate
+          )
+      );
+    }, [
+      latestProductionDate,
+      submittedProductionReports,
+    ]);
+
+  /*
+   * Regional compliance needs all expected reports from the latest
+   * production date, not only the production reports that were submitted.
+   */
+  const latestSnapshotReports =
+    useMemo(() => {
+      if (
+        !latestProductionDate
+      ) {
+        return [];
+      }
+
+      return enrichedReports.filter(
+        (report) =>
+          report.reportDate &&
+          isSameDay(
+            report.reportDate,
+            latestProductionDate
+          )
+      );
+    }, [
+      enrichedReports,
+      latestProductionDate,
+    ]);
+
+  const latestProductionDateLabel =
+    formatReportingDate(
+      latestProductionDate
+    );
+
   const operatorData =
     useMemo(() => {
       const operators =
         new Map();
 
-      submittedTodaysReports.forEach(
+      latestProductionReports.forEach(
         (report) => {
           const operatorId =
             report.enterpriseId ||
@@ -1569,7 +1746,7 @@ const Overviews = () => {
             first.totalProduction
         );
     }, [
-      submittedTodaysReports,
+      latestProductionReports,
     ]);
 
   const totalDailyProduction =
@@ -1786,34 +1963,17 @@ const Overviews = () => {
 
   const marketShareTrend =
     useMemo(() => {
-      const startDate =
-        startOfDay(
-          today
-        );
-
-      startDate.setDate(
-        startDate.getDate() -
-          6
-      );
-
       const dailyOperatorVolumes =
         new Map();
 
-      enrichedReports.forEach(
+      /*
+       * Group every submitted production report by reporting date.
+       *
+       * The final chart keeps the seven most recent reporting dates,
+       * rather than requiring those dates to fall within the current week.
+       */
+      submittedProductionReports.forEach(
         (report) => {
-          if (
-            !SUBMITTED_REPORT_STATUSES.has(
-              normalizeStatus(
-                report.status
-              )
-            ) ||
-            !report.reportDate ||
-            report.reportDate <
-              startDate
-          ) {
-            return;
-          }
-
           const dateKey =
             formatDateKey(
               report.reportDate
@@ -1866,6 +2026,7 @@ const Overviews = () => {
             first.dateValue -
             second.dateValue
         )
+        .slice(-7)
         .map(
           (dateRecord) => {
             const nationalTotal =
@@ -1920,8 +2081,7 @@ const Overviews = () => {
           }
         );
     }, [
-      enrichedReports,
-      today,
+      submittedProductionReports,
     ]);
 
   const trendOperatorNames =
@@ -1949,7 +2109,7 @@ const Overviews = () => {
       const regions =
         new Map();
 
-      todaysReports.forEach(
+      latestSnapshotReports.forEach(
         (report) => {
           const regionName =
             report.region ||
@@ -2023,7 +2183,7 @@ const Overviews = () => {
         })
       );
     }, [
-      todaysReports,
+      latestSnapshotReports,
     ]);
 
   const updatedAt =
@@ -2091,24 +2251,29 @@ const Overviews = () => {
   }
 
   return (
-    <section className="min-h-full bg-slate-50 p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto max-w-[1680px]">
-        <header className="mb-6 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+    <section className="min-h-full bg-slate-50 p-4 sm:p-6 lg:p-8 xl:p-10">
+      <div className="mx-auto max-w-[1800px]">
+        <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
           <div>
-            <div className="mb-2 flex flex-wrap items-center gap-2">
+            <div className="mb-2 flex flex-wrap items-center gap-3">
+              <span
+                className="h-6 w-1.5 rounded-full"
+                style={{
+                  backgroundColor: NAVY,
+                }}
+              />
+
               <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
                 Overview
               </h1>
 
               <span
-                className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ring-1"
+                className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
                 style={{
-                  backgroundColor: `${BRAND_ICON_TINT}40`,
-                  color: BRAND_NAVY,
-                  borderColor: BRAND_ICON_TINT,
+                  backgroundColor: ICON_BLUE,
+                  color: NAVY,
                 }}
               >
-                <ShieldCheck className="h-3.5 w-3.5" />
                 {scopeLabel}
               </span>
             </div>
@@ -2139,31 +2304,35 @@ const Overviews = () => {
           <KpiCard
             label="Total Daily Production"
             value={
-              totalDailyProduction >
-              0
+              latestProductionReports.length
                 ? `${formatNumber(
                     totalDailyProduction
-                  )} liters`
+                  )} litres`
                 : "—"
             }
-            caption="Petrol and diesel volume reported today"
+            caption={
+              latestProductionDateLabel
+                ? `Last reported ${latestProductionDateLabel}`
+                : "No production data submitted yet"
+            }
             icon={Factory}
-            accentColor={BRAND_NAVY}
           />
 
           <KpiCard
             label="Estimated Daily Revenue"
             value={
-              estimatedDailyRevenue >
-              0
+              latestProductionReports.length
                 ? formatCurrency(
                     estimatedDailyRevenue
                   )
                 : "—"
             }
-            caption="Calculated using each operator's linked NPA prices"
+            caption={
+              latestProductionDateLabel
+                ? `Last reported ${latestProductionDateLabel} · Calculated using linked NPA prices`
+                : "No production data submitted yet"
+            }
             icon={Banknote}
-            accentColor="#C08829"
           />
 
           <KpiCard
@@ -2177,7 +2346,6 @@ const Overviews = () => {
                 : "No reports scheduled for today"
             }
             icon={ClipboardList}
-            accentColor="#B4552F"
           />
 
           <KpiCard
@@ -2195,12 +2363,17 @@ const Overviews = () => {
                 : "No workforce data available"
             }
             icon={Users}
-            accentColor="#2F6F62"
           />
         </div>
 
         <div className="mb-8">
-          <SectionHeader description="Current reported petrol and diesel volume for each operator.">
+          <SectionHeader
+            description={
+              latestProductionDateLabel
+                ? `Latest reported petrol and diesel volume by operator · ${latestProductionDateLabel}`
+                : "No submitted production data is available yet."
+            }
+          >
             Daily Production by Operator
           </SectionHeader>
 
@@ -2228,7 +2401,7 @@ const Overviews = () => {
                 >
                   <CartesianGrid
                     strokeDasharray="3 3"
-                    stroke="#e2e8f0"
+                    stroke="#E2E8F0"
                     horizontal={false}
                   />
 
@@ -2236,7 +2409,7 @@ const Overviews = () => {
                     type="number"
                     tick={{
                       fontSize: 12,
-                      fill: "#64748b",
+                      fill: "#64748B",
                     }}
                     axisLine={false}
                     tickLine={false}
@@ -2310,9 +2483,9 @@ const Overviews = () => {
                             operator.id
                           }
                           fill={
-                            BRAND_CHART_COLORS[
+                            GOV_ACCENT_PALETTE[
                               index %
-                                BRAND_CHART_COLORS.length
+                                GOV_ACCENT_PALETTE.length
                             ]
                           }
                         />
@@ -2328,14 +2501,20 @@ const Overviews = () => {
         </div>
 
         <div className="mb-8">
-          <SectionHeader description="Market share is each operator's percentage of today's total reported volume.">
+          <SectionHeader
+            description={
+              latestProductionDateLabel
+                ? `Each operator's percentage of total reported volume on ${latestProductionDateLabel}.`
+                : "Market share will appear when production data is submitted."
+            }
+          >
             Market Share
           </SectionHeader>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Card className="p-5">
               <h3 className="mb-4 text-sm font-semibold text-slate-900">
-                Today&apos;s Production Share
+                Latest Production Share
               </h3>
 
               {operatorData.length ? (
@@ -2387,7 +2566,7 @@ const Overviews = () => {
                         </span>
 
                         <span className="mt-0.5 text-xs text-slate-500">
-                          litres total
+                          litres reported
                         </span>
                       </div>
                     </div>
@@ -2423,9 +2602,9 @@ const Overviews = () => {
                               className="h-2.5 w-2.5 rounded-sm"
                               style={{
                                 backgroundColor:
-                                  BRAND_CHART_COLORS[
+                                  GOV_ACCENT_PALETTE[
                                     index %
-                                      BRAND_CHART_COLORS.length
+                                      GOV_ACCENT_PALETTE.length
                                   ],
                               }}
                             />
@@ -2448,20 +2627,38 @@ const Overviews = () => {
 
             <div className="flex flex-col gap-4">
               <Card className="p-5">
-                <h3 className="mb-4 text-sm font-semibold text-slate-900">
+                <h3 className="text-sm font-semibold text-slate-900">
                   Market Share Trend
                 </h3>
 
-                {marketShareTrend.length &&
+                <p className="mb-4 mt-1 text-xs text-slate-500">
+                  Each bar represents 100% of reported volume for that day.
+                </p>
+
+                {/*
+                 * A market-share trend needs more than one reporting date.
+                 *
+                 * With only one date, the dashboard already communicates the
+                 * current split through the donut chart and operator ranking.
+                 * Waiting for a second date prevents one isolated point from
+                 * being presented as a trend.
+                 */}
+                {marketShareTrend.length >= 2 &&
                 trendOperatorNames.length ? (
                   <ResponsiveContainer
                     width="100%"
-                    height={230}
+                    height={250}
                   >
-                    <LineChart
+                    <BarChart
                       data={
                         marketShareTrend
                       }
+                      margin={{
+                        top: 8,
+                        right: 8,
+                        left: 0,
+                        bottom: 0,
+                      }}
                     >
                       <CartesianGrid
                         strokeDasharray="3 3"
@@ -2475,12 +2672,22 @@ const Overviews = () => {
                           fontSize: 12,
                           fill: "#64748b",
                         }}
+                        axisLine={{
+                          stroke: "#cbd5e1",
+                        }}
                         tickLine={false}
                       />
 
                       <YAxis
                         domain={[
                           0,
+                          100,
+                        ]}
+                        ticks={[
+                          0,
+                          25,
+                          50,
+                          75,
                           100,
                         ]}
                         tick={{
@@ -2507,47 +2714,85 @@ const Overviews = () => {
                           )}%`,
                           name,
                         ]}
+                        contentStyle={{
+                          fontSize: 13,
+                          borderRadius: 8,
+                          border:
+                            "1px solid #e2e8f0",
+                        }}
                       />
 
                       <Legend
-                        iconType="circle"
+                        iconType="square"
                         iconSize={8}
+                        wrapperStyle={{
+                          fontSize: 12,
+                          paddingTop: 12,
+                        }}
                       />
 
+                      {/*
+                       * All operators share one stackId, so each day forms a
+                       * single 100% bar. This makes changes in relative share
+                       * easier to compare than separate lines or isolated dots.
+                       */}
                       {trendOperatorNames.map(
                         (
                           operator,
                           index
                         ) => (
-                          <Line
+                          <Bar
                             key={
                               operator
                             }
-                            type="monotone"
                             dataKey={
                               operator
                             }
-                            stroke={
-                              BRAND_CHART_COLORS[
+                            name={
+                              operator
+                            }
+                            stackId="marketShare"
+                            fill={
+                              GOV_ACCENT_PALETTE[
                                 index %
-                                  BRAND_CHART_COLORS.length
+                                  GOV_ACCENT_PALETTE.length
                               ]
                             }
-                            strokeWidth={2}
-                            dot={{
-                              r: 3,
-                            }}
-                            activeDot={{
-                              r: 5,
-                            }}
-                            connectNulls
+                            radius={
+                              index ===
+                              trendOperatorNames.length -
+                                1
+                                ? [
+                                    4,
+                                    4,
+                                    0,
+                                    0,
+                                  ]
+                                : [
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                  ]
+                            }
+                            maxBarSize={54}
                           />
                         )
                       )}
-                    </LineChart>
+                    </BarChart>
                   </ResponsiveContainer>
                 ) : (
-                  <EmptyState message="Market share trends will appear here" />
+                  <div className="flex min-h-[250px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50/70 px-6 text-center">
+                    <BarChart3 className="mb-3 h-7 w-7 text-slate-300" />
+
+                    <p className="text-sm font-medium text-slate-600">
+                      Trend not available yet
+                    </p>
+
+                    <p className="mt-1 max-w-sm text-xs text-slate-400">
+                      At least two reporting days are required to compare changes in operator market share.
+                    </p>
+                  </div>
                 )}
               </Card>
 
@@ -2619,10 +2864,24 @@ const Overviews = () => {
           </SectionHeader>
 
           <Card className="overflow-hidden">
-            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+            <div
+              className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5"
+              style={{
+                backgroundColor: "#F8FAFC",
+              }}
+            >
               <p className="text-xs font-medium text-slate-600">
                 Submission compliance:{" "}
-                <span className="font-semibold text-slate-900">
+                <span
+                  className="font-semibold"
+                  style={{
+                    color:
+                      submissionCompliance >=
+                      80
+                        ? FOREST
+                        : BURGUNDY,
+                  }}
+                >
                   {formatPercentage(
                     submissionCompliance
                   )}
@@ -2632,8 +2891,14 @@ const Overviews = () => {
 
             <div className="overflow-x-auto">
               <table className="w-full min-w-[940px]">
-                <thead className="bg-slate-50">
-                  <tr className="border-b border-slate-200">
+                <thead>
+                  <tr
+                    className="border-b"
+                    style={{
+                      backgroundColor: NAVY,
+                      borderColor: NAVY,
+                    }}
+                  >
                     {[
                       "Operator",
                       "Report",
@@ -2648,7 +2913,7 @@ const Overviews = () => {
                           key={
                             heading
                           }
-                          className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
+                          className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-200"
                         >
                           {heading}
                         </th>
@@ -2665,7 +2930,7 @@ const Overviews = () => {
                           key={
                             report.id
                           }
-                          className="border-b border-slate-100 text-sm last:border-0"
+                          className="border-b border-slate-100 text-sm last:border-0 hover:bg-slate-50/70"
                         >
                           <td className="min-w-56 px-4 py-3">
                             <OperatorIdentity
@@ -2745,7 +3010,13 @@ const Overviews = () => {
         </div>
 
         <div className="mb-8">
-          <SectionHeader>
+          <SectionHeader
+            description={
+              latestProductionDateLabel
+                ? `Latest available regional reporting snapshot · ${latestProductionDateLabel}`
+                : "Regional performance will appear when submitted reports include region information."
+            }
+          >
             Regional Performance
           </SectionHeader>
 
@@ -2759,14 +3030,30 @@ const Overviews = () => {
                     }
                     className="p-5"
                   >
-                    <h3 className="text-sm font-semibold text-slate-900">
-                      {region.region}
-                    </h3>
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold text-slate-900">
+                        {region.region}
+                      </h3>
+
+                      <span
+                        className="h-2 w-2 rounded-full"
+                        style={{
+                          backgroundColor:
+                            region.complianceRate >=
+                            80
+                              ? FOREST
+                              : region.complianceRate >=
+                                50
+                              ? GOLD
+                              : BURGUNDY,
+                        }}
+                      />
+                    </div>
 
                     <div className="mt-4 space-y-3">
                       <div className="flex items-baseline justify-between gap-4">
                         <span className="text-xs text-slate-500">
-                          Production today
+                          Production
                         </span>
 
                         <span className="text-sm font-medium tabular-nums text-slate-900">
@@ -2782,7 +3069,19 @@ const Overviews = () => {
                           Compliance
                         </span>
 
-                        <span className="text-sm font-medium tabular-nums text-slate-900">
+                        <span
+                          className="text-sm font-semibold tabular-nums"
+                          style={{
+                            color:
+                              region.complianceRate >=
+                              80
+                                ? FOREST
+                                : region.complianceRate >=
+                                  50
+                                ? GOLD
+                                : BURGUNDY,
+                          }}
+                        >
                           {formatPercentage(
                             region.complianceRate
                           )}
@@ -2970,12 +3269,10 @@ const Overviews = () => {
 
                           <div className="flex h-7 overflow-hidden rounded-md bg-slate-100">
                             <div
-                              className="flex items-center justify-center text-[10px] font-medium text-white"
+                              className="flex items-center justify-center bg-slate-900 text-[10px] font-medium text-white"
                               style={{
                                 width:
                                   `${percentages.localWorkforcePercentage}%`,
-                                backgroundColor:
-                                  BRAND_CHART_COLORS[0],
                               }}
                               title={`${formatNumber(
                                 operator.local
@@ -2990,12 +3287,10 @@ const Overviews = () => {
                             </div>
 
                             <div
-                              className="flex items-center justify-center text-[10px] font-medium text-white"
+                              className="flex items-center justify-center bg-slate-300 text-[10px] font-medium text-slate-700"
                               style={{
                                 width:
                                   `${percentages.expatWorkforcePercentage}%`,
-                                backgroundColor:
-                                  BRAND_CHART_COLORS[1],
                               }}
                               title={`${formatNumber(
                                 operator.expat
