@@ -1,4 +1,6 @@
 
+
+
 import {
   useEffect,
   useMemo,
@@ -24,6 +26,12 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
+
+import {
+  ComposableMap,
+  Geographies,
+  Geography,
+} from "@vnedyalk0v/react19-simple-maps";
 
 import {
   collection,
@@ -65,6 +73,7 @@ import {
 import {
   Button,
 } from "../ui/Button";
+import ghanaRegions from "../../data/ghana-regions.json";
 
 const USERS_COLLECTION =
   "users";
@@ -1595,103 +1604,217 @@ const PeriodFilterControl = ({
   );
 };
 
-const REGION_MAP_POSITIONS = {
-  "upper-west": {
-    x: 145,
-    y: 46,
-  },
-  "upper-east": {
-    x: 255,
-    y: 44,
-  },
-  "north-east": {
-    x: 305,
-    y: 88,
-  },
-  northern: {
-    x: 225,
-    y: 105,
-  },
-  savannah: {
-    x: 150,
-    y: 125,
-  },
-  bono: {
-    x: 155,
-    y: 205,
-  },
-  "bono-east": {
-    x: 220,
-    y: 200,
-  },
-  oti: {
-    x: 305,
-    y: 205,
-  },
-  ahafo: {
-    x: 125,
-    y: 245,
-  },
-  ashanti: {
-    x: 190,
-    y: 268,
-  },
-  eastern: {
-    x: 250,
-    y: 300,
-  },
-  volta: {
-    x: 315,
-    y: 305,
-  },
-  western: {
-    x: 85,
-    y: 342,
-  },
-  "western-north": {
-    x: 92,
-    y: 265,
-  },
-  central: {
-    x: 165,
-    y: 370,
-  },
-  "greater-accra": {
-    x: 255,
-    y: 402,
-  },
+/*
+ * The validated Ghana regions dataset stores the region name in
+ * properties.region. Fallbacks remain for compatibility with other ADM1 files.
+ */
+const getGeographyRegionName = (
+  geography
+) => {
+  const properties =
+    geography?.properties ||
+    {};
+
+  return (
+    properties.region ||
+    properties.shapeName ||
+    properties.name ||
+    properties.NAME_1 ||
+    properties.Region ||
+    properties.ADM1_EN ||
+    ""
+  );
 };
 
-const getMapStatusColor = (
-  status
+const getGeographyRegionId = (
+  geography
 ) => {
-  const normalizedStatus =
-    normalizeStatus(
-      status
-    );
+  return normalizeRegionId(
+    getGeographyRegionName(
+      geography
+    )
+  );
+};
 
-  if (
-    normalizedStatus ===
-    "healthy"
-  ) {
-    return FOREST;
-  }
+/*
+ * React Simple Maps uses d3-geo internally.
+ *
+ * The Ghana GeoJSON uses standard counter-clockwise exterior polygon rings.
+ * d3-geo expects the opposite winding for small spherical polygons. Reverse
+ * every polygon ring once before rendering so Ghana appears as Ghana instead
+ * of the inverse of each region filling the entire SVG.
+ */
+const getRingSignedArea = (
+  ring
+) => {
+  return ring.reduce(
+    (
+      area,
+      point,
+      index
+    ) => {
+      const nextPoint =
+        ring[
+          (
+            index +
+            1
+          ) %
+          ring.length
+        ];
 
-  if (
-    normalizedStatus ===
-    "attention"
-  ) {
-    return GOLD;
-  }
+      return (
+        area +
+        point[0] *
+          nextPoint[1] -
+        nextPoint[0] *
+          point[1]
+      );
+    },
+    0
+  ) / 2;
+};
 
-  if (
-    normalizedStatus ===
-    "critical"
-  ) {
-    return BURGUNDY;
-  }
+const normalizeRingWinding = (
+  ring,
+  shouldBeClockwise
+) => {
+  const isClockwise =
+    getRingSignedArea(
+      ring
+    ) <
+    0;
 
-  return "#94A3B8";
+  return isClockwise ===
+    shouldBeClockwise
+    ? ring
+    : [...ring].reverse();
+};
+
+const normalizePolygonWinding = (
+  polygonCoordinates
+) => {
+  return polygonCoordinates.map(
+    (
+      ring,
+      index
+    ) =>
+      normalizeRingWinding(
+        ring,
+        index === 0
+      )
+  );
+};
+
+const prepareGhanaGeography = (
+  featureCollection
+) => {
+  return {
+    ...featureCollection,
+
+    features:
+      featureCollection.features.map(
+        (feature) => {
+          const geometry =
+            feature.geometry;
+
+          if (
+            geometry?.type ===
+            "Polygon"
+          ) {
+            return {
+              ...feature,
+
+              geometry: {
+                ...geometry,
+
+                coordinates:
+                  normalizePolygonWinding(
+                    geometry.coordinates
+                  ),
+              },
+            };
+          }
+
+          if (
+            geometry?.type ===
+            "MultiPolygon"
+          ) {
+            return {
+              ...feature,
+
+              geometry: {
+                ...geometry,
+
+                coordinates:
+                  geometry.coordinates.map(
+                    normalizePolygonWinding
+                  ),
+              },
+            };
+          }
+
+          return feature;
+        }
+      ),
+  };
+};
+
+const GHANA_REGIONS_GEOGRAPHY =
+  prepareGhanaGeography(
+    ghanaRegions
+  );
+
+/*
+ * Each region receives a permanent identity colour.
+ *
+ * The colour does not represent compliance. Status remains visible in the
+ * hover card and selected-region panel so regions remain distinguishable even
+ * when several share the same status.
+ */
+const REGION_IDENTITY_COLORS = {
+  ahafo:
+    "#0F766E",
+  ashanti:
+    "#D4A017",
+  bono:
+    "#7C3AED",
+  "bono-east":
+    "#EA580C",
+  central:
+    "#2563EB",
+  eastern:
+    "#65A30D",
+  "greater-accra":
+    "#15803D",
+  "north-east":
+    "#DB2777",
+  northern:
+    "#6D28D9",
+  oti:
+    "#0891B2",
+  savannah:
+    "#A16207",
+  "upper-east":
+    "#DC2626",
+  "upper-west":
+    "#4338CA",
+  volta:
+    "#0284C7",
+  western:
+    "#B91C1C",
+  "western-north":
+    "#059669",
+};
+
+const getRegionIdentityColor = (
+  regionId
+) => {
+  return (
+    REGION_IDENTITY_COLORS[
+      regionId
+    ] ||
+    "#64748B"
+  );
 };
 
 const RegionalPerformanceMap = ({
@@ -1699,315 +1822,457 @@ const RegionalPerformanceMap = ({
   periodLabel = "",
   onSelectRegion = () => {},
 }) => {
+  const mapContainerRef =
+    useRef(null);
+
   const [
     hoveredRegionId,
     setHoveredRegionId,
   ] = useState("");
 
-  const highlightedRegion =
-    regions.find(
-      (region) =>
-        region.regionId ===
-        hoveredRegionId
-    ) ||
-    regions[0] ||
-    null;
+  const [
+    hoveredRegionName,
+    setHoveredRegionName,
+  ] = useState("");
 
-  const highlightedPosition =
-    highlightedRegion
-      ? REGION_MAP_POSITIONS[
-          highlightedRegion
-            .regionId
-        ]
+  const [
+    tooltipPosition,
+    setTooltipPosition,
+  ] = useState({
+    x: 24,
+    y: 100,
+  });
+
+  const regionDataMap =
+    useMemo(() => {
+      return new Map(
+        regions.map(
+          (region) => [
+            normalizeRegionId(
+              region.regionId
+            ),
+            region,
+          ]
+        )
+      );
+    }, [
+      regions,
+    ]);
+
+  const hoveredRegion =
+    hoveredRegionId
+      ? regionDataMap.get(
+          hoveredRegionId
+        ) ||
+        null
       : null;
 
-  const maximumVolume =
-    Math.max(
-      ...regions.map(
-        (region) =>
-          toNumber(
-            region.totalVolumeSold
+  /*
+   * Show the first region with data only when the user is not hovering.
+   * A hovered region with no linked operator data must remain a no-data state.
+   */
+  const highlightedRegion =
+    hoveredRegionId
+      ? hoveredRegion
+      : regions[0] ||
+        null;
+
+  const highlightedRegionName =
+    hoveredRegionId
+      ? hoveredRegionName
+      : highlightedRegion?.name ||
+        "";
+
+  const updateTooltipPosition = (
+    event
+  ) => {
+    const bounds =
+      mapContainerRef.current
+        ?.getBoundingClientRect();
+
+    if (!bounds) {
+      return;
+    }
+
+    const tooltipWidth =
+      260;
+
+    const tooltipHeight =
+      180;
+
+    const x =
+      event.clientX -
+      bounds.left +
+      14;
+
+    const y =
+      event.clientY -
+      bounds.top +
+      14;
+
+    setTooltipPosition({
+      x:
+        Math.min(
+          Math.max(
+            x,
+            12
+          ),
+          Math.max(
+            bounds.width -
+              tooltipWidth -
+              12,
+            12
           )
-      ),
-      1
+        ),
+
+      y:
+        Math.min(
+          Math.max(
+            y,
+            78
+          ),
+          Math.max(
+            bounds.height -
+              tooltipHeight -
+              12,
+            78
+          )
+        ),
+    });
+  };
+
+  const handleRegionEnter = (
+    event,
+    geography
+  ) => {
+    const regionId =
+      getGeographyRegionId(
+        geography
+      );
+
+    setHoveredRegionId(
+      regionId
     );
+
+    setHoveredRegionName(
+      getGeographyRegionName(
+        geography
+      )
+    );
+
+    updateTooltipPosition(
+      event
+    );
+  };
+
+  const clearHoveredRegion =
+    () => {
+      setHoveredRegionId(
+        ""
+      );
+
+      setHoveredRegionName(
+        ""
+      );
+    };
 
   return (
     <Card className="overflow-hidden">
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.35fr)_360px]">
-        <div className="relative min-h-[480px] overflow-hidden border-b border-slate-200 bg-slate-50/70 p-5 lg:border-b-0 lg:border-r">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2.35fr)_300px]">
+        <div
+          ref={
+            mapContainerRef
+          }
+          className="relative min-h-[820px] overflow-hidden border-b border-slate-200 bg-slate-50/70 p-5 lg:border-b-0 lg:border-r"
+        >
           <div className="absolute left-5 top-5 z-10">
             <p className="text-sm font-semibold text-slate-900">
               Ghana regional performance
             </p>
 
             <p className="mt-1 text-xs text-slate-500">
-              Hover over a region marker to inspect its performance.
+              Each colour identifies a region. Hover to inspect performance and click to open its details.
             </p>
           </div>
 
-          <svg
-            viewBox="0 0 400 470"
-            className="mx-auto mt-12 h-[390px] w-full max-w-[560px]"
+          <ComposableMap
+            projection="geoMercator"
+            projectionConfig={{
+              center: [
+                -1.2,
+                8.05,
+              ],
+              scale: 6900,
+            }}
+            width={1100}
+            height={820}
+            className="mx-auto mt-6 h-[750px] w-full max-w-[1100px]"
             role="img"
-            aria-label="Schematic performance map of Ghana"
+            aria-label="Interactive regional performance map of Ghana"
           >
-            <path
-              d="M145 20 L244 18 L315 75 L340 150 L327 225 L351 315 L304 425 L222 452 L139 422 L74 353 L55 270 L80 188 L95 102 Z"
-              fill="#E8EEF6"
-              stroke="#CBD5E1"
-              strokeWidth="3"
-            />
-
-            <path
-              d="M104 99 L305 91 M82 190 L330 182 M68 276 L340 275 M103 356 L315 348 M166 34 L144 421 M235 26 L242 445"
-              fill="none"
-              stroke="#D8E1EC"
-              strokeWidth="1.5"
-              strokeDasharray="5 7"
-            />
-
-            {regions.map(
-              (
-                region,
-                index
-              ) => {
-                const position =
-                  REGION_MAP_POSITIONS[
-                    region.regionId
-                  ] || {
-                    x:
-                      115 +
-                      (
-                        index %
-                        4
-                      ) *
-                        58,
-                    y:
-                      130 +
-                      Math.floor(
-                        index /
-                          4
-                      ) *
-                        62,
-                  };
-
-                const relativeVolume =
-                  toNumber(
-                    region.totalVolumeSold
-                  ) /
-                  maximumVolume;
-
-                const radius =
-                  10 +
-                  relativeVolume *
-                    12;
-
-                const selected =
-                  region.regionId ===
-                  highlightedRegion
-                    ?.regionId;
-
-                return (
-                  <g
-                    key={
-                      region.regionId
-                    }
-                    role="button"
-                    tabIndex="0"
-                    onMouseEnter={() =>
-                      setHoveredRegionId(
-                        region.regionId
-                      )
-                    }
-                    onMouseLeave={() =>
-                      setHoveredRegionId(
-                        ""
-                      )
-                    }
-                    onFocus={() =>
-                      setHoveredRegionId(
-                        region.regionId
-                      )
-                    }
-                    onBlur={() =>
-                      setHoveredRegionId(
-                        ""
-                      )
-                    }
-                    onClick={() =>
-                      onSelectRegion(
-                        region
-                      )
-                    }
-                    onKeyDown={(
-                      event
-                    ) => {
-                      if (
-                        event.key ===
-                          "Enter" ||
-                        event.key ===
-                          " "
-                      ) {
-                        onSelectRegion(
-                          region
-                        );
-                      }
-                    }}
-                    className="cursor-pointer outline-none"
-                  >
-                    <circle
-                      cx={
-                        position.x
-                      }
-                      cy={
-                        position.y
-                      }
-                      r={
-                        radius +
-                        (
-                          selected
-                            ? 7
-                            : 3
-                        )
-                      }
-                      fill={
-                        getMapStatusColor(
-                          region.status
-                        )
-                      }
-                      opacity={
-                        selected
-                          ? 0.18
-                          : 0.1
-                      }
-                    />
-
-                    <circle
-                      cx={
-                        position.x
-                      }
-                      cy={
-                        position.y
-                      }
-                      r={
-                        radius
-                      }
-                      fill={
-                        getMapStatusColor(
-                          region.status
-                        )
-                      }
-                      stroke="#FFFFFF"
-                      strokeWidth={
-                        selected
-                          ? 4
-                          : 3
-                      }
-                    />
-
-                    <text
-                      x={
-                        position.x
-                      }
-                      y={
-                        position.y +
-                        4
-                      }
-                      textAnchor="middle"
-                      fontSize="10"
-                      fontWeight="700"
-                      fill="#FFFFFF"
-                    >
-                      {formatNumber(
-                        region.percentageOfNational,
-                        0
-                      )}
-                    </text>
-                  </g>
-                );
+            <Geographies
+              geography={
+                GHANA_REGIONS_GEOGRAPHY
               }
-            )}
-          </svg>
+            >
+              {({
+                geographies,
+              }) =>
+                geographies.map(
+                  (geography) => {
+                    const regionId =
+                      getGeographyRegionId(
+                        geography
+                      );
 
-          {highlightedRegion &&
-            highlightedPosition && (
+                    const region =
+                      regionDataMap.get(
+                        regionId
+                      ) ||
+                      null;
+
+                    const hasData =
+                      Boolean(
+                        region
+                      );
+
+                    const colour =
+                      hasData
+                        ? getRegionIdentityColor(
+                            regionId
+                          )
+                        : "#CBD5E1";
+
+                    return (
+                      <Geography
+                        key={
+                          geography.rsmKey
+                        }
+                        geography={
+                          geography
+                        }
+                        role={
+                          hasData
+                            ? "button"
+                            : "img"
+                        }
+                        tabIndex={
+                          hasData
+                            ? 0
+                            : -1
+                        }
+                        aria-label={
+                          hasData
+                            ? `${getGeographyRegionName(
+                                geography
+                              )}: ${region.status}`
+                            : `${getGeographyRegionName(
+                                geography
+                              )}: no data available`
+                        }
+                        onMouseEnter={(
+                          event
+                        ) =>
+                          handleRegionEnter(
+                            event,
+                            geography
+                          )
+                        }
+                        onMouseMove={
+                          updateTooltipPosition
+                        }
+                        onMouseLeave={
+                          clearHoveredRegion
+                        }
+                        onFocus={(
+                          event
+                        ) =>
+                          handleRegionEnter(
+                            event,
+                            geography
+                          )
+                        }
+                        onBlur={
+                          clearHoveredRegion
+                        }
+                        onClick={() => {
+                          if (
+                            region
+                          ) {
+                            onSelectRegion(
+                              region
+                            );
+                          }
+                        }}
+                        onKeyDown={(
+                          event
+                        ) => {
+                          if (
+                            hasData &&
+                            (
+                              event.key ===
+                                "Enter" ||
+                              event.key ===
+                                " "
+                            )
+                          ) {
+                            event.preventDefault();
+
+                            onSelectRegion(
+                              region
+                            );
+                          }
+                        }}
+                        style={{
+                          default: {
+                            fill:
+                              colour,
+                            fillOpacity:
+                              hasData
+                                ? 0.96
+                                : 0.72,
+                            stroke:
+                              "#FFFFFF",
+                            strokeWidth:
+                              1.7,
+                            outline:
+                              "none",
+                          },
+
+                          hover: {
+                            fill:
+                              colour,
+                            fillOpacity:
+                              1,
+                            stroke:
+                              NAVY,
+                            strokeWidth:
+                              2.8,
+                            outline:
+                              "none",
+                            cursor:
+                              hasData
+                                ? "pointer"
+                                : "default",
+                          },
+
+                          pressed: {
+                            fill:
+                              colour,
+                            fillOpacity:
+                              1,
+                            stroke:
+                              NAVY,
+                            strokeWidth:
+                              3.1,
+                            outline:
+                              "none",
+                          },
+                        }}
+                      />
+                    );
+                  }
+                )
+              }
+            </Geographies>
+          </ComposableMap>
+
+          {hoveredRegionId && (
             <div
-              className="pointer-events-none absolute z-20 min-w-52 rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
+              className="pointer-events-none absolute z-20 w-[250px] rounded-lg border border-slate-200 bg-white p-3 shadow-xl"
               style={{
                 left:
-                  `${Math.min(
-                    (
-                      highlightedPosition.x /
-                      400
-                    ) *
-                      100 +
-                      4,
-                    70
-                  )}%`,
+                  tooltipPosition.x,
                 top:
-                  `${Math.min(
-                    (
-                      highlightedPosition.y /
-                      470
-                    ) *
-                      100 +
-                      5,
-                    72
-                  )}%`,
+                  tooltipPosition.y,
               }}
             >
               <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-semibold text-slate-900">
-                  {highlightedRegion.name}
-                </p>
+                <div className="flex min-w-0 items-center gap-2">
+                  <span
+                    className="h-3 w-3 shrink-0 rounded-sm"
+                    style={{
+                      backgroundColor:
+                        getRegionIdentityColor(
+                          hoveredRegionId
+                        ),
+                    }}
+                  />
+
+                  <p className="truncate text-sm font-semibold text-slate-900">
+                    {hoveredRegionName}
+                  </p>
+                </div>
 
                 <RegionHealthBadge
                   status={
-                    highlightedRegion.status
+                    hoveredRegion
+                      ?.status ||
+                    "No Data"
                   }
                 />
               </div>
 
-              <div className="mt-3 space-y-2 text-xs">
-                <div className="flex justify-between gap-4">
-                  <span className="text-slate-500">
-                    Volume sold
-                  </span>
+              {hoveredRegion ? (
+                <div className="mt-3 space-y-2 text-xs">
+                  <div className="flex justify-between gap-4">
+                    <span className="text-slate-500">
+                      Volume sold
+                    </span>
 
-                  <span className="font-semibold text-slate-900">
-                    {formatNumber(
-                      highlightedRegion.totalVolumeSold
-                    )}{" "}
-                    L
-                  </span>
+                    <span className="font-semibold text-slate-900">
+                      {formatNumber(
+                        hoveredRegion.totalVolumeSold
+                      )}{" "}
+                      L
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between gap-4">
+                    <span className="text-slate-500">
+                      Estimated revenue
+                    </span>
+
+                    <span className="font-semibold text-slate-900">
+                      {formatCurrency(
+                        hoveredRegion.estimatedRevenue
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between gap-4">
+                    <span className="text-slate-500">
+                      Compliance
+                    </span>
+
+                    <span className="font-semibold text-slate-900">
+                      {formatPercentage(
+                        hoveredRegion.complianceRate
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between gap-4">
+                    <span className="text-slate-500">
+                      Reports
+                    </span>
+
+                    <span className="font-semibold text-slate-900">
+                      {formatNumber(
+                        hoveredRegion.reportsSubmitted
+                      )}
+                      /
+                      {formatNumber(
+                        hoveredRegion.reportsExpected
+                      )}
+                    </span>
+                  </div>
                 </div>
-
-                <div className="flex justify-between gap-4">
-                  <span className="text-slate-500">
-                    Compliance
-                  </span>
-
-                  <span className="font-semibold text-slate-900">
-                    {formatPercentage(
-                      highlightedRegion.complianceRate
-                    )}
-                  </span>
-                </div>
-
-                <div className="flex justify-between gap-4">
-                  <span className="text-slate-500">
-                    Local workforce
-                  </span>
-
-                  <span className="font-semibold text-slate-900">
-                    {formatPercentage(
-                      highlightedRegion.workforce
-                        ?.localPercentage
-                    )}
-                  </span>
-                </div>
-              </div>
+              ) : (
+                <p className="mt-3 text-xs leading-relaxed text-slate-500">
+                  No data available for this region in the selected period.
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -2021,17 +2286,52 @@ const RegionalPerformanceMap = ({
             {periodLabel}
           </p>
 
-          {highlightedRegion ? (
-            <>
-              <div className="mt-6 flex items-start justify-between gap-4">
+          {hoveredRegionId &&
+          !hoveredRegion ? (
+            <div className="mt-6 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-5">
+              <div className="flex items-center gap-3">
+                <span className="h-4 w-4 rounded bg-slate-300" />
+
                 <div>
                   <p className="text-lg font-semibold text-slate-900">
-                    {highlightedRegion.name}
+                    {highlightedRegionName}
                   </p>
 
-                  <p className="mt-1 text-xs text-slate-500">
-                    Hover another marker or click to open regional details.
+                  <p className="mt-1 text-sm font-medium text-slate-500">
+                    No data available
                   </p>
+                </div>
+              </div>
+
+              <p className="mt-4 text-xs leading-relaxed text-slate-500">
+                This prototype currently displays performance data for Greater Accra, Ashanti and Western where operator records are available.
+              </p>
+            </div>
+          ) : highlightedRegion ? (
+            <>
+              <div className="mt-6 flex items-start justify-between gap-4">
+                <div className="flex min-w-0 items-start gap-3">
+                  <span
+                    className="mt-1 h-4 w-4 shrink-0 rounded"
+                    style={{
+                      backgroundColor:
+                        getRegionIdentityColor(
+                          normalizeRegionId(
+                            highlightedRegion.regionId
+                          )
+                        ),
+                    }}
+                  />
+
+                  <div>
+                    <p className="text-lg font-semibold text-slate-900">
+                      {highlightedRegionName}
+                    </p>
+
+                    <p className="mt-1 text-xs text-slate-500">
+                      Hover over another region or click the map to investigate its performance.
+                    </p>
+                  </div>
                 </div>
 
                 <RegionHealthBadge
@@ -2079,10 +2379,11 @@ const RegionalPerformanceMap = ({
                   },
                   {
                     label:
-                      "Operators",
+                      "Local workforce",
                     value:
-                      formatNumber(
-                        highlightedRegion.operatorCount
+                      formatPercentage(
+                        highlightedRegion.workforce
+                          ?.localPercentage
                       ),
                   },
                 ].map(
@@ -2112,68 +2413,24 @@ const RegionalPerformanceMap = ({
                     highlightedRegion
                   )
                 }
-                className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-slate-900"
+                className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-slate-900 transition-colors hover:text-slate-600"
               >
                 View region details
                 <ChevronRight className="h-4 w-4" />
               </button>
             </>
           ) : (
-            <EmptyState message="Regional map data will appear here" />
+            <EmptyState message="Regional performance data will appear here" />
           )}
 
           <div className="mt-6 border-t border-slate-200 pt-4">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Performance status
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              How to read this map
             </p>
 
-            <div className="flex flex-wrap gap-3 text-xs text-slate-600">
-              {[
-                {
-                  label:
-                    "Healthy",
-                  color:
-                    FOREST,
-                },
-                {
-                  label:
-                    "Attention",
-                  color:
-                    GOLD,
-                },
-                {
-                  label:
-                    "Critical",
-                  color:
-                    BURGUNDY,
-                },
-                {
-                  label:
-                    "No Data",
-                  color:
-                    "#94A3B8",
-                },
-              ].map(
-                (item) => (
-                  <span
-                    key={
-                      item.label
-                    }
-                    className="inline-flex items-center gap-1.5"
-                  >
-                    <span
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{
-                        backgroundColor:
-                          item.color,
-                      }}
-                    />
-
-                    {item.label}
-                  </span>
-                )
-              )}
-            </div>
+            <p className="text-xs leading-relaxed text-slate-500">
+              Greater Accra, Ashanti and Western are the initial working regions for this prototype. Other regions are shown in grey and display “No data available” when hovered.
+            </p>
           </div>
         </div>
       </div>
@@ -4914,7 +5171,7 @@ const Regions = ({
         </div>
 
         <div className="mb-8">
-          <SectionHeader description="Hover over a region marker to compare volume, revenue, compliance and workforce performance geographically.">
+          <SectionHeader description="Hover over Ghana’s regional boundaries to compare production, revenue, compliance and workforce performance by region.">
             Regional Performance Map
           </SectionHeader>
 
