@@ -2311,6 +2311,13 @@ const OperatorsTab = ({
       production6Month,
       reportingHistory,
 
+      /*
+       * OperatorDetail uses these raw enriched records to recalculate every
+       * KPI, chart and table when its reporting filters change.
+       */
+      scopedReports,
+      hierarchyOrganizations,
+
       productionCaption:
         displayedProduction > 0
           ? `${formatNumber(

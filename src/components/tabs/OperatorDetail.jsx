@@ -21,6 +21,8 @@ import {
   ClipboardList,
   Download,
   Factory,
+  Filter,
+  Search,
   Users,
 } from "lucide-react";
 
@@ -269,6 +271,780 @@ const formatUpdatedAt = (
   return `Data as of ${time} · ${day}`;
 };
 
+const normalizeFilterValue = (
+  value
+) => {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+};
+
+const toFilterDate = (
+  value
+) => {
+  if (!value) {
+    return null;
+  }
+
+  if (
+    typeof value?.toDate ===
+    "function"
+  ) {
+    return value.toDate();
+  }
+
+  const date =
+    new Date(value);
+
+  return Number.isNaN(
+    date.getTime()
+  )
+    ? null
+    : date;
+};
+
+const getReportingRecordDate = (
+  report
+) => {
+  /*
+   * Reporting date takes priority. A report submitted late still belongs to
+   * the reporting period it was created for, not the day it was submitted.
+   */
+  return (
+    toFilterDate(
+      report?.reportDate
+    ) ||
+    toFilterDate(
+      report?.reportingDate
+    ) ||
+    toFilterDate(
+      report?.periodStart
+    ) ||
+    toFilterDate(
+      report?.scheduledFor
+    ) ||
+    toFilterDate(
+      report?.submittedAt
+    ) ||
+    toFilterDate(
+      report?.submissionTime
+    ) ||
+    toFilterDate(
+      report?.updatedAt
+    ) ||
+    toFilterDate(
+      report?.createdAt
+    ) ||
+    toFilterDate(
+      report?.date
+    )
+  );
+};
+
+const getPeriodRange = ({
+  period,
+  customStartDate = "",
+  customEndDate = "",
+  now = new Date(),
+}) => {
+  const startOfDay = (
+    value
+  ) => {
+    const date =
+      new Date(value);
+
+    date.setHours(
+      0,
+      0,
+      0,
+      0
+    );
+
+    return date;
+  };
+
+  const endOfDay = (
+    value
+  ) => {
+    const date =
+      new Date(value);
+
+    date.setHours(
+      23,
+      59,
+      59,
+      999
+    );
+
+    return date;
+  };
+
+  const end =
+    endOfDay(
+      now
+    );
+
+  if (
+    period === "all_time"
+  ) {
+    return {
+      start: null,
+      end: null,
+      label: "All time",
+    };
+  }
+
+  if (
+    period === "custom"
+  ) {
+    const customStart =
+      toFilterDate(
+        customStartDate
+      );
+
+    const customEnd =
+      toFilterDate(
+        customEndDate
+      );
+
+    return {
+      start:
+        customStart
+          ? startOfDay(
+              customStart
+            )
+          : null,
+      end:
+        customEnd
+          ? endOfDay(
+              customEnd
+            )
+          : null,
+      label:
+        customStartDate ||
+        customEndDate
+          ? `${customStartDate || "Start"} – ${customEndDate || "Today"}`
+          : "Custom period",
+    };
+  }
+
+  if (
+    period === "today"
+  ) {
+    return {
+      start:
+        startOfDay(
+          now
+        ),
+      end,
+      label: "Today",
+    };
+  }
+
+  if (
+    period ===
+    "current_quarter"
+  ) {
+    return {
+      start:
+        new Date(
+          now.getFullYear(),
+          Math.floor(
+            now.getMonth() /
+              3
+          ) *
+            3,
+          1,
+          0,
+          0,
+          0,
+          0
+        ),
+      end,
+      label:
+        "This quarter",
+    };
+  }
+
+  const numberOfDays =
+    period ===
+    "last_30_days"
+      ? 30
+      : 7;
+
+  const start =
+    startOfDay(
+      now
+    );
+
+  start.setDate(
+    start.getDate() -
+      (
+        numberOfDays -
+        1
+      )
+  );
+
+  return {
+    start,
+    end,
+    label:
+      numberOfDays ===
+      30
+        ? "Last 30 days"
+        : "Last 7 days",
+  };
+};
+
+const isDateWithinPeriod = (
+  report,
+  range
+) => {
+  const date =
+    getReportingRecordDate(
+      report
+    );
+
+  if (
+    !range?.start &&
+    !range?.end
+  ) {
+    return true;
+  }
+
+  if (!date) {
+    return false;
+  }
+
+  return (
+    (
+      !range.start ||
+      date >=
+        range.start
+    ) &&
+    (
+      !range.end ||
+      date <=
+        range.end
+    )
+  );
+};
+
+const normalizeStatus = (
+  value
+) => {
+  return normalizeFilterValue(
+    value
+  ).replace(
+    /[\s-]+/g,
+    "_"
+  );
+};
+
+const toNumber = (
+  value
+) => {
+  const number =
+    Number(value);
+
+  return Number.isFinite(
+    number
+  )
+    ? number
+    : 0;
+};
+
+const SUBMITTED_REPORT_STATUSES =
+  new Set([
+    "submitted",
+    "submitted_late",
+    "under_review",
+    "pending_review",
+    "approved",
+    "closed",
+    "passed",
+  ]);
+
+const EXCLUDED_REPORT_STATUSES =
+  new Set([
+    "cancelled",
+    "canceled",
+    "withdrawn",
+  ]);
+
+const getActualSubmittedAt = (
+  report
+) => {
+  return (
+    toFilterDate(
+      report?.submittedAt
+    ) ||
+    toFilterDate(
+      report?.submissionTime
+    )
+  );
+};
+
+const getDeadlineAt = (
+  report
+) => {
+  return (
+    toFilterDate(
+      report?.deadlineAt
+    ) ||
+    toFilterDate(
+      report?.dueAt
+    ) ||
+    toFilterDate(
+      report?.windowClosesAt
+    )
+  );
+};
+
+const isReportSubmitted = (
+  report
+) => {
+  return (
+    SUBMITTED_REPORT_STATUSES.has(
+      normalizeStatus(
+        report?.status
+      )
+    ) ||
+    Boolean(
+      getActualSubmittedAt(
+        report
+      )
+    )
+  );
+};
+
+const isReportSubmittedLate = (
+  report
+) => {
+  if (
+    report?.wasSubmittedLate ===
+    true ||
+    normalizeStatus(
+      report?.status
+    ) ===
+      "submitted_late"
+  ) {
+    return true;
+  }
+
+  const submittedAt =
+    getActualSubmittedAt(
+      report
+    );
+
+  const deadlineAt =
+    getDeadlineAt(
+      report
+    );
+
+  return Boolean(
+    submittedAt &&
+    deadlineAt &&
+    submittedAt >
+      deadlineAt
+  );
+};
+
+const isReportSubmittedOnTime = (
+  report
+) => {
+  return (
+    isReportSubmitted(
+      report
+    ) &&
+    !isReportSubmittedLate(
+      report
+    )
+  );
+};
+
+const isReportEligibleForCompliance = (
+  report,
+  now = new Date()
+) => {
+  const status =
+    normalizeStatus(
+      report?.status
+    );
+
+  if (
+    EXCLUDED_REPORT_STATUSES.has(
+      status
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    isReportSubmitted(
+      report
+    )
+  ) {
+    return true;
+  }
+
+  const deadlineAt =
+    getDeadlineAt(
+      report
+    );
+
+  return (
+    status ===
+      "overdue" ||
+    Boolean(
+      deadlineAt &&
+      deadlineAt <=
+        now
+    )
+  );
+};
+
+const getReportType = (
+  report
+) => {
+  return (
+    report?.reportType ||
+    report?.reportName ||
+    report?.formName ||
+    report?.templateName ||
+    report?.formSnapshot
+      ?.name ||
+    "Scheduled report"
+  );
+};
+
+const getOrganizationId = (
+  organization
+) => {
+  return (
+    organization
+      ?.organizationId ||
+    organization?.id ||
+    ""
+  );
+};
+
+const formatDate = (
+  value
+) => {
+  const date =
+    toFilterDate(
+      value
+    );
+
+  if (!date) {
+    return "—";
+  }
+
+  return date.toLocaleDateString(
+    "en-GB",
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }
+  );
+};
+
+const formatTime = (
+  value
+) => {
+  const date =
+    toFilterDate(
+      value
+    );
+
+  if (!date) {
+    return "—";
+  }
+
+  return date.toLocaleTimeString(
+    "en-GB",
+    {
+      hour: "2-digit",
+      minute: "2-digit",
+    }
+  );
+};
+
+const buildProductionTrend = (
+  reports,
+  range
+) => {
+  const datedReports =
+    reports
+      .map(
+        (report) => ({
+          report,
+          date:
+            getReportingRecordDate(
+              report
+            ),
+        })
+      )
+      .filter(
+        (record) =>
+          record.date
+      );
+
+  if (
+    datedReports.length ===
+    0
+  ) {
+    return {
+      data: [],
+      title:
+        `Production — ${range.label}`,
+    };
+  }
+
+  const firstDate =
+    range.start ||
+    datedReports
+      .map(
+        (record) =>
+          record.date
+      )
+      .sort(
+        (
+          first,
+          second
+        ) =>
+          first -
+          second
+      )[0];
+
+  const lastDate =
+    range.end ||
+    datedReports
+      .map(
+        (record) =>
+          record.date
+      )
+      .sort(
+        (
+          first,
+          second
+        ) =>
+          second -
+          first
+      )[0];
+
+  const dayCount =
+    Math.max(
+      1,
+      Math.ceil(
+        (
+          lastDate -
+          firstDate
+        ) /
+          86400000
+      ) +
+        1
+    );
+
+  const groupByMonth =
+    dayCount >
+    31;
+
+  const grouped =
+    new Map();
+
+  datedReports.forEach(
+    ({
+      report,
+      date,
+    }) => {
+      const key =
+        groupByMonth
+          ? `${date.getFullYear()}-${String(
+              date.getMonth() +
+                1
+            ).padStart(
+              2,
+              "0"
+            )}`
+          : `${date.getFullYear()}-${String(
+              date.getMonth() +
+                1
+            ).padStart(
+              2,
+              "0"
+            )}-${String(
+              date.getDate()
+            ).padStart(
+              2,
+              "0"
+            )}`;
+
+      const current =
+        grouped.get(
+          key
+        ) ||
+        {
+          date,
+          production: 0,
+        };
+
+      current.production +=
+        toNumber(
+          report
+            ?.calculatedMetrics
+            ?.total_volume_sold
+        );
+
+      grouped.set(
+        key,
+        current
+      );
+    }
+  );
+
+  return {
+    data:
+      Array.from(
+        grouped.entries()
+      )
+        .sort(
+          (
+            [firstKey],
+            [secondKey]
+          ) =>
+            firstKey.localeCompare(
+              secondKey
+            )
+        )
+        .map(
+          (
+            [
+              key,
+              record,
+            ]
+          ) => ({
+            key,
+            day:
+              groupByMonth
+                ? record.date.toLocaleDateString(
+                    "en-GB",
+                    {
+                      month:
+                        "short",
+                      year:
+                        "2-digit",
+                    }
+                  )
+                : record.date.toLocaleDateString(
+                    "en-GB",
+                    {
+                      day:
+                        "2-digit",
+                      month:
+                        "short",
+                    }
+                  ),
+            production:
+              record.production,
+          })
+        ),
+
+    title:
+      groupByMonth
+        ? `Production by Month — ${range.label}`
+        : `Production by Day — ${range.label}`,
+  };
+};
+
+const buildMonthlyTrend = (
+  reports
+) => {
+  const grouped =
+    new Map();
+
+  reports.forEach(
+    (report) => {
+      const date =
+        getReportingRecordDate(
+          report
+        );
+
+      if (!date) {
+        return;
+      }
+
+      const key =
+        `${date.getFullYear()}-${String(
+          date.getMonth() +
+            1
+        ).padStart(
+          2,
+          "0"
+        )}`;
+
+      const current =
+        grouped.get(
+          key
+        ) ||
+        {
+          date,
+          value: 0,
+        };
+
+      current.value +=
+        toNumber(
+          report
+            ?.calculatedMetrics
+            ?.total_volume_sold
+        );
+
+      grouped.set(
+        key,
+        current
+      );
+    }
+  );
+
+  return Array.from(
+    grouped.entries()
+  )
+    .sort(
+      (
+        [firstKey],
+        [secondKey]
+      ) =>
+        firstKey.localeCompare(
+          secondKey
+        )
+    )
+    .map(
+      (
+        [
+          key,
+          record,
+        ]
+      ) => ({
+        key,
+        period:
+          record.date.toLocaleDateString(
+            "en-GB",
+            {
+              month:
+                "short",
+              year:
+                "2-digit",
+            }
+          ),
+        value:
+          record.value,
+      })
+    );
+};
+
+
 const clampPercentage = (
   value
 ) => {
@@ -349,6 +1125,48 @@ const OperatorDetail = ({
   onExport = null,
 }) => {
   const [
+    reportingSearch,
+    setReportingSearch,
+  ] = useState("");
+
+  const [
+    reportingPeriod,
+    setReportingPeriod,
+  ] = useState(
+    "all_time"
+  );
+
+  const [
+    customStartDate,
+    setCustomStartDate,
+  ] = useState("");
+
+  const [
+    customEndDate,
+    setCustomEndDate,
+  ] = useState("");
+
+  const [
+    reportingRegion,
+    setReportingRegion,
+  ] = useState("");
+
+  const [
+    reportingType,
+    setReportingType,
+  ] = useState("");
+
+  const [
+    reportingStatus,
+    setReportingStatus,
+  ] = useState("");
+
+  const [
+    branchSearch,
+    setBranchSearch,
+  ] = useState("");
+
+  const [
     branchRegion,
     setBranchRegion,
   ] = useState("");
@@ -359,63 +1177,774 @@ const OperatorDetail = ({
   ] = useState("");
 
   /*
-   * These values were produced from Firestore inside OperatorsTab.
-   *
-   * Keeping this component prop-driven prevents duplicate Firestore
-   * reads when the user opens an operator.
+   * OperatorsTab passes the already-enriched report records for this operator
+   * and every descendant. Filtering and aggregation happen here so changing
+   * a filter immediately recalculates the entire profile without another
+   * Firestore request.
    */
-  const production7Day =
-    operator?.production7Day ||
-    [];
+  const scopedReports =
+    useMemo(() => {
+      if (
+        Array.isArray(
+          operator?.scopedReports
+        )
+      ) {
+        return operator.scopedReports;
+      }
 
-  const production6Month =
-    operator?.production6Month ||
-    [];
+      /*
+       * Compatibility fallback for an older OperatorsTab. This keeps the
+       * history table usable, but complete KPI filtering requires
+       * operator.scopedReports.
+       */
+      return Array.isArray(
+        operator?.reportingHistory
+      )
+        ? operator.reportingHistory
+        : [];
+    }, [
+      operator,
+    ]);
 
-  const reportingHistory =
-    operator?.reportingHistory ||
-    [];
+  const hierarchyOrganizations =
+    useMemo(() => {
+      return Array.isArray(
+        operator
+          ?.hierarchyOrganizations
+      )
+        ? operator
+            .hierarchyOrganizations
+        : [];
+    }, [
+      operator,
+    ]);
 
-  const branches =
-    operator?.branches ||
-    [];
+  const selectedPeriodRange =
+    useMemo(() => {
+      return getPeriodRange({
+        period:
+          reportingPeriod,
+        customStartDate,
+        customEndDate,
+      });
+    }, [
+      customEndDate,
+      customStartDate,
+      reportingPeriod,
+    ]);
 
-  const workforce =
-    operator?.workforce ||
-    {};
+  const selectedPeriodLabel =
+    selectedPeriodRange.label;
 
   const regionOptions =
     useMemo(() => {
-      if (
-        regions.length >
-        0
-      ) {
-        return regions
-          .map(
-            (region) =>
-              typeof region ===
-              "string"
-                ? region
-                : region.name ||
-                  region.region
-          )
-          .filter(Boolean);
-      }
+      const values = [
+        ...(
+          regions.length >
+          0
+            ? regions.map(
+                (region) =>
+                  typeof region ===
+                  "string"
+                    ? region
+                    : region.name ||
+                      region.region
+              )
+            : []
+        ),
+
+        ...scopedReports.map(
+          (report) =>
+            report.region ||
+            report.organization
+              ?.regionName ||
+            report.organization
+              ?.region
+        ),
+
+        ...hierarchyOrganizations.map(
+          (organization) =>
+            organization.regionName ||
+            organization.region ||
+            organization.country
+        ),
+      ].filter(Boolean);
 
       return [
         ...new Set(
-          branches
+          values
+        ),
+      ].sort(
+        (
+          first,
+          second
+        ) =>
+          String(
+            first
+          ).localeCompare(
+            String(
+              second
+            )
+          )
+      );
+    }, [
+      hierarchyOrganizations,
+      regions,
+      scopedReports,
+    ]);
+
+  const reportingTypeOptions =
+    useMemo(() => {
+      return [
+        ...new Set(
+          scopedReports
             .map(
-              (branch) =>
-                branch.region
+              getReportType
             )
             .filter(Boolean)
         ),
-      ];
+      ].sort(
+        (
+          first,
+          second
+        ) =>
+          String(
+            first
+          ).localeCompare(
+            String(
+              second
+            )
+          )
+      );
     }, [
-      branches,
-      regions,
+      scopedReports,
     ]);
+
+  const reportingStatusOptions =
+    useMemo(() => {
+      return [
+        ...new Set(
+          scopedReports
+            .map(
+              (report) =>
+                report.status
+            )
+            .filter(Boolean)
+        ),
+      ].sort(
+        (
+          first,
+          second
+        ) =>
+          String(
+            first
+          ).localeCompare(
+            String(
+              second
+            )
+          )
+      );
+    }, [
+      scopedReports,
+    ]);
+
+  const filteredScopedReports =
+    useMemo(() => {
+      const normalizedSearch =
+        normalizeFilterValue(
+          reportingSearch
+        );
+
+      return scopedReports.filter(
+        (report) => {
+          const region =
+            report.region ||
+            report.organization
+              ?.regionName ||
+            report.organization
+              ?.region ||
+            "";
+
+          const reportType =
+            getReportType(
+              report
+            );
+
+          const submittedBy =
+            report.submittedByName ||
+            report.submittedBy ||
+            "";
+
+          const matchesSearch =
+            !normalizedSearch ||
+            [
+              reportType,
+              region,
+              report.status,
+              submittedBy,
+              report.organization
+                ?.name,
+            ]
+              .map(
+                normalizeFilterValue
+              )
+              .join(" ")
+              .includes(
+                normalizedSearch
+              );
+
+          const matchesPeriod =
+            isDateWithinPeriod(
+              report,
+              selectedPeriodRange
+            );
+
+          const matchesRegion =
+            !reportingRegion ||
+            region ===
+              reportingRegion;
+
+          const matchesType =
+            !reportingType ||
+            reportType ===
+              reportingType;
+
+          const matchesStatus =
+            !reportingStatus ||
+            normalizeStatus(
+              report.status
+            ) ===
+              normalizeStatus(
+                reportingStatus
+              );
+
+          return (
+            matchesSearch &&
+            matchesPeriod &&
+            matchesRegion &&
+            matchesType &&
+            matchesStatus
+          );
+        }
+      );
+    }, [
+      reportingRegion,
+      reportingSearch,
+      reportingStatus,
+      reportingType,
+      scopedReports,
+      selectedPeriodRange,
+    ]);
+
+  const filteredSummary =
+    useMemo(() => {
+      const submittedReports =
+        filteredScopedReports.filter(
+          isReportSubmitted
+        );
+
+      const petrolVolume =
+        submittedReports.reduce(
+          (
+            total,
+            report
+          ) =>
+            total +
+            toNumber(
+              report
+                ?.sourceMetrics
+                ?.petrol_volume_sold
+            ),
+          0
+        );
+
+      const dieselVolume =
+        submittedReports.reduce(
+          (
+            total,
+            report
+          ) =>
+            total +
+            toNumber(
+              report
+                ?.sourceMetrics
+                ?.diesel_volume_sold
+            ),
+          0
+        );
+
+      const production =
+        submittedReports.reduce(
+          (
+            total,
+            report
+          ) =>
+            total +
+            toNumber(
+              report
+                ?.calculatedMetrics
+                ?.total_volume_sold
+            ),
+          0
+        );
+
+      const revenue =
+        submittedReports.reduce(
+          (
+            total,
+            report
+          ) =>
+            total +
+            toNumber(
+              report
+                ?.calculatedMetrics
+                ?.estimated_daily_revenue
+            ),
+          0
+        );
+
+      const eligibleReports =
+        filteredScopedReports.filter(
+          (report) =>
+            isReportEligibleForCompliance(
+              report
+            )
+        );
+
+      const reportsSubmitted =
+        eligibleReports.filter(
+          isReportSubmitted
+        ).length;
+
+      const reportsSubmittedOnTime =
+        eligibleReports.filter(
+          isReportSubmittedOnTime
+        ).length;
+
+      const reportsSubmittedLate =
+        eligibleReports.filter(
+          isReportSubmittedLate
+        ).length;
+
+      const reportsExpected =
+        eligibleReports.length;
+
+      const latestWorkforceByOrganization =
+        new Map();
+
+      submittedReports.forEach(
+        (report) => {
+          const local =
+            toNumber(
+              report
+                ?.sourceMetrics
+                ?.local_employee_count
+            );
+
+          const expat =
+            toNumber(
+              report
+                ?.sourceMetrics
+                ?.expat_employee_count
+            );
+
+          if (
+            local <= 0 &&
+            expat <= 0
+          ) {
+            return;
+          }
+
+          const organizationId =
+            report.organizationId ||
+            getOrganizationId(
+              report.organization
+            );
+
+          const current =
+            latestWorkforceByOrganization.get(
+              organizationId
+            );
+
+          const reportTime =
+            getReportingRecordDate(
+              report
+            )?.getTime() ||
+            0;
+
+          const currentTime =
+            getReportingRecordDate(
+              current
+            )?.getTime() ||
+            0;
+
+          if (
+            !current ||
+            reportTime >=
+              currentTime
+          ) {
+            latestWorkforceByOrganization.set(
+              organizationId,
+              report
+            );
+          }
+        }
+      );
+
+      const workforceTotals =
+        Array.from(
+          latestWorkforceByOrganization.values()
+        ).reduce(
+          (
+            totals,
+            report
+          ) => ({
+            local:
+              totals.local +
+              toNumber(
+                report
+                  ?.sourceMetrics
+                  ?.local_employee_count
+              ),
+            expat:
+              totals.expat +
+              toNumber(
+                report
+                  ?.sourceMetrics
+                  ?.expat_employee_count
+              ),
+          }),
+          {
+            local: 0,
+            expat: 0,
+          }
+        );
+
+      const workforceTotal =
+        workforceTotals.local +
+        workforceTotals.expat;
+
+      const workforce = {
+        ...workforceTotals,
+        total:
+          workforceTotal,
+        localPercentage:
+          workforceTotal >
+          0
+            ? (
+                workforceTotals.local /
+                workforceTotal
+              ) *
+              100
+            : 0,
+        expatPercentage:
+          workforceTotal >
+          0
+            ? (
+                workforceTotals.expat /
+                workforceTotal
+              ) *
+              100
+            : 0,
+      };
+
+      const reportingHistory =
+        [...filteredScopedReports]
+          .sort(
+            (
+              first,
+              second
+            ) =>
+              (
+                getReportingRecordDate(
+                  second
+                )?.getTime() ||
+                0
+              ) -
+              (
+                getReportingRecordDate(
+                  first
+                )?.getTime() ||
+                0
+              )
+          )
+          .map(
+            (report) => {
+              const submittedAt =
+                getActualSubmittedAt(
+                  report
+                );
+
+              return {
+                ...report,
+                region:
+                  report.region ||
+                  report.organization
+                    ?.regionName ||
+                  report.organization
+                    ?.region ||
+                  "",
+                reportType:
+                  getReportType(
+                    report
+                  ),
+                submittedBy:
+                  report.submittedByName ||
+                  report.submittedBy ||
+                  "",
+                date:
+                  formatDate(
+                    getReportingRecordDate(
+                      report
+                    )
+                  ),
+                time:
+                  formatTime(
+                    submittedAt
+                  ),
+                production:
+                  toNumber(
+                    report
+                      ?.calculatedMetrics
+                      ?.total_volume_sold
+                  ),
+              };
+            }
+          );
+
+      const operatorId =
+        operator?.organizationId ||
+        operator?.id ||
+        "";
+
+      const childOrganizations =
+        hierarchyOrganizations.length >
+        0
+          ? hierarchyOrganizations.filter(
+              (organization) =>
+                getOrganizationId(
+                  organization
+                ) !==
+                  operatorId
+            )
+          : Array.isArray(
+              operator?.branches
+            )
+            ? operator.branches
+            : [];
+
+      const branches =
+        childOrganizations
+          .filter(
+            (organization) => {
+              const region =
+                organization.regionName ||
+                organization.region ||
+                organization.country ||
+                "";
+
+              return (
+                !reportingRegion ||
+                region ===
+                  reportingRegion
+              );
+            }
+          )
+          .map(
+            (organization) => {
+              const organizationId =
+                getOrganizationId(
+                  organization
+                );
+
+              const childReports =
+                filteredScopedReports.filter(
+                  (report) =>
+                    report.organizationId ===
+                      organizationId
+                );
+
+              const childSubmitted =
+                childReports.filter(
+                  isReportSubmitted
+                );
+
+              const latestSubmission =
+                [...childSubmitted].sort(
+                  (
+                    first,
+                    second
+                  ) =>
+                    (
+                      getReportingRecordDate(
+                        second
+                      )?.getTime() ||
+                      0
+                    ) -
+                    (
+                      getReportingRecordDate(
+                        first
+                      )?.getTime() ||
+                      0
+                    )
+                )[0] ||
+                null;
+
+              let status =
+                "no_data";
+
+              if (
+                childReports.length >
+                0
+              ) {
+                if (
+                  childSubmitted.length ===
+                  childReports.length
+                ) {
+                  status =
+                    childSubmitted.some(
+                      isReportSubmittedLate
+                    )
+                      ? "submitted_late"
+                      : "submitted";
+                } else if (
+                  childSubmitted.length >
+                  0
+                ) {
+                  status =
+                    "partial";
+                } else if (
+                  childReports.some(
+                    (report) =>
+                      normalizeStatus(
+                        report.status
+                      ) ===
+                        "overdue"
+                  )
+                ) {
+                  status =
+                    "overdue";
+                } else {
+                  status =
+                    "pending_submission";
+                }
+              }
+
+              return {
+                ...organization,
+                id:
+                  organizationId,
+                branch:
+                  organization.name ||
+                  "Unnamed organization",
+                region:
+                  organization.regionName ||
+                  organization.region ||
+                  organization.country ||
+                  "",
+                status,
+                submittedBy:
+                  latestSubmission
+                    ?.submittedByName ||
+                  latestSubmission
+                    ?.submittedBy ||
+                  "",
+                submissionTime:
+                  formatTime(
+                    getActualSubmittedAt(
+                      latestSubmission
+                    )
+                  ),
+                production:
+                  childSubmitted.reduce(
+                    (
+                      total,
+                      report
+                    ) =>
+                      total +
+                      toNumber(
+                        report
+                          ?.calculatedMetrics
+                          ?.total_volume_sold
+                      ),
+                    0
+                  ),
+              };
+            }
+          );
+
+      const productionTrend =
+        buildProductionTrend(
+          submittedReports,
+          selectedPeriodRange
+        );
+
+      const latestActivityAt =
+        filteredScopedReports
+          .map(
+            (report) =>
+              getReportingRecordDate(
+                report
+              )
+          )
+          .filter(Boolean)
+          .sort(
+            (
+              first,
+              second
+            ) =>
+              second -
+              first
+          )[0] ||
+        null;
+
+      return {
+        petrolVolume,
+        dieselVolume,
+        production,
+        revenue,
+        reportsExpected,
+        reportsSubmitted,
+        reportsSubmittedOnTime,
+        reportsSubmittedLate,
+        workforce,
+        reportingHistory,
+        branches,
+        productionTrend:
+          productionTrend.data,
+        productionTrendTitle:
+          productionTrend.title,
+        monthlyTrend:
+          buildMonthlyTrend(
+            submittedReports
+          ),
+        latestActivityAt,
+      };
+    }, [
+      filteredScopedReports,
+      hierarchyOrganizations,
+      operator,
+      reportingRegion,
+      selectedPeriodRange,
+    ]);
+
+  const production7Day =
+    filteredSummary.productionTrend;
+
+  const production6Month =
+    filteredSummary.monthlyTrend;
+
+  const reportingHistory =
+    filteredSummary.reportingHistory;
+
+  const branches =
+    filteredSummary.branches;
+
+  const workforce =
+    filteredSummary.workforce;
+
+  const filteredReportingHistory =
+    reportingHistory;
 
   const branchStatusOptions =
     useMemo(() => {
@@ -428,15 +1957,51 @@ const OperatorDetail = ({
             )
             .filter(Boolean)
         ),
-      ];
+      ].sort(
+        (
+          first,
+          second
+        ) =>
+          String(
+            first
+          ).localeCompare(
+            String(
+              second
+            )
+          )
+      );
     }, [
       branches,
     ]);
 
   const filteredBranches =
     useMemo(() => {
+      const normalizedSearch =
+        normalizeFilterValue(
+          branchSearch
+        );
+
       return branches.filter(
         (branch) => {
+          const searchableText =
+            [
+              branch.name,
+              branch.branch,
+              branch.region,
+              branch.status,
+              branch.submittedBy,
+            ]
+              .map(
+                normalizeFilterValue
+              )
+              .join(" ");
+
+          const matchesSearch =
+            !normalizedSearch ||
+            searchableText.includes(
+              normalizedSearch
+            );
+
           const matchesRegion =
             !branchRegion ||
             branch.region ===
@@ -444,10 +2009,15 @@ const OperatorDetail = ({
 
           const matchesStatus =
             !branchStatus ||
-            branch.status ===
-              branchStatus;
+            normalizeStatus(
+              branch.status
+            ) ===
+              normalizeStatus(
+                branchStatus
+              );
 
           return (
+            matchesSearch &&
             matchesRegion &&
             matchesStatus
           );
@@ -456,8 +2026,52 @@ const OperatorDetail = ({
     }, [
       branches,
       branchRegion,
+      branchSearch,
       branchStatus,
     ]);
+
+  const hasReportingFilters =
+    Boolean(
+      reportingSearch ||
+      reportingPeriod !==
+        "all_time" ||
+      customStartDate ||
+      customEndDate ||
+      reportingRegion ||
+      reportingType ||
+      reportingStatus
+    );
+
+  const hasBranchFilters =
+    Boolean(
+      branchSearch ||
+      branchRegion ||
+      branchStatus
+    );
+
+  const clearReportingFilters =
+    () => {
+      setReportingSearch("");
+      setReportingPeriod(
+        "all_time"
+      );
+      setCustomStartDate("");
+      setCustomEndDate("");
+      setReportingRegion("");
+      setReportingType("");
+      setReportingStatus("");
+    };
+
+  const clearBranchFilters =
+    () => {
+      setBranchSearch("");
+      setBranchRegion("");
+      setBranchStatus("");
+    };
+
+  const filterControlClassName =
+    "h-9 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200";
+
 
   if (!operator) {
     return (
@@ -531,28 +2145,16 @@ const OperatorDetail = ({
     0;
 
   const productionToday =
-    Number(
-      operator.productionToday
-    ) ||
-    0;
+    filteredSummary.production;
 
   const petrolVolumeToday =
-    Number(
-      operator.petrolVolumeToday
-    ) ||
-    0;
+    filteredSummary.petrolVolume;
 
   const dieselVolumeToday =
-    Number(
-      operator.dieselVolumeToday
-    ) ||
-    0;
+    filteredSummary.dieselVolume;
 
   const estimatedDailyRevenue =
-    Number(
-      operator.estimatedDailyRevenue
-    ) ||
-    0;
+    filteredSummary.revenue;
 
   /*
    * Reporting performance is cumulative across this operator and all
@@ -562,9 +2164,16 @@ const OperatorDetail = ({
    * received the data. On-time compliance measures whether it arrived
    * by the deadline.
    */
-  const complianceSummary =
-    operator.complianceSummary ||
-    {};
+  const complianceSummary = {
+    reportsExpected:
+      filteredSummary.reportsExpected,
+    reportsSubmitted:
+      filteredSummary.reportsSubmitted,
+    reportsSubmittedOnTime:
+      filteredSummary.reportsSubmittedOnTime,
+    reportsSubmittedLate:
+      filteredSummary.reportsSubmittedLate,
+  };
 
   const reportsExpected =
     Number(
@@ -667,8 +2276,10 @@ const OperatorDetail = ({
               operatorName
             }
             timestamp={formatUpdatedAt(
+              filteredSummary
+                .latestActivityAt ||
               updatedAt ||
-                operator.updatedAt
+              operator.updatedAt
             )}
             action={
               onExport ? (
@@ -686,14 +2297,274 @@ const OperatorDetail = ({
           />
 
           <p className="-mt-4 text-xs text-slate-500">
-            Figures include this operator and every child organization below it. Production and revenue keep the latest submitted values until a newer report is received.
+            Figures include this operator and every child organization below it. The filters recalculate the KPIs, charts, reporting history, workforce and child-organization results for the selected scope.
           </p>
         </div>
       </div>
 
+      <div className="mb-6 rounded-xl border border-slate-200/80 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex h-9 items-center gap-2 px-1 pr-2">
+            <Filter className="h-4 w-4 text-slate-500" />
+
+            <span className="text-xs font-semibold text-slate-700">
+              Reporting Filters
+            </span>
+          </div>
+
+          <label className="relative min-w-[190px] flex-1 sm:max-w-[260px]">
+            <span className="sr-only">
+              Search reporting history
+            </span>
+
+            <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+
+            <input
+              type="search"
+              value={
+                reportingSearch
+              }
+              onChange={(
+                event
+              ) =>
+                setReportingSearch(
+                  event.target.value
+                )
+              }
+              placeholder="Search reports or submitters"
+              className={`${filterControlClassName} w-full pl-9`}
+            />
+          </label>
+
+          <select
+            value={
+              reportingPeriod
+            }
+            onChange={(
+              event
+            ) =>
+              setReportingPeriod(
+                event.target.value
+              )
+            }
+            className={`${filterControlClassName} w-36`}
+            aria-label="Reporting period"
+          >
+            <option value="all_time">
+              All time
+            </option>
+
+            <option value="today">
+              Today
+            </option>
+
+            <option value="last_7_days">
+              Last 7 days
+            </option>
+
+            <option value="last_30_days">
+              Last 30 days
+            </option>
+
+            <option value="current_quarter">
+              This quarter
+            </option>
+
+            <option value="custom">
+              Custom range
+            </option>
+          </select>
+
+          <select
+            value={
+              reportingRegion
+            }
+            onChange={(
+              event
+            ) =>
+              setReportingRegion(
+                event.target.value
+              )
+            }
+            className={`${filterControlClassName} w-40`}
+            aria-label="Report region"
+          >
+            <option value="">
+              All regions
+            </option>
+
+            {regionOptions.map(
+              (region) => (
+                <option
+                  key={
+                    region
+                  }
+                  value={
+                    region
+                  }
+                >
+                  {region}
+                </option>
+              )
+            )}
+          </select>
+
+          <select
+            value={
+              reportingType
+            }
+            onChange={(
+              event
+            ) =>
+              setReportingType(
+                event.target.value
+              )
+            }
+            className={`${filterControlClassName} w-44`}
+            aria-label="Report type"
+          >
+            <option value="">
+              All report types
+            </option>
+
+            {reportingTypeOptions.map(
+              (reportType) => (
+                <option
+                  key={
+                    reportType
+                  }
+                  value={
+                    reportType
+                  }
+                >
+                  {reportType}
+                </option>
+              )
+            )}
+          </select>
+
+          <select
+            value={
+              reportingStatus
+            }
+            onChange={(
+              event
+            ) =>
+              setReportingStatus(
+                event.target.value
+              )
+            }
+            className={`${filterControlClassName} w-36`}
+            aria-label="Report status"
+          >
+            <option value="">
+              All statuses
+            </option>
+
+            {reportingStatusOptions.map(
+              (status) => (
+                <option
+                  key={
+                    status
+                  }
+                  value={
+                    status
+                  }
+                >
+                  {status}
+                </option>
+              )
+            )}
+          </select>
+
+          {hasReportingFilters && (
+            <button
+              type="button"
+              onClick={
+                clearReportingFilters
+              }
+              className="h-9 rounded-md px-3 text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+            >
+              Reset
+            </button>
+          )}
+
+          <p className="ml-auto text-xs font-medium text-slate-500">
+            Showing{" "}
+            <span className="font-semibold text-slate-700">
+              {formatNumber(
+                filteredReportingHistory.length
+              )}
+            </span>{" "}
+            of{" "}
+            <span className="font-semibold text-slate-700">
+              {formatNumber(
+                scopedReports.length
+              )}
+            </span>{" "}
+            reports
+          </p>
+        </div>
+
+        {reportingPeriod ===
+          "custom" && (
+          <div className="mt-3 flex flex-wrap items-end gap-3 border-t border-slate-100 pt-3">
+            <label>
+              <span className="mb-1 block text-[11px] font-medium text-slate-500">
+                Start date
+              </span>
+
+              <input
+                type="date"
+                value={
+                  customStartDate
+                }
+                onChange={(
+                  event
+                ) =>
+                  setCustomStartDate(
+                    event.target.value
+                  )
+                }
+                className={`${filterControlClassName} w-40`}
+              />
+            </label>
+
+            <label>
+              <span className="mb-1 block text-[11px] font-medium text-slate-500">
+                End date
+              </span>
+
+              <input
+                type="date"
+                value={
+                  customEndDate
+                }
+                min={
+                  customStartDate ||
+                  undefined
+                }
+                onChange={(
+                  event
+                ) =>
+                  setCustomEndDate(
+                    event.target.value
+                  )
+                }
+                className={`${filterControlClassName} w-40`}
+              />
+            </label>
+          </div>
+        )}
+
+        <p className="mt-2 pl-1 text-[11px] text-slate-400">
+          These filters apply to the entire operator profile. Current period: {selectedPeriodLabel}.
+        </p>
+      </div>
+
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <KpiCard
-          label="Latest Production"
+          label="Production for Period"
           value={
             productionToday >
             0
@@ -703,18 +2574,17 @@ const OperatorDetail = ({
               : "—"
           }
           caption={
-            operator.productionCaption ||
             `${formatNumber(
               petrolVolumeToday
             )} L petrol · ${formatNumber(
               dieselVolumeToday
-            )} L diesel`
+            )} L diesel · ${selectedPeriodLabel}`
           }
           icon={Factory}
         />
 
         <KpiCard
-          label="Latest Estimated Revenue"
+          label="Estimated Revenue for Period"
           value={
             estimatedDailyRevenue >
             0
@@ -724,8 +2594,7 @@ const OperatorDetail = ({
               : "—"
           }
           caption={
-            operator.revenueCaption ||
-            "Calculated from submitted volumes and linked company fuel prices"
+            `Calculated from submitted volumes and linked company fuel prices · ${selectedPeriodLabel}`
           }
           icon={Banknote}
         />
@@ -840,7 +2709,7 @@ const OperatorDetail = ({
 
       <div className="mb-8">
         <SectionHeader>
-          Production — Trailing 7 Days
+          {filteredSummary.productionTrendTitle}
         </SectionHeader>
 
         <Card className="p-5">
@@ -951,7 +2820,7 @@ const OperatorDetail = ({
 
       <div className="mb-8">
         <SectionHeader>
-          Six-Month Production Trend
+          Monthly Production Trend — {selectedPeriodLabel}
         </SectionHeader>
 
         <Card className="p-5">
@@ -1061,12 +2930,12 @@ const OperatorDetail = ({
       </div>
 
       <div className="mb-8">
-        <SectionHeader>
+        <SectionHeader description={`Report records matching the selected operator filters for ${selectedPeriodLabel.toLowerCase()}.`}>
           Reporting History
         </SectionHeader>
 
         <Card className="overflow-hidden">
-          {reportingHistory.length >
+          {filteredReportingHistory.length >
           0 ? (
             <Table
               headers={[
@@ -1079,7 +2948,7 @@ const OperatorDetail = ({
                 "Production (L)",
               ]}
               rows={
-                reportingHistory
+                filteredReportingHistory
               }
               accentKey="status"
               renderRow={(
@@ -1152,18 +3021,50 @@ const OperatorDetail = ({
               )}
             />
           ) : (
-            <EmptyState message="Reporting history will appear here" />
+            <EmptyState message="No reporting records match the selected filters" />
           )}
         </Card>
       </div>
 
       <div className="mb-8">
-        <SectionHeader description="Today&apos;s reporting status and production for organizations below this operator.">
+        <SectionHeader description={`Reporting status and submitted production for child organizations during ${selectedPeriodLabel.toLowerCase()}.`}>
           Child Organizations
         </SectionHeader>
 
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
+        <div className="mb-4 rounded-xl border border-slate-200/80 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex h-9 items-center gap-2 px-1 pr-2">
+              <Filter className="h-4 w-4 text-slate-500" />
+
+              <span className="text-xs font-semibold text-slate-700">
+                Filters
+              </span>
+            </div>
+
+            <label className="relative min-w-[190px] flex-1 sm:max-w-[260px]">
+              <span className="sr-only">
+                Search child organizations
+              </span>
+
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+
+              <input
+                type="search"
+                value={
+                  branchSearch
+                }
+                onChange={(
+                  event
+                ) =>
+                  setBranchSearch(
+                    event.target.value
+                  )
+                }
+                placeholder="Search organizations"
+                className={`${filterControlClassName} w-full pl-9`}
+              />
+            </label>
+
             <Select
               value={
                 branchRegion
@@ -1189,9 +3090,20 @@ const OperatorDetail = ({
               }
               placeholder="All Statuses"
             />
-          </div>
 
-          <p className="text-xs font-medium text-slate-500">
+            {hasBranchFilters && (
+              <button
+                type="button"
+                onClick={
+                  clearBranchFilters
+                }
+                className="h-9 rounded-md px-3 text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+              >
+                Reset
+              </button>
+            )}
+
+            <p className="ml-auto text-xs font-medium text-slate-500">
             Showing{" "}
             <span className="font-semibold text-slate-700">
               {formatNumber(
@@ -1205,7 +3117,8 @@ const OperatorDetail = ({
               )}
             </span>{" "}
             organizations
-          </p>
+            </p>
+          </div>
         </div>
 
         <Card className="overflow-hidden">
