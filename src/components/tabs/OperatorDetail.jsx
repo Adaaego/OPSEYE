@@ -1,5 +1,6 @@
 import {
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -1145,6 +1146,44 @@ const OperatorDetail = ({
     customEndDate,
     setCustomEndDate,
   ] = useState("");
+
+  const startDateRef =
+    useRef(null);
+
+  const endDateRef =
+    useRef(null);
+
+  /*
+   * Open the browser's native calendar whenever the date field is clicked
+   * or focused. Keyboard entry is blocked below so users select dates from
+   * the calendar instead of typing them manually.
+   */
+  const openDatePicker = (
+    inputReference
+  ) => {
+    const input =
+      inputReference.current;
+
+    if (!input) {
+      return;
+    }
+
+    input.focus();
+
+    if (
+      typeof input.showPicker ===
+      "function"
+    ) {
+      try {
+        input.showPicker();
+      } catch {
+        /*
+         * Some browsers restrict showPicker to direct user actions.
+         * The native date control remains available as the fallback.
+         */
+      }
+    }
+  };
 
   const [
     reportingRegion,
@@ -2515,6 +2554,9 @@ const OperatorDetail = ({
               </span>
 
               <input
+                ref={
+                  startDateRef
+                }
                 type="date"
                 value={
                   customStartDate
@@ -2526,7 +2568,28 @@ const OperatorDetail = ({
                     event.target.value
                   )
                 }
-                className={`${filterControlClassName} w-40`}
+                onClick={() =>
+                  openDatePicker(
+                    startDateRef
+                  )
+                }
+                onFocus={() =>
+                  openDatePicker(
+                    startDateRef
+                  )
+                }
+                onKeyDown={(
+                  event
+                ) =>
+                  event.preventDefault()
+                }
+                onPaste={(
+                  event
+                ) =>
+                  event.preventDefault()
+                }
+                inputMode="none"
+                className={`${filterControlClassName} w-40 cursor-pointer`}
               />
             </label>
 
@@ -2536,6 +2599,9 @@ const OperatorDetail = ({
               </span>
 
               <input
+                ref={
+                  endDateRef
+                }
                 type="date"
                 value={
                   customEndDate
@@ -2551,7 +2617,28 @@ const OperatorDetail = ({
                     event.target.value
                   )
                 }
-                className={`${filterControlClassName} w-40`}
+                onClick={() =>
+                  openDatePicker(
+                    endDateRef
+                  )
+                }
+                onFocus={() =>
+                  openDatePicker(
+                    endDateRef
+                  )
+                }
+                onKeyDown={(
+                  event
+                ) =>
+                  event.preventDefault()
+                }
+                onPaste={(
+                  event
+                ) =>
+                  event.preventDefault()
+                }
+                inputMode="none"
+                className={`${filterControlClassName} w-40 cursor-pointer`}
               />
             </label>
           </div>
