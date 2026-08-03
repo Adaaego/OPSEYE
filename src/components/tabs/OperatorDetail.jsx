@@ -1,3 +1,4 @@
+
 import {
   useMemo,
   useRef,
@@ -553,6 +554,130 @@ const toNumber = (
   )
     ? number
     : 0;
+};
+
+/*
+ * Workforce values come from the dedicated workforce collection that is
+ * loaded by OperatorsTab and passed into this component on the operator
+ * object. These helpers intentionally mirror the Workforce page formulas so
+ * every dashboard surface presents the same headcount and workforce-gap data.
+ */
+const getWorkforceOrganizationId = (
+  record
+) => {
+  return (
+    record?.organizationId ||
+    record?.orgId ||
+    ""
+  );
+};
+
+const getWorkforceTotalEmployees = (
+  record
+) => {
+  return toNumber(
+    record?.totalEmployees ??
+      record?.totalWorkforce ??
+      record?.headcount ??
+      record?.total
+  );
+};
+
+const getWorkforceLocalEmployees = (
+  record
+) => {
+  return toNumber(
+    record?.localEmployees ??
+      record?.localWorkforce ??
+      record?.local
+  );
+};
+
+const getWorkforceExpatriateEmployees = (
+  record
+) => {
+  const savedExpatriates =
+    record?.expatriateEmployees ??
+    record?.expatEmployees ??
+    record?.expatWorkforce ??
+    record?.expat;
+
+  if (
+    savedExpatriates !==
+      null &&
+    savedExpatriates !==
+      undefined &&
+    savedExpatriates !==
+      ""
+  ) {
+    return toNumber(
+      savedExpatriates
+    );
+  }
+
+  /*
+   * Older workforce records may not persist the derived expatriate value.
+   * Rebuild it using the same rule as the Workforce form.
+   */
+  return Math.max(
+    getWorkforceTotalEmployees(
+      record
+    ) -
+      getWorkforceLocalEmployees(
+        record
+      ),
+    0
+  );
+};
+
+const getWorkforceVacancies = (
+  record
+) => {
+  return toNumber(
+    record?.vacancies ??
+      record?.currentVacancies ??
+      record?.openVacancies
+  );
+};
+
+const getWorkforceFutureNeed = (
+  record
+) => {
+  return toNumber(
+    record?.projectedNeed ??
+      record?.futureHiringNeed ??
+      record?.projectedAdditionalNeed
+  );
+};
+
+const getWorkforceShortage = (
+  record
+) => {
+  /*
+   * The current workforce gap is the combination of positions already vacant
+   * and additional positions expected to be required in the future.
+   */
+  return (
+    getWorkforceVacancies(
+      record
+    ) +
+    getWorkforceFutureNeed(
+      record
+    )
+  );
+};
+
+const getWorkforceUpdatedAt = (
+  record
+) => {
+  return (
+    toFilterDate(
+      record?.updatedAt
+    ) ||
+    toFilterDate(
+      record?.createdAt
+    )
+  );
 };
 
 const SUBMITTED_REPORT_STATUSES =
@@ -1258,6 +1383,241 @@ const OperatorDetail = ({
       operator,
     ]);
 
+  /*
+   * OperatorsTab passes the role-level records already scoped to this operator
+   * and its descendants. OperatorDetail never reads workforce values from
+   * report submissions and does not issue another Firestore request.
+   */
+  const scopedWorkforceRecords =
+    useMemo(() => {
+      return Array.isArray(
+        operator
+          ?.scopedWorkforceRecords
+      )
+        ? operator
+            .scopedWorkforceRecords
+        : [];
+    }, [
+      operator,
+    ]);
+
+  const workforceOrganizationMap =
+    useMemo(() => {
+      const organizations = [
+        operator,
+        ...hierarchyOrganizations,
+      ].filter(Boolean);
+
+      return new Map(
+        organizations.map(
+          (organization) => [
+            getOrganizationId(
+              organization
+            ),
+            organization,
+          ]
+        )
+      );
+    }, [
+      hierarchyOrganizations,
+      operator,
+    ]);
+
+  const workforceSummary =
+    useMemo(() => {
+      /*
+       * Region is the only reporting filter that also has a direct workforce
+       * meaning. Date range, report type, status and report search must not
+       * hide the current workforce snapshot because workforce is now managed
+       * independently from report submissions.
+       */
+      const recordsForRegion =
+        scopedWorkforceRecords.filter(
+          (record) => {
+            if (!reportingRegion) {
+              return true;
+            }
+
+            const organization =
+              workforceOrganizationMap.get(
+                getWorkforceOrganizationId(
+                  record
+                )
+              ) ||
+              {};
+
+            const recordRegion =
+              record.regionName ||
+              record.region ||
+              organization.regionName ||
+              organization.region ||
+              organization.country ||
+              "";
+
+            return (
+              recordRegion ===
+              reportingRegion
+            );
+          }
+        );
+
+      const totals =
+        recordsForRegion.reduce(
+          (
+            currentTotals,
+            record
+          ) => ({
+            local:
+              currentTotals.local +
+              getWorkforceLocalEmployees(
+                record
+              ),
+            expat:
+              currentTotals.expat +
+              getWorkforceExpatriateEmployees(
+                record
+              ),
+            vacancies:
+              currentTotals.vacancies +
+              getWorkforceVacancies(
+                record
+              ),
+            futureNeed:
+              currentTotals.futureNeed +
+              getWorkforceFutureNeed(
+                record
+              ),
+            shortage:
+              currentTotals.shortage +
+              getWorkforceShortage(
+                record
+              ),
+          }),
+          {
+            local: 0,
+            expat: 0,
+            vacancies: 0,
+            futureNeed: 0,
+            shortage: 0,
+          }
+        );
+
+      /*
+       * The parent operator summary is a compatibility fallback for older
+       * OperatorsTab versions. It is used only when no role records were
+       * supplied and no region filter is active, because an aggregate value
+       * cannot be divided accurately between regions.
+       */
+      const fallback =
+        !recordsForRegion.length &&
+        !reportingRegion
+          ? operator?.workforce ||
+            {}
+          : {};
+
+      const local =
+        recordsForRegion.length
+          ? totals.local
+          : toNumber(
+              fallback.local
+            );
+
+      const expat =
+        recordsForRegion.length
+          ? totals.expat
+          : toNumber(
+              fallback.expat
+            );
+
+      const vacancies =
+        recordsForRegion.length
+          ? totals.vacancies
+          : toNumber(
+              fallback.vacancies
+            );
+
+      const futureNeed =
+        recordsForRegion.length
+          ? totals.futureNeed
+          : toNumber(
+              fallback.futureNeed
+            );
+
+      const shortage =
+        recordsForRegion.length
+          ? totals.shortage
+          : toNumber(
+              fallback.shortage ??
+                vacancies +
+                  futureNeed
+            );
+
+      const total =
+        local +
+        expat;
+
+      const organizationCount =
+        new Set(
+          recordsForRegion
+            .map(
+              getWorkforceOrganizationId
+            )
+            .filter(Boolean)
+        ).size;
+
+      const latestActivityAt =
+        recordsForRegion
+          .map(
+            getWorkforceUpdatedAt
+          )
+          .filter(Boolean)
+          .sort(
+            (
+              first,
+              second
+            ) =>
+              second -
+              first
+          )[0] ||
+        null;
+
+      return {
+        local,
+        expat,
+        total,
+        vacancies,
+        futureNeed,
+        shortage,
+        localPercentage:
+          total >
+          0
+            ? (
+                local /
+                total
+              ) *
+              100
+            : 0,
+        expatPercentage:
+          total >
+          0
+            ? (
+                expat /
+                total
+              ) *
+              100
+            : 0,
+        roleCount:
+          recordsForRegion.length,
+        organizationCount,
+        latestActivityAt,
+      };
+    }, [
+      operator,
+      reportingRegion,
+      scopedWorkforceRecords,
+      workforceOrganizationMap,
+    ]);
+
   const selectedPeriodRange =
     useMemo(() => {
       return getPeriodRange({
@@ -1568,124 +1928,12 @@ const OperatorDetail = ({
       const reportsExpected =
         eligibleReports.length;
 
-      const latestWorkforceByOrganization =
-        new Map();
-
-      submittedReports.forEach(
-        (report) => {
-          const local =
-            toNumber(
-              report
-                ?.sourceMetrics
-                ?.local_employee_count
-            );
-
-          const expat =
-            toNumber(
-              report
-                ?.sourceMetrics
-                ?.expat_employee_count
-            );
-
-          if (
-            local <= 0 &&
-            expat <= 0
-          ) {
-            return;
-          }
-
-          const organizationId =
-            report.organizationId ||
-            getOrganizationId(
-              report.organization
-            );
-
-          const current =
-            latestWorkforceByOrganization.get(
-              organizationId
-            );
-
-          const reportTime =
-            getReportingRecordDate(
-              report
-            )?.getTime() ||
-            0;
-
-          const currentTime =
-            getReportingRecordDate(
-              current
-            )?.getTime() ||
-            0;
-
-          if (
-            !current ||
-            reportTime >=
-              currentTime
-          ) {
-            latestWorkforceByOrganization.set(
-              organizationId,
-              report
-            );
-          }
-        }
-      );
-
-      const workforceTotals =
-        Array.from(
-          latestWorkforceByOrganization.values()
-        ).reduce(
-          (
-            totals,
-            report
-          ) => ({
-            local:
-              totals.local +
-              toNumber(
-                report
-                  ?.sourceMetrics
-                  ?.local_employee_count
-              ),
-            expat:
-              totals.expat +
-              toNumber(
-                report
-                  ?.sourceMetrics
-                  ?.expat_employee_count
-              ),
-          }),
-          {
-            local: 0,
-            expat: 0,
-          }
-        );
-
-      const workforceTotal =
-        workforceTotals.local +
-        workforceTotals.expat;
-
-      const workforce = {
-        ...workforceTotals,
-        total:
-          workforceTotal,
-        localPercentage:
-          workforceTotal >
-          0
-            ? (
-                workforceTotals.local /
-                workforceTotal
-              ) *
-              100
-            : 0,
-        expatPercentage:
-          workforceTotal >
-          0
-            ? (
-                workforceTotals.expat /
-                workforceTotal
-              ) *
-              100
-            : 0,
-      };
+      /*
+       * Workforce is deliberately excluded from report aggregation.
+       * It is calculated separately from operator.scopedWorkforceRecords so
+       * report filters cannot accidentally replace current headcount data with
+       * legacy values from submitted forms.
+       */
 
       const reportingHistory =
         [...filteredScopedReports]
@@ -1946,7 +2194,6 @@ const OperatorDetail = ({
         reportsSubmitted,
         reportsSubmittedOnTime,
         reportsSubmittedLate,
-        workforce,
         reportingHistory,
         branches,
         productionTrend:
@@ -1980,7 +2227,39 @@ const OperatorDetail = ({
     filteredSummary.branches;
 
   const workforce =
-    filteredSummary.workforce;
+    workforceSummary;
+
+  const detailUpdatedAt =
+    useMemo(() => {
+      return [
+        filteredSummary
+          .latestActivityAt,
+        workforceSummary
+          .latestActivityAt,
+        updatedAt,
+        operator?.updatedAt,
+      ]
+        .map(
+          toFilterDate
+        )
+        .filter(Boolean)
+        .sort(
+          (
+            first,
+            second
+          ) =>
+            second -
+            first
+        )[0] ||
+        null;
+    }, [
+      filteredSummary
+        .latestActivityAt,
+      operator,
+      updatedAt,
+      workforceSummary
+        .latestActivityAt,
+    ]);
 
   const filteredReportingHistory =
     reportingHistory;
@@ -2161,6 +2440,25 @@ const OperatorDetail = ({
     localWorkforce +
       expatWorkforce;
 
+  const workforceVacancies =
+    Number(
+      workforce.vacancies
+    ) ||
+    0;
+
+  const workforceFutureNeed =
+    Number(
+      workforce.futureNeed
+    ) ||
+    0;
+
+  const workforceShortage =
+    Number(
+      workforce.shortage
+    ) ||
+    workforceVacancies +
+      workforceFutureNeed;
+
   const localWorkforcePercentage =
     clampPercentage(
       workforce.localPercentage ??
@@ -2315,10 +2613,7 @@ const OperatorDetail = ({
               operatorName
             }
             timestamp={formatUpdatedAt(
-              filteredSummary
-                .latestActivityAt ||
-              updatedAt ||
-              operator.updatedAt
+              detailUpdatedAt
             )}
             action={
               onExport ? (
@@ -2336,7 +2631,7 @@ const OperatorDetail = ({
           />
 
           <p className="-mt-4 text-xs text-slate-500">
-            Figures include this operator and every child organization below it. The filters recalculate the KPIs, charts, reporting history, workforce and child-organization results for the selected scope.
+            Figures include this operator and every child organization below it. Reporting filters recalculate production, compliance, history and child-organization results. The region filter also scopes the current workforce snapshot.
           </p>
         </div>
       </div>
@@ -2645,7 +2940,7 @@ const OperatorDetail = ({
         )}
 
         <p className="mt-2 pl-1 text-[11px] text-slate-400">
-          These filters apply to the entire operator profile. Current period: {selectedPeriodLabel}.
+          Report filters apply to reporting metrics. Region also filters the dedicated workforce records. Current period: {selectedPeriodLabel}.
         </p>
       </div>
 
@@ -2787,7 +3082,9 @@ const OperatorDetail = ({
                   localWorkforce
                 )} of ${formatNumber(
                   totalWorkforce
-                )} workers`
+                )} workers · ${formatNumber(
+                  workforceVacancies
+                )} current vacancies`
               : null
           }
           icon={Users}
@@ -3293,109 +3590,222 @@ const OperatorDetail = ({
       </div>
 
       <div>
-        <SectionHeader>
+        <SectionHeader
+          description={
+            reportingRegion
+              ? `Current role-level workforce records for ${reportingRegion}.`
+              : "Current role-level workforce records from the dedicated Workforce module."
+          }
+        >
           Workforce
         </SectionHeader>
 
         <Card className="p-5">
-          <div className="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-            <div className="pb-4 sm:pb-0 sm:pr-6">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Local
-              </p>
-
-              <p className="mt-1 text-2xl font-semibold tabular-nums text-navy-950">
-                {hasWorkforceData
-                  ? formatNumber(
-                      localWorkforce
-                    )
-                  : "—"}
-              </p>
-            </div>
-
-            <div className="py-4 sm:py-0 sm:px-6">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Expat
-              </p>
-
-              <p className="mt-1 text-2xl font-semibold tabular-nums text-navy-950">
-                {hasWorkforceData
-                  ? formatNumber(
-                      expatWorkforce
-                    )
-                  : "—"}
-              </p>
-            </div>
-
-            <div className="pt-4 sm:pt-0 sm:pl-6">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Local %
-              </p>
-
-              <p
-                className="mt-1 text-2xl font-semibold tabular-nums"
-                style={{
-                  color: NAVY,
-                }}
-              >
-                {hasWorkforceData
-                  ? `${formatNumber(
-                      localWorkforcePercentage,
-                      1
-                    )}%`
-                  : "—"}
-              </p>
-            </div>
-          </div>
-
-          {hasWorkforceData ? (
-            <div className="mt-5">
-              <div className="flex h-8 overflow-hidden rounded bg-slate-100">
-                <div
-                  className="flex items-center justify-center px-2 text-xs font-medium text-white"
-                  style={{
-                    width:
-                      `${localWorkforcePercentage}%`,
-                    backgroundColor:
-                      localWorkforceColour,
-                  }}
-                >
-                  {localWorkforcePercentage >=
-                  20
-                    ? `${formatNumber(
-                        localWorkforce
-                      )} (${formatNumber(
+          {hasWorkforceData ||
+          workforceShortage >
+            0 ? (
+            <>
+              <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+                {[
+                  {
+                    label:
+                      "Total Workforce",
+                    value:
+                      totalWorkforce,
+                    caption:
+                      `${formatNumber(
+                        workforce.roleCount
+                      )} role records`,
+                  },
+                  {
+                    label:
+                      "Local",
+                    value:
+                      localWorkforce,
+                    caption:
+                      `${formatNumber(
                         localWorkforcePercentage,
                         1
-                      )}%)`
-                    : ""}
-                </div>
-
-                <div
-                  className="flex items-center justify-center px-2 text-xs font-medium text-white"
-                  style={{
-                    width:
-                      `${expatWorkforcePercentage}%`,
-                    backgroundColor:
-                      expatWorkforceColour,
-                  }}
-                >
-                  {expatWorkforcePercentage >=
-                  20
-                    ? `${formatNumber(
-                        expatWorkforce
-                      )} (${formatNumber(
+                      )}% of workforce`,
+                  },
+                  {
+                    label:
+                      "Expatriate",
+                    value:
+                      expatWorkforce,
+                    caption:
+                      `${formatNumber(
                         expatWorkforcePercentage,
                         1
-                      )}%)`
-                    : ""}
-                </div>
+                      )}% of workforce`,
+                  },
+                  {
+                    label:
+                      "Vacancies",
+                    value:
+                      workforceVacancies,
+                    caption:
+                      "Currently unfilled roles",
+                  },
+                  {
+                    label:
+                      "Future Need",
+                    value:
+                      workforceFutureNeed,
+                    caption:
+                      "Additional projected hires",
+                  },
+                  {
+                    label:
+                      "Total Shortage",
+                    value:
+                      workforceShortage,
+                    caption:
+                      `${formatNumber(
+                        workforceVacancies
+                      )} current + ${formatNumber(
+                        workforceFutureNeed
+                      )} future`,
+                  },
+                ].map(
+                  (item) => (
+                    <div
+                      key={
+                        item.label
+                      }
+                      className="rounded-lg border border-slate-100 bg-slate-50/70 p-4"
+                    >
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        {item.label}
+                      </p>
+
+                      <p className="mt-1 text-2xl font-semibold tabular-nums text-navy-950">
+                        {formatNumber(
+                          item.value
+                        )}
+                      </p>
+
+                      <p className="mt-1 text-[11px] leading-snug text-slate-400">
+                        {item.caption}
+                      </p>
+                    </div>
+                  )
+                )}
               </div>
-            </div>
+
+              {hasWorkforceData && (
+                <div className="mt-6">
+                  <div className="mb-2 flex items-center justify-between gap-4">
+                    <p className="text-xs font-semibold text-slate-700">
+                      Workforce Composition
+                    </p>
+
+                    <p className="text-[11px] text-slate-400">
+                      {formatNumber(
+                        workforce.organizationCount
+                      )} organization{workforce.organizationCount ===
+                      1
+                        ? ""
+                        : "s"} covered
+                    </p>
+                  </div>
+
+                  <div className="flex h-5 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="transition-[width] duration-300"
+                      style={{
+                        width:
+                          `${localWorkforcePercentage}%`,
+                        backgroundColor:
+                          localWorkforceColour,
+                      }}
+                      title={`${formatNumber(
+                        localWorkforce
+                      )} local employees (${formatNumber(
+                        localWorkforcePercentage,
+                        1
+                      )}%)`}
+                    />
+
+                    <div
+                      className="transition-[width] duration-300"
+                      style={{
+                        width:
+                          `${expatWorkforcePercentage}%`,
+                        backgroundColor:
+                          expatWorkforceColour,
+                      }}
+                      title={`${formatNumber(
+                        expatWorkforce
+                      )} expatriate employees (${formatNumber(
+                        expatWorkforcePercentage,
+                        1
+                      )}%)`}
+                    />
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div className="flex items-center justify-between gap-3 rounded-md border border-slate-100 px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="h-2.5 w-2.5 rounded-sm"
+                          style={{
+                            backgroundColor:
+                              localWorkforceColour,
+                          }}
+                        />
+
+                        <span className="text-xs text-slate-500">
+                          Local
+                        </span>
+                      </div>
+
+                      <span className="text-xs font-semibold tabular-nums text-slate-800">
+                        {formatNumber(
+                          localWorkforce
+                        )} · {formatNumber(
+                          localWorkforcePercentage,
+                          1
+                        )}%
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 rounded-md border border-slate-100 px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="h-2.5 w-2.5 rounded-sm"
+                          style={{
+                            backgroundColor:
+                              expatWorkforceColour,
+                          }}
+                        />
+
+                        <span className="text-xs text-slate-500">
+                          Expatriate
+                        </span>
+                      </div>
+
+                      <span className="text-xs font-semibold tabular-nums text-slate-800">
+                        {formatNumber(
+                          expatWorkforce
+                        )} · {formatNumber(
+                          expatWorkforcePercentage,
+                          1
+                        )}%
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
-            <div className="mt-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
               <p className="text-sm font-medium text-slate-500">
                 No workforce data available
+              </p>
+
+              <p className="mt-1 text-xs text-slate-400">
+                Workforce records will appear here when roles are added in the Workforce module.
               </p>
             </div>
           )}
