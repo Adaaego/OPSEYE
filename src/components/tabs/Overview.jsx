@@ -1,3 +1,4 @@
+
 import {
   useEffect,
   useMemo,
@@ -79,6 +80,9 @@ const REPORT_SUBMISSIONS_COLLECTION =
 
 const COMPANY_FUEL_PRICES_COLLECTION =
   "companyFuelPrices";
+
+const WORKFORCE_COLLECTION =
+  "workforce";
 
 /*
  * The dashboard uses one restrained navy throughout the government UI.
@@ -222,6 +226,283 @@ const getOrganizationId = (
     organization?.id ||
     ""
   );
+};
+
+const getUserOrganizationId = (
+  userProfile
+) => {
+  return (
+    userProfile?.organizationId ||
+    userProfile?.companyId ||
+    userProfile?.enterpriseId ||
+    userProfile?.branchId ||
+    ""
+  );
+};
+
+const getOrganizationCategory = (
+  organization
+) => {
+  return normalizeStatus(
+    organization?.organizationCategory ||
+      organization?.category ||
+      organization?.orgType
+  );
+};
+
+const getOrganizationLevel = (
+  organization
+) => {
+  return normalizeStatus(
+    organization?.type ||
+      organization?.organizationType ||
+      organization?.level
+  );
+};
+
+const isEnterpriseOrganization = (
+  organization
+) => {
+  const organizationId =
+    getOrganizationId(
+      organization
+    );
+
+  return (
+    getOrganizationLevel(
+      organization
+    ) ===
+      "enterprise" ||
+    (
+      !organization?.parentId &&
+      (
+        !organization?.rootEnterpriseId ||
+        organization.rootEnterpriseId ===
+          organizationId
+      )
+    )
+  );
+};
+
+/*
+ * Resolves any child organisation to the enterprise at the top of its
+ * hierarchy. rootEnterpriseId is preferred, while the parent walk supports
+ * older records that have not yet been fully backfilled.
+ */
+const getEnterpriseIdForOrganization = (
+  organization,
+  organizationMap
+) => {
+  if (!organization) {
+    return "";
+  }
+
+  if (
+    isEnterpriseOrganization(
+      organization
+    )
+  ) {
+    return getOrganizationId(
+      organization
+    );
+  }
+
+  const storedEnterpriseId =
+    organization.rootEnterpriseId ||
+    organization.enterpriseId ||
+    organization.parentEnterpriseId;
+
+  if (storedEnterpriseId) {
+    return storedEnterpriseId;
+  }
+
+  let current =
+    organization;
+
+  const visitedIds =
+    new Set();
+
+  while (
+    current?.parentId &&
+    !visitedIds.has(
+      current.parentId
+    )
+  ) {
+    visitedIds.add(
+      current.parentId
+    );
+
+    const parent =
+      organizationMap.get(
+        current.parentId
+      );
+
+    if (!parent) {
+      break;
+    }
+
+    if (
+      isEnterpriseOrganization(
+        parent
+      )
+    ) {
+      return getOrganizationId(
+        parent
+      );
+    }
+
+    current =
+      parent;
+  }
+
+  return "";
+};
+
+/*
+ * Region is inherited through the organisation hierarchy.
+ *
+ * This keeps report and workforce records aligned with the Regions page and
+ * avoids depending on free-text region names saved on individual records.
+ */
+const getOrganizationRegionId = (
+  organization,
+  organizationMap
+) => {
+  if (!organization) {
+    return "";
+  }
+
+  if (organization.regionId) {
+    return normalizeRegionId(
+      organization.regionId
+    );
+  }
+
+  let current =
+    organization;
+
+  const visitedIds =
+    new Set();
+
+  while (
+    current?.parentId &&
+    !visitedIds.has(
+      current.parentId
+    )
+  ) {
+    visitedIds.add(
+      current.parentId
+    );
+
+    const parent =
+      organizationMap.get(
+        current.parentId
+      );
+
+    if (!parent) {
+      break;
+    }
+
+    if (parent.regionId) {
+      return normalizeRegionId(
+        parent.regionId
+      );
+    }
+
+    current =
+      parent;
+  }
+
+  const enterpriseId =
+    getEnterpriseIdForOrganization(
+      organization,
+      organizationMap
+    );
+
+  const enterprise =
+    organizationMap.get(
+      enterpriseId
+    );
+
+  const organizationCompany =
+    getCompanyById(
+      organization.companyId
+    ) ||
+    getCompanyByNormalizedName(
+      organization.normalizedName ||
+        organization.name
+    );
+
+  const enterpriseCompany =
+    getCompanyById(
+      enterprise?.companyId
+    ) ||
+    getCompanyByNormalizedName(
+      enterprise?.normalizedName ||
+        enterprise?.name
+    );
+
+  return normalizeRegionId(
+    enterprise?.regionId ||
+      organizationCompany?.regionId ||
+      enterpriseCompany?.regionId
+  );
+};
+
+/*
+ * Older records may reference an organisation through different hierarchy
+ * fields. Resolve those shapes before applying access control or grouping.
+ */
+const resolveRecordOrganization = (
+  record,
+  organizationMap,
+  organizations
+) => {
+  const candidateIds = [
+    record?.organizationId,
+    record?.branchId,
+    record?.enterpriseId,
+    record?.rootEnterpriseId,
+  ].filter(Boolean);
+
+  for (
+    const candidateId of
+    candidateIds
+  ) {
+    const organization =
+      organizationMap.get(
+        candidateId
+      );
+
+    if (organization) {
+      return organization;
+    }
+  }
+
+  const companyId =
+    normalizeValue(
+      record?.companyId
+    );
+
+  if (companyId) {
+    const enterpriseMatch =
+      organizations.find(
+        (organization) =>
+          isEnterpriseOrganization(
+            organization
+          ) &&
+          normalizeValue(
+            organization.companyId
+          ) ===
+            companyId
+      );
+
+    if (enterpriseMatch) {
+      return enterpriseMatch;
+    }
+  }
+
+  return null;
 };
 
 /*
@@ -1139,6 +1420,11 @@ const Overviews = () => {
   ] = useState([]);
 
   const [
+    workforceRecords,
+    setWorkforceRecords,
+  ] = useState([]);
+
+  const [
     loading,
     setLoading,
   ] = useState(true);
@@ -1221,7 +1507,8 @@ const Overviews = () => {
   }, []);
 
   /*
-   * V1 subscribes to the four collections needed by the dashboard.
+   * The overview subscribes to the collections needed for production,
+   * compliance, pricing and the dedicated workforce source of truth.
    *
    * The visible records are filtered below using the signed-in user's
    * sector or organization hierarchy. Firestore security rules must
@@ -1344,6 +1631,43 @@ const Overviews = () => {
           );
         }
       ),
+
+      /*
+       * Workforce headcount is no longer read from reporting forms.
+       *
+       * The dedicated workforce collection is the single source of truth for
+       * local, expatriate and vacancy totals across the dashboard.
+       */
+      onSnapshot(
+        collection(
+          db,
+          WORKFORCE_COLLECTION
+        ),
+        (snapshot) => {
+          setWorkforceRecords(
+            snapshot.docs.map(
+              (
+                workforceDocument
+              ) => ({
+                id:
+                  workforceDocument.id,
+                ...workforceDocument.data(),
+              })
+            )
+          );
+        },
+        (error) => {
+          console.error(
+            "Unable to load workforce records:",
+            error
+          );
+
+          setLoadError(
+            error.message ||
+              "Workforce records could not be loaded."
+          );
+        }
+      ),
     ];
 
     return () => {
@@ -1374,8 +1698,9 @@ const Overviews = () => {
     useMemo(() => {
       return (
         organizationMap.get(
-          currentUserProfile
-            ?.organizationId
+          getUserOrganizationId(
+            currentUserProfile
+          )
         ) ||
         null
       );
@@ -1465,12 +1790,9 @@ const Overviews = () => {
         );
 
       const userIsEnterprise =
-        normalizeStatus(
-          currentOrganization.type ||
+        isEnterpriseOrganization(
           currentOrganization
-            .organizationType
-        ) ===
-        "enterprise";
+        );
 
       if (
         isMinistryUser
@@ -1548,12 +1870,9 @@ const Overviews = () => {
       }
 
       const userIsEnterprise =
-        normalizeStatus(
-          currentOrganization.type ||
+        isEnterpriseOrganization(
           currentOrganization
-            .organizationType
-        ) ===
-        "enterprise";
+        );
 
       const userCompanyId =
         normalizeValue(
@@ -1617,144 +1936,182 @@ const Overviews = () => {
    */
   const enrichedReports =
     useMemo(() => {
-      return visibleReports.map(
-        (report) => {
-          const organization =
-            organizationMap.get(
-              report.organizationId
-            ) ||
-            {};
-
-          const enterpriseId =
-            organization.rootEnterpriseId ||
-            organization.organizationId ||
-            organization.id ||
-            report.organizationId;
-
-          const enterprise =
-            organizationMap.get(
-              enterpriseId
-            ) ||
-            organization;
-
-          const priceRecord =
-            report.pricingSnapshot ||
-            priceMap.get(
-              report.organizationId
-            ) ||
-            priceMap.get(
-              enterpriseId
-            ) ||
-            {};
-
-          const fallbackCalculation =
-            calculateSubmissionMetrics({
-              fields:
-                getReportFields(
-                  report
-                ),
-              fieldValues:
-                getReportFieldValues(
-                  report
-                ),
-              petrolPrice:
-                priceRecord.petrolPrice ??
-                priceRecord.petrolPricePerLitre ??
-                0,
-              dieselPrice:
-                priceRecord.dieselPrice ??
-                priceRecord.dieselPricePerLitre ??
-                0,
-              nationalVolume: 0,
-            });
-
-          const sourceMetrics = {
-            ...fallbackCalculation.sourceMetrics,
-            ...(
-              report.sourceMetrics ||
-              report.metricValues ||
-              report.metrics?.source ||
-              {}
-            ),
-          };
-
-          const calculatedMetrics = {
-            ...fallbackCalculation.calculatedMetrics,
-            ...(
-              report.calculatedMetrics ||
-              report.metrics?.calculated ||
-              {}
-            ),
-          };
-
-          const submittedByUser =
-            userMap.get(
-              report.submittedBy ||
-                report.submittedById
-            );
-
-          const regionId =
-            normalizeRegionId(
-              report.regionId ||
-              organization.regionId ||
-              enterprise.regionId
-            );
-
-          return {
-            ...report,
-
-            organization,
-            enterprise,
-
-            enterpriseId,
-
-            companyId:
-              report.companyId ||
-              enterprise.companyId ||
-              organization.companyId,
-
-            organizationName:
-              report.organizationName ||
-              enterprise.name ||
-              organization.name,
-
-            normalizedCompanyName:
-              enterprise.normalizedName ||
-              organization.normalizedName,
+      return visibleReports
+        .map(
+          (report) => {
+            const organization =
+              resolveRecordOrganization(
+                report,
+                organizationMap,
+                organizations
+              );
 
             /*
-             * regionId is read from the Firestore organization record
-             * and used as the stable grouping key for regional reporting.
+             * Reports without a resolvable organisation cannot be assigned to
+             * an operator or region reliably, so they are excluded from the
+             * overview instead of being grouped under incorrect labels.
              */
-            regionId,
+            if (
+              !organization ||
+              getOrganizationCategory(
+                organization
+              ) ===
+                "ministry"
+            ) {
+              return null;
+            }
 
-            region:
-              getRegionName(
-                regionId
+            const enterpriseId =
+              getEnterpriseIdForOrganization(
+                organization,
+                organizationMap
               ) ||
-              report.regionName ||
-              report.region ||
-              "",
+              getOrganizationId(
+                organization
+              );
 
-            submittedByName:
-              report.submittedByName ||
-              submittedByUser?.fullName ||
-              submittedByUser?.name ||
-              "",
+            const enterprise =
+              organizationMap.get(
+                enterpriseId
+              ) ||
+              organization;
 
-            priceRecord,
-            sourceMetrics,
-            calculatedMetrics,
+            const priceRecord =
+              report.pricingSnapshot ||
+              priceMap.get(
+                report.organizationId
+              ) ||
+              priceMap.get(
+                getOrganizationId(
+                  organization
+                )
+              ) ||
+              priceMap.get(
+                enterpriseId
+              ) ||
+              {};
 
-            reportDate:
-              getReportDate(
-                report
+            const fallbackCalculation =
+              calculateSubmissionMetrics({
+                fields:
+                  getReportFields(
+                    report
+                  ),
+                fieldValues:
+                  getReportFieldValues(
+                    report
+                  ),
+                petrolPrice:
+                  priceRecord.petrolPrice ??
+                  priceRecord.petrolPricePerLitre ??
+                  0,
+                dieselPrice:
+                  priceRecord.dieselPrice ??
+                  priceRecord.dieselPricePerLitre ??
+                  0,
+                nationalVolume: 0,
+              });
+
+            const sourceMetrics = {
+              ...fallbackCalculation.sourceMetrics,
+              ...(
+                report.sourceMetrics ||
+                report.metricValues ||
+                report.metrics?.source ||
+                {}
               ),
-          };
-        }
-      );
+            };
+
+            const calculatedMetrics = {
+              ...fallbackCalculation.calculatedMetrics,
+              ...(
+                report.calculatedMetrics ||
+                report.metrics?.calculated ||
+                {}
+              ),
+            };
+
+            const submittedByUser =
+              userMap.get(
+                report.submittedBy ||
+                  report.submittedById
+              );
+
+            const regionId =
+              getOrganizationRegionId(
+                organization,
+                organizationMap
+              ) ||
+              normalizeRegionId(
+                report.regionId
+              );
+
+            return {
+              ...report,
+
+              organization,
+              enterprise,
+              enterpriseId,
+
+              organizationId:
+                getOrganizationId(
+                  organization
+                ),
+
+              companyId:
+                report.companyId ||
+                enterprise.companyId ||
+                organization.companyId,
+
+              organizationName:
+                report.organizationName ||
+                organization.name ||
+                enterprise.name,
+
+              operatorName:
+                report.operatorName ||
+                enterprise.name ||
+                organization.name,
+
+              normalizedCompanyName:
+                enterprise.normalizedName ||
+                organization.normalizedName,
+
+              /*
+               * The organisation hierarchy is the regional source of truth.
+               * report.regionId is retained only as a legacy fallback.
+               */
+              regionId,
+
+              region:
+                getRegionName(
+                  regionId
+                ) ||
+                report.regionName ||
+                report.region ||
+                "",
+
+              submittedByName:
+                report.submittedByName ||
+                submittedByUser?.fullName ||
+                submittedByUser?.name ||
+                "",
+
+              priceRecord,
+              sourceMetrics,
+              calculatedMetrics,
+
+              reportDate:
+                getReportDate(
+                  report
+                ),
+            };
+          }
+        )
+        .filter(Boolean);
     }, [
       organizationMap,
+      organizations,
       priceMap,
       userMap,
       visibleReports,
@@ -2149,84 +2506,131 @@ const Overviews = () => {
     ]);
 
   /*
-   * Workforce totals use the latest submitted workforce values from
-   * each organization. This avoids counting the same workforce again
-   * when an organization submits several reports on the same day.
+   * Workforce records are entered and maintained in the Workforce module.
+   *
+   * The overview reads the same current role-level records and applies the
+   * same organisation scope. Reporting forms are deliberately not consulted,
+   * which prevents duplicate or stale headcount values across the product.
    */
+  const enrichedWorkforceRecords =
+    useMemo(() => {
+      return workforceRecords
+        .map(
+          (record) => {
+            const organization =
+              resolveRecordOrganization(
+                record,
+                organizationMap,
+                organizations
+              );
+
+            if (
+              !organization ||
+              !visibleOrganizationIds.has(
+                getOrganizationId(
+                  organization
+                )
+              )
+            ) {
+              return null;
+            }
+
+            const enterpriseId =
+              getEnterpriseIdForOrganization(
+                organization,
+                organizationMap
+              ) ||
+              getOrganizationId(
+                organization
+              );
+
+            const enterprise =
+              organizationMap.get(
+                enterpriseId
+              ) ||
+              organization;
+
+            const totalEmployees =
+              toNumber(
+                record.totalEmployees
+              );
+
+            const localEmployees =
+              Math.min(
+                toNumber(
+                  record.localEmployees
+                ),
+                totalEmployees
+              );
+
+            /*
+             * Expatriates are calculated in the Workforce form as total minus
+             * local. Repeating that rule here keeps every dashboard consistent
+             * even when an older record has a stale stored expatriate value.
+             */
+            const expatriateEmployees =
+              Math.max(
+                totalEmployees -
+                  localEmployees,
+                0
+              );
+
+            return {
+              ...record,
+              organization,
+              organizationId:
+                getOrganizationId(
+                  organization
+                ),
+              enterprise,
+              enterpriseId,
+              companyId:
+                enterprise.companyId ||
+                organization.companyId ||
+                record.companyId,
+              name:
+                enterprise.name ||
+                organization.name ||
+                "Unnamed operator",
+              normalizedName:
+                enterprise.normalizedName ||
+                organization.normalizedName,
+              local:
+                localEmployees,
+              expat:
+                expatriateEmployees,
+              vacancies:
+                toNumber(
+                  record.vacancies
+                ),
+              updatedAt:
+                toDate(
+                  record.updatedAt
+                ) ||
+                toDate(
+                  record.createdAt
+                ),
+            };
+          }
+        )
+        .filter(Boolean);
+    }, [
+      organizationMap,
+      organizations,
+      visibleOrganizationIds,
+      workforceRecords,
+    ]);
+
   const workforce =
     useMemo(() => {
-      const latestByOrganization =
-        new Map();
-
-      enrichedReports.forEach(
-        (report) => {
-          if (
-            !isReportSubmitted(
-              report
-            )
-          ) {
-            return;
-          }
-
-          const local =
-            toNumber(
-              report.sourceMetrics
-                .local_employee_count
-            );
-
-          const expat =
-            toNumber(
-              report.sourceMetrics
-                .expat_employee_count
-            );
-
-          if (
-            local <= 0 &&
-            expat <= 0
-          ) {
-            return;
-          }
-
-          const current =
-            latestByOrganization.get(
-              report.organizationId
-            );
-
-          const currentTime =
-            getTimestampValue(
-              current?.submittedAt ||
-                current?.updatedAt ||
-                current?.reportDate
-            );
-
-          const reportTime =
-            getTimestampValue(
-              report.submittedAt ||
-                report.updatedAt ||
-                report.reportDate
-            );
-
-          if (
-            !current ||
-            reportTime >=
-              currentTime
-          ) {
-            latestByOrganization.set(
-              report.organizationId,
-              report
-            );
-          }
-        }
-      );
-
       const operatorTotals =
         new Map();
 
-      latestByOrganization.forEach(
-        (report) => {
+      enrichedWorkforceRecords.forEach(
+        (record) => {
           const operatorId =
-            report.enterpriseId ||
-            report.organizationId;
+            record.enterpriseId ||
+            record.organizationId;
 
           const current =
             operatorTotals.get(
@@ -2235,28 +2639,24 @@ const Overviews = () => {
               id:
                 operatorId,
               companyId:
-                report.companyId,
+                record.companyId,
               name:
-                report.enterprise?.name ||
-                report.organizationName,
+                record.name,
               normalizedName:
-                report.enterprise?.normalizedName ||
-                report.normalizedCompanyName,
+                record.normalizedName,
               local: 0,
               expat: 0,
+              vacancies: 0,
             };
 
           current.local +=
-            toNumber(
-              report.sourceMetrics
-                .local_employee_count
-            );
+            record.local;
 
           current.expat +=
-            toNumber(
-              report.sourceMetrics
-                .expat_employee_count
-            );
+            record.expat;
+
+          current.vacancies +=
+            record.vacancies;
 
           operatorTotals.set(
             operatorId,
@@ -2293,10 +2693,14 @@ const Overviews = () => {
             expat:
               totals.expat +
               operator.expat,
+            vacancies:
+              totals.vacancies +
+              operator.vacancies,
           }),
           {
             local: 0,
             expat: 0,
+            vacancies: 0,
           }
         );
 
@@ -2305,7 +2709,7 @@ const Overviews = () => {
         operators,
       };
     }, [
-      enrichedReports,
+      enrichedWorkforceRecords,
     ]);
 
   const workforcePercentages =
@@ -2493,16 +2897,17 @@ const Overviews = () => {
       );
 
       /*
-       * Include every region assigned to an organization in the current
-       * user's visibility scope, even when no report has been submitted.
+       * Include every region assigned through the organisation hierarchy,
+       * even where that region has not submitted a report yet.
        */
       const visibleRegionIds =
         new Set(
           visibleOrganizations
             .map(
               (organization) =>
-                normalizeRegionId(
-                  organization.regionId
+                getOrganizationRegionId(
+                  organization,
+                  organizationMap
                 )
             )
             .filter(Boolean)
@@ -2545,32 +2950,33 @@ const Overviews = () => {
               ) ||
               [];
 
-            /*
-             * Each region keeps its own latest submitted production date.
-             *
-             * This prevents a region from appearing blank merely because
-             * another region submitted a newer report.
-             */
-            const productionReports =
+            const submittedReports =
               regionReports.filter(
-                (report) =>
-                  isReportSubmitted(
-                    report
-                  ) &&
-                  report.reportDate &&
-                  toNumber(
-                    report.calculatedMetrics
-                      .total_volume_sold
-                  ) >
-                    0
+                isReportSubmitted
               );
 
-            const latestRegionDate =
-              productionReports
+            /*
+             * "Latest submission" uses the actual workflow activity timestamp.
+             *
+             * A late report may belong to an older reporting period but still
+             * be submitted today. Using submittedAt prevents the regional card
+             * from appearing stale when new late submissions arrive.
+             */
+            const latestSubmissionAt =
+              submittedReports
                 .map(
                   (report) =>
-                    report.reportDate
+                    getSubmittedAt(
+                      report
+                    ) ||
+                    toDate(
+                      report.updatedAt
+                    ) ||
+                    toDate(
+                      report.createdAt
+                    )
                 )
+                .filter(Boolean)
                 .sort(
                   (
                     first,
@@ -2581,31 +2987,116 @@ const Overviews = () => {
                 )[0] ||
               null;
 
-            const regionSnapshotReports =
-              latestRegionDate
-                ? regionReports.filter(
+            /*
+             * Production still uses the latest reporting period containing
+             * submitted fuel volume. Reporting date and submission date are
+             * kept separate so the dashboard remains both current and honest.
+             */
+            const productionReports =
+              submittedReports.filter(
+                (report) =>
+                  report.reportDate &&
+                  (
+                    toNumber(
+                      report.calculatedMetrics
+                        .total_volume_sold
+                    ) >
+                      0 ||
+                    toNumber(
+                      report.sourceMetrics
+                        .petrol_volume_sold
+                    ) >
+                      0 ||
+                    toNumber(
+                      report.sourceMetrics
+                        .diesel_volume_sold
+                    ) >
+                      0
+                  )
+              );
+
+            const latestProductionPeriod =
+              productionReports
+                .map(
+                  (report) =>
+                    report.reportDate
+                )
+                .filter(Boolean)
+                .sort(
+                  (
+                    first,
+                    second
+                  ) =>
+                    second -
+                    first
+                )[0] ||
+              null;
+
+            const regionProductionReports =
+              latestProductionPeriod
+                ? productionReports.filter(
                     (report) =>
-                      report.reportDate &&
                       isSameDay(
                         report.reportDate,
-                        latestRegionDate
+                        latestProductionPeriod
                       )
                   )
                 : [];
 
-            const submittedRegionReports =
-              regionSnapshotReports.filter(
-                (report) =>
-                  isReportSubmitted(
+            /*
+             * Retain only the latest saved submission per organisation for the
+             * production period so repeated workflow saves do not double-count.
+             */
+            const latestProductionByOrganization =
+              new Map();
+
+            regionProductionReports.forEach(
+              (report) => {
+                const key =
+                  report.organizationId ||
+                  report.id;
+
+                const current =
+                  latestProductionByOrganization.get(
+                    key
+                  );
+
+                const reportTimestamp =
+                  getTimestampValue(
+                    getSubmittedAt(
+                      report
+                    ) ||
+                    report.updatedAt ||
+                    report.createdAt
+                  );
+
+                const currentTimestamp =
+                  getTimestampValue(
+                    getSubmittedAt(
+                      current
+                    ) ||
+                    current?.updatedAt ||
+                    current?.createdAt
+                  );
+
+                if (
+                  !current ||
+                  reportTimestamp >=
+                    currentTimestamp
+                ) {
+                  latestProductionByOrganization.set(
+                    key,
                     report
-                  )
+                  );
+                }
+              }
+            );
+
+            const productionSnapshot =
+              Array.from(
+                latestProductionByOrganization.values()
               );
 
-            /*
-             * Regional reporting performance is cumulative across every
-             * report that was due in the region, not only the latest
-             * production snapshot.
-             */
             const eligibleRegionReports =
               regionReports.filter(
                 (report) =>
@@ -2631,7 +3122,7 @@ const Overviews = () => {
               );
 
             const production =
-              submittedRegionReports.reduce(
+              productionSnapshot.reduce(
                 (
                   total,
                   report
@@ -2646,9 +3137,10 @@ const Overviews = () => {
 
             const operators =
               new Set(
-                submittedRegionReports.map(
+                submittedReports.map(
                   (report) =>
                     report.enterprise?.name ||
+                    report.operatorName ||
                     report.organizationName
                 )
               );
@@ -2662,16 +3154,21 @@ const Overviews = () => {
                 ),
 
               hasData:
-                Boolean(
-                  latestRegionDate
+                submittedReports.length >
+                0,
+
+              latestSubmissionAt,
+
+              latestSubmissionLabel:
+                formatReportingDate(
+                  latestSubmissionAt
                 ),
 
-              lastReportedDate:
-                latestRegionDate,
+              latestProductionPeriod,
 
-              lastReportedDateLabel:
+              latestProductionPeriodLabel:
                 formatReportingDate(
-                  latestRegionDate
+                  latestProductionPeriod
                 ),
 
               reportsExpected:
@@ -2735,37 +3232,50 @@ const Overviews = () => {
         );
     }, [
       enrichedReports,
+      organizationMap,
+      today,
       visibleOrganizations,
     ]);
 
   const updatedAt =
     useMemo(() => {
-      const timestamps =
-        enrichedReports
-          .map(
-            (report) =>
-              toDate(
-                report.submittedAt ||
-                  report.updatedAt ||
-                  report.createdAt
-              )
-          )
-          .filter(Boolean)
-          .sort(
-            (
-              first,
-              second
-            ) =>
-              second -
-              first
-          );
+      const reportTimestamps =
+        enrichedReports.map(
+          (report) =>
+            getSubmittedAt(
+              report
+            ) ||
+            toDate(
+              report.updatedAt
+            ) ||
+            toDate(
+              report.createdAt
+            )
+        );
 
-      return (
-        timestamps[0] ||
-        null
-      );
+      const workforceTimestamps =
+        enrichedWorkforceRecords.map(
+          (record) =>
+            record.updatedAt
+        );
+
+      return [
+        ...reportTimestamps,
+        ...workforceTimestamps,
+      ]
+        .filter(Boolean)
+        .sort(
+          (
+            first,
+            second
+          ) =>
+            second -
+            first
+        )[0] ||
+        null;
     }, [
       enrichedReports,
+      enrichedWorkforceRecords,
     ]);
 
   const operatorMap =
@@ -2787,7 +3297,9 @@ const Overviews = () => {
       ? `${currentUserProfile?.sector || "Sector"} ministry view`
       : currentUserProfile?.organizationName ||
         organizationMap.get(
-          currentUserProfile?.organizationId
+          getUserOrganizationId(
+            currentUserProfile
+          )
         )?.name ||
         "Company view";
 
@@ -2911,7 +3423,9 @@ const Overviews = () => {
                     workforce.sector.local
                   )} local of ${formatNumber(
                     workforcePercentages.totalWorkforce
-                  )} workers`
+                  )} workers · ${formatNumber(
+                    workforce.sector.vacancies
+                  )} vacancies`
                 : "No workforce data available"
             }
             icon={Users}
@@ -3615,17 +4129,25 @@ const Overviews = () => {
                         </h3>
 
                         <p className="mt-1 text-[11px] text-slate-400">
-                          {region.lastReportedDateLabel
-                            ? `Last reported ${region.lastReportedDateLabel}`
+                          {region.latestSubmissionLabel
+                            ? `Latest submission ${region.latestSubmissionLabel}`
                             : "No reports submitted yet"}
                         </p>
+
+                        {region.latestProductionPeriodLabel && (
+                          <p className="mt-0.5 text-[10px] text-slate-400">
+                            Production period {region.latestProductionPeriodLabel}
+                          </p>
+                        )}
                       </div>
 
                       <span
                         className="mt-1 h-2 w-2 rounded-full"
                         style={{
                           backgroundColor:
-                            !region.hasData
+                            !region.hasData ||
+                            region.reportsExpected <=
+                              0
                               ? "#CBD5E1"
                               : region.complianceRate >=
                                 80
@@ -3645,7 +4167,7 @@ const Overviews = () => {
                         </span>
 
                         <span className="text-sm font-medium tabular-nums text-slate-900">
-                          {region.hasData
+                          {region.latestProductionPeriod
                             ? `${formatNumber(
                                 region.production
                               )} L`
@@ -3724,7 +4246,7 @@ const Overviews = () => {
         </div>
 
         <div>
-          <SectionHeader description="Workforce percentages use the latest local and expatriate totals submitted by each organization.">
+          <SectionHeader description="Workforce figures come directly from the current role-level records maintained in the Workforce module.">
             Workforce Summary
           </SectionHeader>
 
@@ -3869,11 +4391,16 @@ const Overviews = () => {
                               </span>
                             </div>
 
-                            <span className="shrink-0 text-xs tabular-nums text-slate-500">
+                            <span className="shrink-0 text-right text-xs tabular-nums text-slate-500">
                               {formatPercentage(
                                 percentages.localWorkforcePercentage
                               )}{" "}
                               local
+                              {operator.vacancies > 0
+                                ? ` · ${formatNumber(
+                                    operator.vacancies
+                                  )} vacancies`
+                                : ""}
                             </span>
                           </div>
 
