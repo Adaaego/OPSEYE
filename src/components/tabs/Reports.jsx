@@ -1,3 +1,4 @@
+
 import {
   useCallback,
   useEffect,
@@ -9,12 +10,13 @@ import {
 import {
   BarChart,
   Bar,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Rectangle,
 } from "recharts";
 
 import {
@@ -2700,31 +2702,6 @@ const EmptyState = ({
   );
 };
 
-const ComplianceBar = ({
-  index = 0,
-  latestIndex,
-  ...rectangleProps
-}) => {
-  const fill =
-    index ===
-    latestIndex
-      ? GOLD
-      : NAVY;
-
-  return (
-    <Rectangle
-      {...rectangleProps}
-      fill={fill}
-      radius={[
-        3,
-        3,
-        0,
-        0,
-      ]}
-    />
-  );
-};
-
 const SubmissionViewer = ({
   report,
   onClose,
@@ -3478,7 +3455,7 @@ const Reports = ({
     trendGrouping,
     setTrendGrouping,
   ] = useState(
-    "weekly"
+    "daily"
   );
 
   const [
@@ -4535,6 +4512,13 @@ const Reports = ({
       selectedPeriodRange,
     ]);
 
+  /*
+   * The compliance trend answers whether on-time reporting is improving.
+   *
+   * Each point uses every submitted or overdue obligation in that period.
+   * A missed due report remains in the denominator, while future reporting
+   * windows do not lower compliance before their deadline.
+   */
   const complianceChartData =
     useMemo(() => {
       const now =
@@ -4569,6 +4553,11 @@ const Reports = ({
               return;
             }
 
+            /*
+             * Daily grouping is best for a 30-day operational view.
+             * Weekly and monthly grouping remain available for longer-range
+             * management analysis without changing the underlying records.
+             */
             const periodStart =
               trendGrouping ===
               "monthly"
@@ -4577,9 +4566,16 @@ const Reports = ({
                     date.getMonth(),
                     1
                   )
-                : getStartOfWeek(
-                    date
-                  );
+                : trendGrouping ===
+                    "weekly"
+                  ? getStartOfWeek(
+                      date
+                    )
+                  : new Date(
+                      date.getFullYear(),
+                      date.getMonth(),
+                      date.getDate()
+                    );
 
             if (!periodStart) {
               return;
@@ -4592,9 +4588,12 @@ const Reports = ({
                     periodStart.getMonth() +
                       1
                   ).padStart(2, "0")}`
-                : periodStart
-                    .toISOString()
-                    .slice(0, 10);
+                : `${periodStart.getFullYear()}-${String(
+                    periodStart.getMonth() +
+                      1
+                  ).padStart(2, "0")}-${String(
+                    periodStart.getDate()
+                  ).padStart(2, "0")}`;
 
             const current =
               grouped.get(
@@ -4625,6 +4624,12 @@ const Reports = ({
           }
         );
 
+      const maximumPoints =
+        trendGrouping ===
+        "daily"
+          ? 30
+          : 12;
+
       return Array.from(
         grouped.values()
       )
@@ -4633,7 +4638,9 @@ const Reports = ({
             first.periodStart -
             second.periodStart
         )
-        .slice(-12)
+        .slice(
+          -maximumPoints
+        )
         .map(
           (period) => ({
             label:
@@ -4646,13 +4653,22 @@ const Reports = ({
                       year: "2-digit",
                     }
                   )
-                : period.periodStart.toLocaleDateString(
-                    "en-GB",
-                    {
-                      day: "2-digit",
-                      month: "short",
-                    }
-                  ),
+                : trendGrouping ===
+                    "weekly"
+                  ? `Week of ${period.periodStart.toLocaleDateString(
+                      "en-GB",
+                      {
+                        day: "2-digit",
+                        month: "short",
+                      }
+                    )}`
+                  : period.periodStart.toLocaleDateString(
+                      "en-GB",
+                      {
+                        day: "2-digit",
+                        month: "short",
+                      }
+                    ),
 
             rate:
               period.reportsExpected >
@@ -4679,6 +4695,125 @@ const Reports = ({
       complianceSourceReports,
       trendGrouping,
     ]);
+
+  /*
+   * The current breakdown answers what needs attention now.
+   *
+   * Submitted includes both on-time and late submissions because the report
+   * has been received. Overdue contains unsubmitted obligations whose
+   * deadline has passed. Pending contains open obligations that are not due.
+   */
+  const currentSubmissionBreakdown =
+    useMemo(() => {
+      const now =
+        new Date();
+
+      const totals = {
+        submitted: 0,
+        pending: 0,
+        overdue: 0,
+      };
+
+      complianceSourceReports.forEach(
+        (report) => {
+          const status =
+            normalizeStatus(
+              report.status
+            );
+
+          if (
+            EXCLUDED_COMPLIANCE_STATUSES.has(
+              status
+            )
+          ) {
+            return;
+          }
+
+          if (
+            isReportSubmitted(
+              report
+            )
+          ) {
+            totals.submitted +=
+              1;
+            return;
+          }
+
+          const deadlineAt =
+            getDeadlineAt(
+              report
+            );
+
+          const isOverdue =
+            status ===
+              "overdue" ||
+            Boolean(
+              deadlineAt &&
+              deadlineAt <=
+                now
+            );
+
+          if (isOverdue) {
+            totals.overdue +=
+              1;
+          } else {
+            totals.pending +=
+              1;
+          }
+        }
+      );
+
+      const total =
+        totals.submitted +
+        totals.pending +
+        totals.overdue;
+
+      const getPercentage =
+        (value) =>
+          total > 0
+            ? Number(
+                (
+                  (
+                    value /
+                    total
+                  ) *
+                  100
+                ).toFixed(1)
+              )
+            : 0;
+
+      return {
+        total,
+        submitted:
+          totals.submitted,
+        pending:
+          totals.pending,
+        overdue:
+          totals.overdue,
+        submittedPercentage:
+          getPercentage(
+            totals.submitted
+          ),
+        pendingPercentage:
+          getPercentage(
+            totals.pending
+          ),
+        overduePercentage:
+          getPercentage(
+            totals.overdue
+          ),
+      };
+    }, [
+      complianceSourceReports,
+    ]);
+
+  const currentSubmissionChartData = [
+    {
+      name:
+        selectedPeriodRange.label,
+      ...currentSubmissionBreakdown,
+    },
+  ];
 
   const latestComplianceRate =
     complianceChartData.length >
@@ -5164,8 +5299,8 @@ const Reports = ({
 
       <div className="mb-8">
         <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-          <SectionHeader>
-            On-Time Submission Compliance
+          <SectionHeader description="The trend shows whether on-time reporting is improving, while the current breakdown shows what requires attention in the selected scope.">
+            Submission Compliance
           </SectionHeader>
 
           <FilterSelect
@@ -5176,6 +5311,10 @@ const Reports = ({
               setTrendGrouping
             }
             options={[
+              {
+                value: "daily",
+                label: "Daily trend",
+              },
               {
                 value: "weekly",
                 label: "Weekly trend",
@@ -5190,120 +5329,379 @@ const Reports = ({
           />
         </div>
 
-        <Card className="p-5">
-          {complianceChartData.length >
-          0 ? (
-            <>
-              <ResponsiveContainer
-                width="100%"
-                height={260}
-              >
-                <BarChart
-                  data={
-                    complianceChartData
-                  }
-                  margin={{
-                    top: 8,
-                    right: 8,
-                    left: 0,
-                    bottom: 0,
-                  }}
-                >
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    stroke="#e2e8f0"
-                    vertical={false}
-                  />
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(340px,0.8fr)]">
+          <Card className="p-5">
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">
+                  On-Time Compliance Trend
+                </h3>
 
-                  <XAxis
-                    dataKey="label"
-                    tick={{
-                      fontSize: 12,
-                      fill: "#64748b",
-                    }}
-                    axisLine={{
-                      stroke: "#cbd5e1",
-                    }}
-                    tickLine={false}
-                  />
-
-                  <YAxis
-                    domain={[
-                      0,
-                      100,
-                    ]}
-                    ticks={[
-                      0,
-                      25,
-                      50,
-                      75,
-                      100,
-                    ]}
-                    tick={{
-                      fontSize: 12,
-                      fill: "#64748b",
-                    }}
-                    axisLine={false}
-                    tickLine={false}
-                    tickFormatter={(
-                      value
-                    ) =>
-                      `${value}%`
-                    }
-                  />
-
-                  <Tooltip
-                    formatter={(
-                      value,
-                      _name,
-                      item
-                    ) => [
-                      `${value}%`,
-                      `${item.payload.reportsSubmittedOnTime} of ${item.payload.reportsExpected} due reports submitted on time`,
-                    ]}
-                    contentStyle={{
-                      fontSize: 13,
-                      borderRadius: 8,
-                      border:
-                        "1px solid #e2e8f0",
-                    }}
-                  />
-
-                  <Bar
-                    dataKey="rate"
-                    maxBarSize={48}
-                    shape={(
-                      shapeProps
-                    ) => (
-                      <ComplianceBar
-                        {...shapeProps}
-                        latestIndex={
-                          complianceChartData.length -
-                          1
-                        }
-                      />
-                    )}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
-                <p>
-                  Compliance includes submitted and overdue reporting obligations within the selected organisation, region and date scope.
+                <p className="mt-1 text-xs text-slate-500">
+                  Compliance percentage across the selected reporting period.
                 </p>
-
-                {latestComplianceRate !==
-                  null && (
-                  <p className="font-semibold text-slate-700">
-                    Latest: {latestComplianceRate}%
-                  </p>
-                )}
               </div>
-            </>
-          ) : (
-            <EmptyState message="Compliance trends will appear here" />
-          )}
-        </Card>
+
+              {latestComplianceRate !==
+                null && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-right">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                    Latest rate
+                  </p>
+
+                  <p
+                    className="mt-0.5 text-lg font-semibold tabular-nums"
+                    style={{
+                      color:
+                        latestComplianceRate >=
+                        80
+                          ? "#166534"
+                          : latestComplianceRate >=
+                              50
+                            ? GOLD
+                            : "#9F1239",
+                    }}
+                  >
+                    {formatNumber(
+                      latestComplianceRate,
+                      1
+                    )}%
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {complianceChartData.length >
+            0 ? (
+              <>
+                <ResponsiveContainer
+                  width="100%"
+                  height={280}
+                >
+                  <LineChart
+                    data={
+                      complianceChartData
+                    }
+                    margin={{
+                      top: 10,
+                      right: 12,
+                      left: 0,
+                      bottom: 0,
+                    }}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="#e2e8f0"
+                      vertical={false}
+                    />
+
+                    <XAxis
+                      dataKey="label"
+                      tick={{
+                        fontSize: 11,
+                        fill: "#64748b",
+                      }}
+                      axisLine={{
+                        stroke: "#cbd5e1",
+                      }}
+                      tickLine={false}
+                      minTickGap={24}
+                    />
+
+                    <YAxis
+                      domain={[
+                        0,
+                        100,
+                      ]}
+                      ticks={[
+                        0,
+                        25,
+                        50,
+                        75,
+                        100,
+                      ]}
+                      tick={{
+                        fontSize: 12,
+                        fill: "#64748b",
+                      }}
+                      axisLine={false}
+                      tickLine={false}
+                      tickFormatter={(
+                        value
+                      ) =>
+                        `${value}%`
+                      }
+                    />
+
+                    <Tooltip
+                      formatter={(
+                        value,
+                        _name,
+                        item
+                      ) => [
+                        `${formatNumber(
+                          value,
+                          1
+                        )}%`,
+                        `${item.payload.reportsSubmittedOnTime} of ${item.payload.reportsExpected} due reports submitted on time`,
+                      ]}
+                      contentStyle={{
+                        fontSize: 13,
+                        borderRadius: 8,
+                        border:
+                          "1px solid #e2e8f0",
+                      }}
+                    />
+
+                    <Line
+                      type="monotone"
+                      dataKey="rate"
+                      name="On-time compliance"
+                      stroke={
+                        NAVY
+                      }
+                      strokeWidth={3}
+                      dot={{
+                        r: 3.5,
+                        fill:
+                          NAVY,
+                        stroke:
+                          "#ffffff",
+                        strokeWidth: 2,
+                      }}
+                      activeDot={{
+                        r: 6,
+                        fill:
+                          GOLD,
+                        stroke:
+                          "#ffffff",
+                        strokeWidth: 2,
+                      }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+
+                <p className="mt-3 text-xs text-slate-500">
+                  Missed due reports remain in the denominator. Future reporting windows are excluded until their deadlines pass.
+                </p>
+              </>
+            ) : (
+              <EmptyState message="Compliance trends will appear here" />
+            )}
+          </Card>
+
+          <Card className="p-5">
+            <div className="mb-4">
+              <h3 className="text-sm font-semibold text-slate-900">
+                Current Submission Breakdown
+              </h3>
+
+              <p className="mt-1 text-xs text-slate-500">
+                Submitted, pending and overdue obligations for {selectedPeriodRange.label.toLowerCase()}.
+              </p>
+            </div>
+
+            {currentSubmissionBreakdown.total >
+            0 ? (
+              <>
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-4">
+                  <ResponsiveContainer
+                    width="100%"
+                    height={92}
+                  >
+                    <BarChart
+                      data={
+                        currentSubmissionChartData
+                      }
+                      layout="vertical"
+                      margin={{
+                        top: 14,
+                        right: 2,
+                        left: 2,
+                        bottom: 14,
+                      }}
+                    >
+                      <XAxis
+                        type="number"
+                        domain={[
+                          0,
+                          100,
+                        ]}
+                        hide
+                      />
+
+                      <YAxis
+                        type="category"
+                        dataKey="name"
+                        hide
+                      />
+
+                      <Tooltip
+                        formatter={(
+                          value,
+                          name,
+                          item
+                        ) => {
+                          const countKey =
+                            name ===
+                            "Submitted"
+                              ? "submitted"
+                              : name ===
+                                  "Pending"
+                                ? "pending"
+                                : "overdue";
+
+                          return [
+                            `${formatNumber(
+                              value,
+                              1
+                            )}% · ${formatNumber(
+                              item.payload[
+                                countKey
+                              ]
+                            )} reports`,
+                            name,
+                          ];
+                        }}
+                        contentStyle={{
+                          fontSize: 13,
+                          borderRadius: 8,
+                          border:
+                            "1px solid #e2e8f0",
+                        }}
+                      />
+
+                      <Bar
+                        dataKey="submittedPercentage"
+                        name="Submitted"
+                        stackId="submissionStatus"
+                        fill={
+                          NAVY
+                        }
+                        barSize={34}
+                        radius={[
+                          6,
+                          0,
+                          0,
+                          6,
+                        ]}
+                      />
+
+                      <Bar
+                        dataKey="pendingPercentage"
+                        name="Pending"
+                        stackId="submissionStatus"
+                        fill={
+                          GOLD
+                        }
+                        barSize={34}
+                      />
+
+                      <Bar
+                        dataKey="overduePercentage"
+                        name="Overdue"
+                        stackId="submissionStatus"
+                        fill="#9F1239"
+                        barSize={34}
+                        radius={[
+                          0,
+                          6,
+                          6,
+                          0,
+                        ]}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <div className="mt-4 space-y-2.5">
+                  {[
+                    {
+                      key:
+                        "submitted",
+                      label:
+                        "Submitted",
+                      value:
+                        currentSubmissionBreakdown.submitted,
+                      percentage:
+                        currentSubmissionBreakdown.submittedPercentage,
+                      color:
+                        NAVY,
+                    },
+                    {
+                      key:
+                        "pending",
+                      label:
+                        "Pending",
+                      value:
+                        currentSubmissionBreakdown.pending,
+                      percentage:
+                        currentSubmissionBreakdown.pendingPercentage,
+                      color:
+                        GOLD,
+                    },
+                    {
+                      key:
+                        "overdue",
+                      label:
+                        "Overdue",
+                      value:
+                        currentSubmissionBreakdown.overdue,
+                      percentage:
+                        currentSubmissionBreakdown.overduePercentage,
+                      color:
+                        "#9F1239",
+                    },
+                  ].map(
+                    (item) => (
+                      <div
+                        key={
+                          item.key
+                        }
+                        className="flex items-center justify-between gap-4 rounded-lg border border-slate-100 px-3 py-2.5"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span
+                            className="h-2.5 w-2.5 rounded-sm"
+                            style={{
+                              backgroundColor:
+                                item.color,
+                            }}
+                          />
+
+                          <span className="text-xs font-medium text-slate-700">
+                            {item.label}
+                          </span>
+                        </div>
+
+                        <div className="text-right">
+                          <p className="text-sm font-semibold tabular-nums text-slate-900">
+                            {formatNumber(
+                              item.percentage,
+                              1
+                            )}%
+                          </p>
+
+                          <p className="text-[10px] text-slate-400">
+                            {formatNumber(
+                              item.value
+                            )} reports
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  )}
+                </div>
+
+                <p className="mt-3 text-[11px] leading-relaxed text-slate-400">
+                  Submitted includes both on-time and late reports. Overdue includes only unsubmitted reports whose deadlines have passed.
+                </p>
+              </>
+            ) : (
+              <EmptyState message="Current submission status will appear here" />
+            )}
+          </Card>
+        </div>
       </div>
 
       <Card className="overflow-hidden">
