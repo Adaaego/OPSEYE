@@ -1,3 +1,6 @@
+
+
+
 import {
   Fragment,
   useEffect,
@@ -64,6 +67,9 @@ const USERS_COLLECTION =
 
 const COMPANY_FUEL_PRICES_COLLECTION =
   "companyFuelPrices";
+
+const WORKFORCE_COLLECTION =
+  "workforce";
 
 /*
  * These statuses mean a scheduled report has been submitted.
@@ -603,6 +609,134 @@ const getReportName = (
   );
 };
 
+
+/*
+ * Workforce is now maintained in the dedicated workforce collection.
+ *
+ * These helpers normalise current and legacy field names so the Operators
+ * page can read records created during earlier workforce-module iterations.
+ */
+const getWorkforceOrganizationId = (
+  record
+) => {
+  return (
+    record?.organizationId ||
+    record?.orgId ||
+    record?.branchId ||
+    ""
+  );
+};
+
+const getWorkforceTotalEmployees = (
+  record
+) => {
+  return toNumber(
+    record?.totalEmployees ??
+      record?.totalWorkforce ??
+      record?.headcount ??
+      record?.employeeCount
+  );
+};
+
+const getWorkforceLocalEmployees = (
+  record
+) => {
+  return toNumber(
+    record?.localEmployees ??
+      record?.localWorkforce ??
+      record?.local
+  );
+};
+
+const getWorkforceExpatriateEmployees = (
+  record
+) => {
+  const savedExpatriates =
+    record?.expatriateEmployees ??
+    record?.expatEmployees ??
+    record?.expatWorkforce ??
+    record?.expat;
+
+  if (
+    savedExpatriates !==
+      null &&
+    savedExpatriates !==
+      undefined &&
+    savedExpatriates !==
+      ""
+  ) {
+    return toNumber(
+      savedExpatriates
+    );
+  }
+
+  /*
+   * The Workforce form calculates expatriates from total minus local.
+   * Repeat that calculation here for older records that did not persist
+   * the derived expatriate value.
+   */
+  return Math.max(
+    getWorkforceTotalEmployees(
+      record
+    ) -
+      getWorkforceLocalEmployees(
+        record
+      ),
+    0
+  );
+};
+
+const getWorkforceVacancies = (
+  record
+) => {
+  return toNumber(
+    record?.vacancies ??
+      record?.currentVacancies ??
+      record?.openVacancies
+  );
+};
+
+const getWorkforceFutureNeed = (
+  record
+) => {
+  return toNumber(
+    record?.projectedNeed ??
+      record?.futureHiringNeed ??
+      record?.projectedAdditionalNeed
+  );
+};
+
+const getWorkforceShortage = (
+  record
+) => {
+  /*
+   * Current vacancies and future hiring need are separate inputs, but both
+   * represent people the organisation still needs. Recalculate the gap so
+   * older records with a saved zero shortage remain accurate.
+   */
+  return (
+    getWorkforceVacancies(
+      record
+    ) +
+    getWorkforceFutureNeed(
+      record
+    )
+  );
+};
+
+const getWorkforceUpdatedAt = (
+  record
+) => {
+  return (
+    toDate(
+      record?.updatedAt
+    ) ||
+    toDate(
+      record?.createdAt
+    )
+  );
+};
+
 const formatNumber = (
   value,
   maximumFractionDigits = 0
@@ -875,6 +1009,11 @@ const OperatorsTab = ({
   ] = useState([]);
 
   const [
+    workforceRecords,
+    setWorkforceRecords,
+  ] = useState([]);
+
+  const [
     currentOrganization,
     setCurrentOrganization,
   ] = useState(null);
@@ -931,7 +1070,7 @@ const OperatorsTab = ({
 
   /*
    * The Operators page loads the same Firestore collections used by
-   * the Overview page.
+   * the Overview and Workforce pages.
    *
    * All operator totals are calculated here once and the completed
    * selected operator object is passed directly to OperatorDetail.
@@ -995,14 +1134,15 @@ const OperatorsTab = ({
 
           /*
            * These collections are read together so organizations,
-           * scheduled reports, submitters and price references belong
-           * to one consistent page load.
+           * scheduled reports, submitters, price references and workforce
+           * role records belong to one consistent page load.
            */
           const [
             organizationsSnapshot,
             reportsSnapshot,
             usersSnapshot,
             pricesSnapshot,
+            workforceSnapshot,
           ] =
             await Promise.all([
               getDocs(
@@ -1027,6 +1167,12 @@ const OperatorsTab = ({
                 collection(
                   db,
                   COMPANY_FUEL_PRICES_COLLECTION
+                )
+              ),
+              getDocs(
+                collection(
+                  db,
+                  WORKFORCE_COLLECTION
                 )
               ),
             ]);
@@ -1072,6 +1218,17 @@ const OperatorsTab = ({
                 id:
                   priceDocument.id,
                 ...priceDocument.data(),
+              })
+            );
+
+          const workforce =
+            workforceSnapshot.docs.map(
+              (
+                workforceDocument
+              ) => ({
+                id:
+                  workforceDocument.id,
+                ...workforceDocument.data(),
               })
             );
 
@@ -1158,6 +1315,10 @@ const OperatorsTab = ({
             prices
           );
 
+          setWorkforceRecords(
+            workforce
+          );
+
           setCurrentOrganization(
             signedInOrganization
           );
@@ -1191,6 +1352,10 @@ const OperatorsTab = ({
             );
 
             setCompanyFuelPrices(
+              []
+            );
+
+            setWorkforceRecords(
               []
             );
 
@@ -1613,93 +1778,101 @@ const OperatorsTab = ({
       });
 
     /*
-     * The latest workforce report from each organization is used.
+     * Workforce totals now come from the dedicated workforce collection.
      *
-     * This prevents a branch's workforce from being counted repeatedly
-     * when several different forms are submitted.
+     * Each workforce document represents one role within one organisation.
+     * Summing the current role records therefore produces the operator's
+     * complete workforce without relying on report-form headcount fields.
      */
-    const latestWorkforceByOrganization =
-      new Map();
-
-    scopedReports
-      .filter(
-        isReportSubmitted
-      )
-      .forEach(
-        (report) => {
-          const local =
-            toNumber(
-              report.sourceMetrics
-                .local_employee_count
-            );
-
-          const expat =
-            toNumber(
-              report.sourceMetrics
-                .expat_employee_count
+    const scopedWorkforceRecords =
+      workforceRecords.filter(
+        (record) => {
+          const recordOrganizationId =
+            getWorkforceOrganizationId(
+              record
             );
 
           if (
-            local <= 0 &&
-            expat <= 0
+            recordOrganizationId &&
+            hierarchyIds.has(
+              recordOrganizationId
+            )
           ) {
-            return;
+            return true;
           }
 
-          const current =
-            latestWorkforceByOrganization.get(
-              report.organizationId
-            );
-
-          const currentTime =
-            getSubmittedAt(
-              current
-            )?.getTime() ||
-            0;
-
-          const reportTime =
-            getSubmittedAt(
-              report
-            )?.getTime() ||
-            0;
-
+          /*
+           * Older workforce records may identify only their enterprise or
+           * company. These fallbacks are safe for enterprise operator rows
+           * because the row already represents the full enterprise hierarchy.
+           */
           if (
-            !current ||
-            reportTime >=
-              currentTime
+            isEnterprise &&
+            (
+              record.enterpriseId ===
+                organizationId ||
+              record.rootEnterpriseId ===
+                organizationId
+            )
           ) {
-            latestWorkforceByOrganization.set(
-              report.organizationId,
-              report
-            );
+            return true;
           }
+
+          return (
+            isEnterprise &&
+            Boolean(
+              organizationCompanyId
+            ) &&
+            normalizeValue(
+              record.companyId
+            ) ===
+              organizationCompanyId
+          );
         }
       );
 
     const workforce =
-      Array.from(
-        latestWorkforceByOrganization.values()
-      ).reduce(
+      scopedWorkforceRecords.reduce(
         (
           totals,
-          report
+          record
         ) => ({
           local:
             totals.local +
-            toNumber(
-              report.sourceMetrics
-                .local_employee_count
+            getWorkforceLocalEmployees(
+              record
             ),
+
           expat:
             totals.expat +
-            toNumber(
-              report.sourceMetrics
-                .expat_employee_count
+            getWorkforceExpatriateEmployees(
+              record
+            ),
+
+          vacancies:
+            totals.vacancies +
+            getWorkforceVacancies(
+              record
+            ),
+
+          futureNeed:
+            totals.futureNeed +
+            getWorkforceFutureNeed(
+              record
+            ),
+
+          shortage:
+            totals.shortage +
+            getWorkforceShortage(
+              record
             ),
         }),
         {
           local: 0,
           expat: 0,
+          vacancies: 0,
+          futureNeed: 0,
+          shortage: 0,
         }
       );
 
@@ -2075,6 +2248,57 @@ const OperatorsTab = ({
                 0
               );
 
+            /*
+             * Child workforce is calculated from role records attached to the
+             * child organisation itself. Descendant records remain represented
+             * by their own child rows instead of being counted twice here.
+             */
+            const childWorkforceRecords =
+              scopedWorkforceRecords.filter(
+                (record) =>
+                  getWorkforceOrganizationId(
+                    record
+                  ) ===
+                    childId
+              );
+
+            const childWorkforce =
+              childWorkforceRecords.reduce(
+                (
+                  totals,
+                  record
+                ) => ({
+                  local:
+                    totals.local +
+                    getWorkforceLocalEmployees(
+                      record
+                    ),
+                  expat:
+                    totals.expat +
+                    getWorkforceExpatriateEmployees(
+                      record
+                    ),
+                  vacancies:
+                    totals.vacancies +
+                    getWorkforceVacancies(
+                      record
+                    ),
+                }),
+                {
+                  local: 0,
+                  expat: 0,
+                  vacancies: 0,
+                }
+              );
+
+            const childWorkforcePercentages =
+              calculateWorkforcePercentages({
+                localEmployees:
+                  childWorkforce.local,
+                expatEmployees:
+                  childWorkforce.expat,
+              });
+
             let status =
               child.status ||
               "active";
@@ -2128,6 +2352,25 @@ const OperatorsTab = ({
                   )
                 ),
               production,
+
+              workforce: {
+                local:
+                  childWorkforce.local,
+                expat:
+                  childWorkforce.expat,
+                vacancies:
+                  childWorkforce.vacancies,
+                total:
+                  childWorkforcePercentages
+                    .totalWorkforce,
+                localPercentage:
+                  childWorkforcePercentages
+                    .localWorkforcePercentage,
+                expatPercentage:
+                  childWorkforcePercentages
+                    .expatWorkforcePercentage,
+              },
+
               submissionsToday:
                 `${childSubmitted.length}/${childExpected.length}`,
               submissionsLateToday:
@@ -2137,10 +2380,14 @@ const OperatorsTab = ({
         );
 
     const latestReportDate =
-      scopedReports
-        .map(
+      [
+        ...scopedReports.map(
           getSubmittedAt
-        )
+        ),
+        ...scopedWorkforceRecords.map(
+          getWorkforceUpdatedAt
+        ),
+      ]
         .filter(Boolean)
         .sort(
           (
@@ -2288,6 +2535,12 @@ const OperatorsTab = ({
           workforce.local,
         expat:
           workforce.expat,
+        vacancies:
+          workforce.vacancies,
+        futureNeed:
+          workforce.futureNeed,
+        shortage:
+          workforce.shortage,
         localPercentage:
           workforcePercentages
             .localWorkforcePercentage,
@@ -2303,6 +2556,12 @@ const OperatorsTab = ({
         workforce.local,
       expatWorkforce:
         workforce.expat,
+      workforceVacancies:
+        workforce.vacancies,
+      workforceFutureNeed:
+        workforce.futureNeed,
+      workforceShortage:
+        workforce.shortage,
       localWorkforcePct:
         workforcePercentages
           .localWorkforcePercentage,
@@ -2316,6 +2575,7 @@ const OperatorsTab = ({
        * KPI, chart and table when its reporting filters change.
        */
       scopedReports,
+      scopedWorkforceRecords,
       hierarchyOrganizations,
 
       productionCaption:
@@ -2372,6 +2632,7 @@ const OperatorsTab = ({
       operators,
       organizationsLoadedAt,
       visibleOrganizations,
+      workforceRecords,
     ]);
 
   const regionOptions =
@@ -2594,6 +2855,40 @@ const OperatorsTab = ({
       mergedOperators,
     ]);
 
+  const dataUpdatedAt =
+    useMemo(() => {
+      return (
+        mergedOperators
+          .map(
+            (operator) =>
+              operator.updatedAt
+          )
+          .filter(Boolean)
+          .sort(
+            (
+              first,
+              second
+            ) =>
+              (
+                toDate(
+                  second
+                )?.getTime() ||
+                0
+              ) -
+              (
+                toDate(
+                  first
+                )?.getTime() ||
+                0
+              )
+          )[0] ||
+        organizationsLoadedAt
+      );
+    }, [
+      mergedOperators,
+      organizationsLoadedAt,
+    ]);
+
   const scopeDescription =
     useMemo(() => {
       if (
@@ -2718,7 +3013,7 @@ const OperatorsTab = ({
         title="Operators"
         timestamp={formatUpdatedAt(
           updatedAt ||
-            organizationsLoadedAt
+            dataUpdatedAt
         )}
       />
 
