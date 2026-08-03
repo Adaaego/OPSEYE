@@ -1,6 +1,8 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -9,7 +11,6 @@ import {
   MapPin,
   FileText,
   FileSpreadsheet,
-  ClipboardList,
   Users,
   LogOut,
   Menu,
@@ -28,7 +29,6 @@ import Reports from "./Reports";
 import Workforce from "./Workforce";
 import AccountSettings from "./AccountSettings";
 import Forms from "./Forms";
-import OperatorsReports from "./OperatorReports";
 
 const BASE_NAV_ITEMS = [
   {
@@ -71,7 +71,6 @@ const PAGE_COMPONENTS = {
   regions: Regions,
   reports: Reports,
   forms: Forms,
-  operatorReports: OperatorsReports,
   workforce: Workforce,
   settings: AccountSettings,
 };
@@ -90,6 +89,13 @@ const PAGE_COMPONENTS = {
 const SIDEBAR_NAVY = "#020617";
 const SIDEBAR_ICON = "#C8D5E8";
 
+/*
+ * Page content fades out before the next component is mounted, then the
+ * incoming page fades and slides into place. Keeping this duration short
+ * makes navigation feel polished without slowing down frequent dashboard use.
+ */
+const PAGE_TRANSITION_DURATION = 180;
+
 const SideBar = ({
   currentUser = null,
   initialTab = "overview",
@@ -98,6 +104,23 @@ const SideBar = ({
 }) => {
   const [activeTab, setActiveTab] =
     useState(initialTab);
+
+  /*
+   * activeTab controls the highlighted sidebar item. displayedTab controls
+   * the page that is currently mounted. Separating them lets the old page
+   * fade out before the new page is rendered.
+   */
+  const [displayedTab, setDisplayedTab] =
+    useState(initialTab);
+
+  const [pageIsVisible, setPageIsVisible] =
+    useState(true);
+
+  const pageTransitionTimerRef =
+    useRef(null);
+
+  const pageTransitionFrameRef =
+    useRef(null);
 
   const [mobileOpen, setMobileOpen] =
     useState(false);
@@ -131,9 +154,8 @@ const SideBar = ({
   /*
    * The user's Firestore document contains the organizationId.
    *
-   * The actual organization type is stored inside the matching
-   * organization document, so the sidebar must load that document
-   * before deciding whether to display Forms or Reporting Tasks.
+   * The actual organization type is stored inside the matching organization
+   * document. Only Ministry accounts receive the Forms navigation item.
    */
   useEffect(() => {
     const loadOrganizationCategory = async () => {
@@ -178,8 +200,7 @@ const SideBar = ({
   
         /*
          * The organization document contains organizationCategory.
-         * This field determines whether the sidebar shows Forms
-         * or Reporting Tasks.
+         * This field determines whether the Ministry-only Forms page appears.
          */
         const organization =
           await getOrganizationDocument(
@@ -217,48 +238,42 @@ const SideBar = ({
     loadOrganizationCategory();
   }, [currentUser?.uid]);
   /*
-   * Only an organization whose Firestore organization type is
-   * exactly "ministry" should see the Forms page.
-   *
-   * Every other organization type, including enterprise, country,
-   * region and branch, receives Reporting Tasks instead.
+   * Only Ministry accounts receive the Forms page. Operator accounts use the
+   * shared Reports page, so the former Reporting Tasks item is intentionally
+   * omitted to avoid two navigation entries that serve the same purpose.
    */
   const isMinistry =
-  organizationCategory === "ministry";
+    organizationCategory === "ministry";
 
   const navigationItems = useMemo(() => {
     /*
-     * Wait until the organization category has loaded before
-     * showing the account-specific sidebar item. This prevents
-     * a ministry user from briefly seeing Reporting Tasks.
+     * The base navigation is safe for every account while the organisation
+     * category is loading. Forms is inserted only after Ministry access has
+     * been confirmed from Firestore.
      */
-    if (loadingOrganization) {
+    if (
+      loadingOrganization ||
+      !isMinistry
+    ) {
       return BASE_NAV_ITEMS;
     }
-  
-    const accountSpecificItem = isMinistry
-      ? {
-          id: "forms",
-          label: "Forms",
-          icon: FileSpreadsheet,
-        }
-      : {
-          id: "operatorReports",
-          label: "Reporting Tasks",
-          icon: ClipboardList,
-        };
-  
+
     const reportsIndex =
       BASE_NAV_ITEMS.findIndex(
-        (item) => item.id === "reports"
+        (item) =>
+          item.id === "reports"
       );
-  
+
     return [
       ...BASE_NAV_ITEMS.slice(
         0,
         reportsIndex + 1
       ),
-      accountSpecificItem,
+      {
+        id: "forms",
+        label: "Forms",
+        icon: FileSpreadsheet,
+      },
       ...BASE_NAV_ITEMS.slice(
         reportsIndex + 1
       ),
@@ -269,37 +284,131 @@ const SideBar = ({
   ]);
 
   /*
-   * If the available navigation changes and the current page
-   * is no longer allowed, return the user to Overview.
-   *
-   * This prevents ministry users from opening Reporting Tasks
-   * and prevents operators from opening the ministry Forms page.
+   * Clear pending timers and animation frames before starting another page
+   * change. This prevents rapid clicks from mounting pages out of sequence.
+   */
+  const clearPageTransition =
+    useCallback(() => {
+      if (
+        pageTransitionTimerRef.current
+      ) {
+        window.clearTimeout(
+          pageTransitionTimerRef.current
+        );
+
+        pageTransitionTimerRef.current =
+          null;
+      }
+
+      if (
+        pageTransitionFrameRef.current
+      ) {
+        window.cancelAnimationFrame(
+          pageTransitionFrameRef.current
+        );
+
+        pageTransitionFrameRef.current =
+          null;
+      }
+    }, []);
+
+  /*
+   * The sidebar selection updates immediately, while the content area first
+   * fades out. The next page is mounted only after the exit transition ends,
+   * then a requestAnimationFrame starts the entrance transition.
+   */
+  const transitionToTab =
+    useCallback(
+      (tabId) => {
+        setMobileOpen(false);
+
+        if (
+          tabId === activeTab &&
+          tabId === displayedTab
+        ) {
+          return;
+        }
+
+        clearPageTransition();
+        setActiveTab(tabId);
+        setPageIsVisible(false);
+
+        pageTransitionTimerRef.current =
+          window.setTimeout(() => {
+            setDisplayedTab(tabId);
+
+            /*
+             * Reset the window position when moving between dashboard pages.
+             * Smooth scrolling works together with the fade transition and
+             * prevents a shorter page from opening halfway down the screen.
+             */
+            window.scrollTo({
+              top: 0,
+              behavior: "smooth",
+            });
+
+            pageTransitionFrameRef.current =
+              window.requestAnimationFrame(
+                () => {
+                  setPageIsVisible(true);
+                  pageTransitionFrameRef.current =
+                    null;
+                }
+              );
+
+            pageTransitionTimerRef.current =
+              null;
+          }, PAGE_TRANSITION_DURATION);
+      },
+      [
+        activeTab,
+        clearPageTransition,
+        displayedTab,
+      ]
+    );
+
+  /*
+   * Remove transition work when the dashboard shell unmounts.
    */
   useEffect(() => {
+    return () => {
+      clearPageTransition();
+    };
+  }, [clearPageTransition]);
 
+  /*
+   * If the available navigation changes and the current page is no longer
+   * allowed, return the user to Overview through the same smooth transition.
+   * This also redirects any old operatorReports initial tab now that the
+   * duplicate operator navigation item has been removed.
+   */
+  useEffect(() => {
     const activeTabIsAvailable =
       navigationItems.some(
-        (item) => item.id === activeTab
+        (item) =>
+          item.id === activeTab
       );
 
     if (!activeTabIsAvailable) {
-      setActiveTab("overview");
+      transitionToTab("overview");
     }
   }, [
     activeTab,
-    loadingOrganization,
     navigationItems,
+    transitionToTab,
   ]);
 
   const ActivePage =
-    PAGE_COMPONENTS[activeTab] ?? Overviews;
+    PAGE_COMPONENTS[displayedTab] ??
+    Overviews;
 
   const activePageProps =
-    tabProps[activeTab] ?? {};
+    tabProps[displayedTab] ?? {};
 
-  const handleNavigate = (tabId) => {
-    setActiveTab(tabId);
-    setMobileOpen(false);
+  const handleNavigate = (
+    tabId
+  ) => {
+    transitionToTab(tabId);
   };
 
   const handleSignOut = async () => {
@@ -571,10 +680,28 @@ const SideBar = ({
         <div className="mx-auto max-w-[1800px] px-4 py-6 sm:px-6 lg:px-10 lg:py-8">
           {/* Every page receives the signed-in user so it can
               load the correct organization-scoped information. */}
-          <ActivePage
-            {...activePageProps}
-            currentUser={currentUser}
-          />
+          {/*
+           * The keyed wrapper keeps each page isolated and provides a short
+           * fade-and-slide transition whenever displayedTab changes.
+           */}
+          <div
+            key={displayedTab}
+            className={`transition-[opacity,transform] ease-out ${
+              pageIsVisible
+                ? "translate-y-0 opacity-100"
+                : "translate-y-2 opacity-0"
+            }`}
+            style={{
+              transitionDuration: `${PAGE_TRANSITION_DURATION}ms`,
+              willChange:
+                "opacity, transform",
+            }}
+          >
+            <ActivePage
+              {...activePageProps}
+              currentUser={currentUser}
+            />
+          </div>
         </div>
       </main>
     </div>
