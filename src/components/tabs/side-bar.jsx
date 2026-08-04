@@ -11,6 +11,7 @@ import {
   MapPin,
   FileText,
   FileSpreadsheet,
+  ClipboardList,
   Users,
   LogOut,
   Menu,
@@ -29,6 +30,7 @@ import Reports from "./Reports";
 import Workforce from "./Workforce";
 import AccountSettings from "./AccountSettings";
 import Forms from "./Forms";
+import OperatorsReports from "./OperatorReports";
 
 const BASE_NAV_ITEMS = [
   {
@@ -71,6 +73,7 @@ const PAGE_COMPONENTS = {
   regions: Regions,
   reports: Reports,
   forms: Forms,
+  operatorReports: OperatorsReports,
   workforce: Workforce,
   settings: AccountSettings,
 };
@@ -238,25 +241,36 @@ const SideBar = ({
     loadOrganizationCategory();
   }, [currentUser?.uid]);
   /*
-   * Only Ministry accounts receive the Forms page. Operator accounts use the
-   * shared Reports page, so the former Reporting Tasks item is intentionally
-   * omitted to avoid two navigation entries that serve the same purpose.
+   * Ministry users manage report templates through Forms. Operator users need
+   * Reporting Tasks because that page is where scheduled reports are opened,
+   * completed and submitted. Reports remains available as the reporting and
+   * performance view, so the two operator pages serve different purposes.
    */
   const isMinistry =
     organizationCategory === "ministry";
 
   const navigationItems = useMemo(() => {
     /*
-     * The base navigation is safe for every account while the organisation
-     * category is loading. Forms is inserted only after Ministry access has
-     * been confirmed from Firestore.
+     * Wait until the organisation category has loaded before inserting the
+     * account-specific page. This prevents the wrong item flashing briefly
+     * while Firestore resolves the signed-in user's organisation.
      */
-    if (
-      loadingOrganization ||
-      !isMinistry
-    ) {
+    if (loadingOrganization) {
       return BASE_NAV_ITEMS;
     }
+
+    const accountSpecificItem =
+      isMinistry
+        ? {
+            id: "forms",
+            label: "Forms",
+            icon: FileSpreadsheet,
+          }
+        : {
+            id: "operatorReports",
+            label: "Reporting Tasks",
+            icon: ClipboardList,
+          };
 
     const reportsIndex =
       BASE_NAV_ITEMS.findIndex(
@@ -269,11 +283,7 @@ const SideBar = ({
         0,
         reportsIndex + 1
       ),
-      {
-        id: "forms",
-        label: "Forms",
-        icon: FileSpreadsheet,
-      },
+      accountSpecificItem,
       ...BASE_NAV_ITEMS.slice(
         reportsIndex + 1
       ),
@@ -379,8 +389,8 @@ const SideBar = ({
   /*
    * If the available navigation changes and the current page is no longer
    * allowed, return the user to Overview through the same smooth transition.
-   * This also redirects any old operatorReports initial tab now that the
-   * duplicate operator navigation item has been removed.
+   * This prevents Ministry users from opening operator Reporting Tasks and
+   * prevents operator users from opening the Ministry-only Forms page.
    */
   useEffect(() => {
     const activeTabIsAvailable =
