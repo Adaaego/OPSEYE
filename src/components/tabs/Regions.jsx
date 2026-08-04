@@ -1,3 +1,4 @@
+
 import {
   Fragment,
   useEffect,
@@ -337,6 +338,7 @@ const getDateKey = (
 
 const getPeriodRange = ({
   period,
+  selectedDate = "",
   customStartDate = "",
   customEndDate = "",
   now = new Date(),
@@ -397,6 +399,58 @@ const getPeriodRange = ({
 
       label:
         "Today",
+
+      isComplete:
+        true,
+    };
+  }
+
+  /*
+   * A specific day is treated as one complete local calendar day.
+   *
+   * Date-only strings are already parsed locally by toDate, so selecting
+   * 03 August cannot shift to 02 August because of a timezone conversion.
+   */
+  if (
+    period ===
+    "specific_day"
+  ) {
+    const day =
+      toDate(
+        selectedDate
+      );
+
+    return {
+      start:
+        day
+          ? startOfDay(
+              day
+            )
+          : null,
+
+      end:
+        day
+          ? endOfDay(
+              day
+            )
+          : null,
+
+      label:
+        day
+          ? day.toLocaleDateString(
+              "en-GB",
+              {
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+              }
+            )
+          : "Select a day",
+
+      isComplete:
+        Boolean(
+          day
+        ),
     };
   }
 
@@ -407,6 +461,8 @@ const getPeriodRange = ({
       start: null,
       end: null,
       label: "All time",
+      isComplete:
+        true,
     };
   }
 
@@ -434,6 +490,16 @@ const getPeriodRange = ({
 
       label:
         "Custom period",
+
+      /*
+       * Custom ranges intentionally support an open start or end date.
+       * The panel closes automatically once both boundaries are selected.
+       */
+      isComplete:
+        Boolean(
+          customStartDate ||
+          customEndDate
+        ),
     };
   }
 
@@ -465,6 +531,9 @@ const getPeriodRange = ({
 
       label:
         "This quarter",
+
+      isComplete:
+        true,
     };
   }
 
@@ -496,6 +565,9 @@ const getPeriodRange = ({
       30
         ? "Last 30 days"
         : "Last 7 days",
+
+    isComplete:
+      true,
   };
 };
 
@@ -1408,19 +1480,51 @@ const DashboardHeader = ({
 
 const PeriodFilterControl = ({
   value,
+  selectedDate = "",
   customStartDate = "",
   customEndDate = "",
   onChange = () => {},
+  onSelectedDateChange = () => {},
   onCustomStartDateChange = () => {},
   onCustomEndDateChange = () => {},
   className = "",
 }) => {
   const [
-    customRangeOpen,
-    setCustomRangeOpen,
-  ] = useState(
-    value === "custom"
-  );
+    datePanelOpen,
+    setDatePanelOpen,
+  ] = useState(() => {
+    /*
+     * A completed date selection should not leave the floating panel open
+     * when this control mounts again after the parent dashboard recalculates.
+     */
+    if (
+      value ===
+      "specific_day"
+    ) {
+      return !selectedDate;
+    }
+
+    if (
+      value ===
+      "custom"
+    ) {
+      return !(
+        customStartDate &&
+        customEndDate
+      );
+    }
+
+    return false;
+  });
+
+  const controlRef =
+    useRef(null);
+
+  const previousValueRef =
+    useRef(value);
+
+  const selectedDateRef =
+    useRef(null);
 
   const startDateRef =
     useRef(null);
@@ -1428,12 +1532,129 @@ const PeriodFilterControl = ({
   const endDateRef =
     useRef(null);
 
+  /*
+   * The same date control is used on the Regions list and Region Detail.
+   *
+   * The panel opens only for date-based options and can be dismissed with
+   * Escape, an outside click, the close button or a completed selection.
+   */
   useEffect(() => {
-    setCustomRangeOpen(
-      value === "custom"
+    setDatePanelOpen(
+      value ===
+        "specific_day" ||
+      value ===
+        "custom"
     );
   }, [
     value,
+  ]);
+
+  /*
+   * Parent filter state updates can cause the Regions view to recalculate or
+   * remount this control. Watch the completed values as a second line of
+   * defence so the panel closes after the selected day or range is committed.
+   *
+   * When the user has just changed the period option to Custom range, keep the
+   * panel open even when an older saved range exists so it can be edited.
+   */
+  useEffect(() => {
+    const valueChanged =
+      previousValueRef.current !==
+      value;
+
+    previousValueRef.current =
+      value;
+
+    if (valueChanged) {
+      return;
+    }
+
+    const specificDayComplete =
+      value ===
+        "specific_day" &&
+      Boolean(
+        selectedDate
+      );
+
+    const customRangeComplete =
+      value ===
+        "custom" &&
+      Boolean(
+        customStartDate &&
+        customEndDate
+      );
+
+    if (
+      specificDayComplete ||
+      customRangeComplete
+    ) {
+      setDatePanelOpen(
+        false
+      );
+    }
+  }, [
+    customEndDate,
+    customStartDate,
+    selectedDate,
+    value,
+  ]);
+
+  useEffect(() => {
+    if (
+      !datePanelOpen
+    ) {
+      return undefined;
+    }
+
+    const handlePointerDown =
+      (event) => {
+        if (
+          controlRef.current &&
+          !controlRef.current.contains(
+            event.target
+          )
+        ) {
+          setDatePanelOpen(
+            false
+          );
+        }
+      };
+
+    const handleKeyDown =
+      (event) => {
+        if (
+          event.key ===
+          "Escape"
+        ) {
+          setDatePanelOpen(
+            false
+          );
+        }
+      };
+
+    document.addEventListener(
+      "mousedown",
+      handlePointerDown
+    );
+
+    document.addEventListener(
+      "keydown",
+      handleKeyDown
+    );
+
+    return () => {
+      document.removeEventListener(
+        "mousedown",
+        handlePointerDown
+      );
+
+      document.removeEventListener(
+        "keydown",
+        handleKeyDown
+      );
+    };
+  }, [
+    datePanelOpen,
   ]);
 
   const openDatePicker = (
@@ -1452,12 +1673,111 @@ const PeriodFilterControl = ({
       typeof input.showPicker ===
       "function"
     ) {
-      input.showPicker();
+      try {
+        input.showPicker();
+      } catch {
+        /*
+         * Browsers may restrict showPicker outside a direct user gesture.
+         * The native date input remains available as the fallback.
+         */
+      }
     }
   };
 
+  const handleSpecificDateChange =
+    (nextDate) => {
+      onSelectedDateChange(
+        nextDate
+      );
+
+      /*
+       * A specific-day filter is complete after one date is selected, so the
+       * surrounding calendar panel should not remain open over the dashboard.
+       */
+      if (nextDate) {
+        setDatePanelOpen(
+          false
+        );
+      }
+    };
+
+  const handleCustomStartChange =
+    (nextDate) => {
+      const endDateIsInvalid =
+        Boolean(
+          customEndDate &&
+          nextDate &&
+          nextDate >
+            customEndDate
+        );
+
+      onCustomStartDateChange(
+        nextDate
+      );
+
+      /*
+       * Clear an older end date that would make the range invalid.
+       * The user can then choose a valid end date from the second calendar.
+       */
+      if (endDateIsInvalid) {
+        onCustomEndDateChange(
+          ""
+        );
+
+        return;
+      }
+
+      /*
+       * A previously selected valid end date means the range is complete as
+       * soon as the new start date is committed. Close immediately.
+       */
+      if (
+        nextDate &&
+        customEndDate
+      ) {
+        setDatePanelOpen(
+          false
+        );
+      }
+    };
+
+  const handleCustomEndChange =
+    (nextDate) => {
+      onCustomEndDateChange(
+        nextDate
+      );
+
+      /*
+       * Once both range boundaries exist, the selection is complete.
+       * Close the panel immediately instead of requiring an extra Done click.
+       */
+      if (
+        customStartDate &&
+        nextDate
+      ) {
+        setDatePanelOpen(
+          false
+        );
+      }
+    };
+
+  const panelTitle =
+    value ===
+    "specific_day"
+      ? "Select a day"
+      : "Select date range";
+
+  const panelDescription =
+    value ===
+    "specific_day"
+      ? "Choose the exact reporting day to display."
+      : "Pick a start and end date from the calendar.";
+
   return (
     <div
+      ref={
+        controlRef
+      }
       className={`relative ${className}`}
     >
       <div className="relative">
@@ -1467,6 +1787,22 @@ const PeriodFilterControl = ({
           value={
             value
           }
+          onClick={() => {
+            /*
+             * Re-open the picker when a user clicks an already-selected
+             * Specific day or Custom range option to edit its dates.
+             */
+            if (
+              value ===
+                "specific_day" ||
+              value ===
+                "custom"
+            ) {
+              setDatePanelOpen(
+                true
+              );
+            }
+          }}
           onChange={(
             event
           ) => {
@@ -1477,7 +1813,9 @@ const PeriodFilterControl = ({
               nextValue
             );
 
-            setCustomRangeOpen(
+            setDatePanelOpen(
+              nextValue ===
+                "specific_day" ||
               nextValue ===
                 "custom"
             );
@@ -1486,6 +1824,10 @@ const PeriodFilterControl = ({
         >
           <option value="today">
             Today
+          </option>
+
+          <option value="specific_day">
+            Specific day
           </option>
 
           <option value="last_7_days">
@@ -1510,39 +1852,44 @@ const PeriodFilterControl = ({
         </select>
       </div>
 
-      {value ===
-        "custom" &&
-        customRangeOpen && (
+      {(
+        value ===
+          "specific_day" ||
+        value ===
+          "custom"
+      ) &&
+        datePanelOpen && (
         <div className="absolute right-0 z-50 mt-2 w-[min(92vw,430px)] rounded-xl border border-slate-200 bg-white p-4 shadow-xl">
           <div className="mb-4 flex items-center justify-between gap-4">
             <div>
               <p className="text-sm font-semibold text-slate-900">
-                Select date range
+                {panelTitle}
               </p>
 
               <p className="mt-0.5 text-xs text-slate-500">
-                Pick a start and end date from the calendar.
+                {panelDescription}
               </p>
             </div>
 
             <button
               type="button"
               onClick={() =>
-                setCustomRangeOpen(
+                setDatePanelOpen(
                   false
                 )
               }
               className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
-              aria-label="Close date range"
+              aria-label="Close date selection"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto_1fr] sm:items-end">
-            <label>
+          {value ===
+          "specific_day" ? (
+            <label className="block">
               <span className="mb-1.5 block text-xs font-medium text-slate-600">
-                Start date
+                Reporting day
               </span>
 
               <div className="relative">
@@ -1550,28 +1897,28 @@ const PeriodFilterControl = ({
 
                 <input
                   ref={
-                    startDateRef
+                    selectedDateRef
                   }
                   type="date"
                   value={
-                    customStartDate
+                    selectedDate
                   }
                   onChange={(
                     event
                   ) =>
-                    onCustomStartDateChange(
+                    handleSpecificDateChange(
                       event.target
                         .value
                     )
                   }
                   onClick={() =>
                     openDatePicker(
-                      startDateRef
+                      selectedDateRef
                     )
                   }
                   onFocus={() =>
                     openDatePicker(
-                      startDateRef
+                      selectedDateRef
                     )
                   }
                   onKeyDown={(
@@ -1579,69 +1926,140 @@ const PeriodFilterControl = ({
                   ) =>
                     event.preventDefault()
                   }
-                  className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  onPaste={(
+                    event
+                  ) =>
+                    event.preventDefault()
+                  }
+                  inputMode="none"
+                  className="h-10 w-full cursor-pointer rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 />
               </div>
             </label>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto_1fr] sm:items-end">
+              <label>
+                <span className="mb-1.5 block text-xs font-medium text-slate-600">
+                  Start date
+                </span>
 
-            <span className="hidden pb-3 text-xs text-slate-400 sm:block">
-              to
-            </span>
+                <div className="relative">
+                  <CalendarDays className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
 
-            <label>
-              <span className="mb-1.5 block text-xs font-medium text-slate-600">
-                End date
+                  <input
+                    ref={
+                      startDateRef
+                    }
+                    type="date"
+                    value={
+                      customStartDate
+                    }
+                    onChange={(
+                      event
+                    ) =>
+                      handleCustomStartChange(
+                        event.target
+                          .value
+                      )
+                    }
+                    onClick={() =>
+                      openDatePicker(
+                        startDateRef
+                      )
+                    }
+                    onFocus={() =>
+                      openDatePicker(
+                        startDateRef
+                      )
+                    }
+                    onKeyDown={(
+                      event
+                    ) =>
+                      event.preventDefault()
+                    }
+                    onPaste={(
+                      event
+                    ) =>
+                      event.preventDefault()
+                    }
+                    inputMode="none"
+                    className="h-10 w-full cursor-pointer rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  />
+                </div>
+              </label>
+
+              <span className="hidden pb-3 text-xs text-slate-400 sm:block">
+                to
               </span>
 
-              <div className="relative">
-                <CalendarDays className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
+              <label>
+                <span className="mb-1.5 block text-xs font-medium text-slate-600">
+                  End date
+                </span>
 
-                <input
-                  ref={
-                    endDateRef
-                  }
-                  type="date"
-                  value={
-                    customEndDate
-                  }
-                  min={
-                    customStartDate ||
-                    undefined
-                  }
-                  onChange={(
-                    event
-                  ) =>
-                    onCustomEndDateChange(
-                      event.target
-                        .value
-                    )
-                  }
-                  onClick={() =>
-                    openDatePicker(
-                      endDateRef
-                    )
-                  }
-                  onFocus={() =>
-                    openDatePicker(
-                      endDateRef
-                    )
-                  }
-                  onKeyDown={(
-                    event
-                  ) =>
-                    event.preventDefault()
-                  }
-                  className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                />
-              </div>
-            </label>
-          </div>
+                <div className="relative">
+                  <CalendarDays className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
 
-          <div className="mt-4 flex justify-end">
+                  <input
+                    ref={
+                      endDateRef
+                    }
+                    type="date"
+                    value={
+                      customEndDate
+                    }
+                    min={
+                      customStartDate ||
+                      undefined
+                    }
+                    onChange={(
+                      event
+                    ) =>
+                      handleCustomEndChange(
+                        event.target
+                          .value
+                      )
+                    }
+                    onClick={() =>
+                      openDatePicker(
+                        endDateRef
+                      )
+                    }
+                    onFocus={() =>
+                      openDatePicker(
+                        endDateRef
+                      )
+                    }
+                    onKeyDown={(
+                      event
+                    ) =>
+                      event.preventDefault()
+                    }
+                    onPaste={(
+                      event
+                    ) =>
+                      event.preventDefault()
+                    }
+                    inputMode="none"
+                    className="h-10 w-full cursor-pointer rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  />
+                </div>
+              </label>
+            </div>
+          )}
+
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <p className="text-[11px] text-slate-400">
+              {value ===
+              "specific_day"
+                ? "The panel closes after a day is selected."
+                : "The panel closes after both dates are selected."}
+            </p>
+
             <button
               type="button"
               onClick={() =>
-                setCustomRangeOpen(
+                setDatePanelOpen(
                   false
                 )
               }
@@ -3315,6 +3733,11 @@ const Regions = ({
   );
 
   const [
+    selectedDate,
+    setSelectedDate,
+  ] = useState("");
+
+  const [
     customStartDate,
     setCustomStartDate,
   ] = useState("");
@@ -4291,6 +4714,7 @@ const Regions = ({
       return getPeriodRange({
         period:
           periodFilter,
+        selectedDate,
         customStartDate,
         customEndDate,
       });
@@ -4298,10 +4722,22 @@ const Regions = ({
       customEndDate,
       customStartDate,
       periodFilter,
+      selectedDate,
     ]);
 
   const selectedPeriodLabel =
     useMemo(() => {
+      if (
+        periodFilter ===
+        "specific_day"
+      ) {
+        return selectedPeriodRange
+          .isComplete
+          ? selectedPeriodRange
+              .label
+          : "Select a day";
+      }
+
       if (
         periodFilter !==
         "custom"
@@ -4338,6 +4774,18 @@ const Regions = ({
     useMemo(() => {
       return enrichedReports.filter(
         (report) => {
+          /*
+           * Do not show an all-time result while the user is still choosing
+           * the exact day required by the Specific day option.
+           */
+          if (
+            selectedPeriodRange
+              .isComplete ===
+            false
+          ) {
+            return false;
+          }
+
           const matchesOperator =
             !operatorFilter ||
             report.enterpriseId ===
@@ -5489,8 +5937,19 @@ const Regions = ({
       complianceStatusFilter ||
       periodFilter !==
         "last_7_days" ||
-      customStartDate ||
-      customEndDate
+      (
+        periodFilter ===
+          "specific_day" &&
+        selectedDate
+      ) ||
+      (
+        periodFilter ===
+          "custom" &&
+        (
+          customStartDate ||
+          customEndDate
+        )
+      )
     );
 
   const clearFilters = () => {
@@ -5502,6 +5961,7 @@ const Regions = ({
     setPeriodFilter(
       "last_7_days"
     );
+    setSelectedDate("");
     setCustomStartDate("");
     setCustomEndDate("");
     setComplianceStatusFilter("");
@@ -5533,6 +5993,9 @@ const Regions = ({
           periodFilter={
             periodFilter
           }
+          selectedDate={
+            selectedDate
+          }
           customStartDate={
             customStartDate
           }
@@ -5547,6 +6010,9 @@ const Regions = ({
           }
           onPeriodChange={
             setPeriodFilter
+          }
+          onSelectedDateChange={
+            setSelectedDate
           }
           onCustomStartDateChange={
             setCustomStartDate
@@ -5756,6 +6222,9 @@ const Regions = ({
             value={
               periodFilter
             }
+            selectedDate={
+              selectedDate
+            }
             customStartDate={
               customStartDate
             }
@@ -5764,6 +6233,9 @@ const Regions = ({
             }
             onChange={
               setPeriodFilter
+            }
+            onSelectedDateChange={
+              setSelectedDate
             }
             onCustomStartDateChange={
               setCustomStartDate
@@ -6121,11 +6593,13 @@ export const RegionDetail = ({
   region = null,
   updatedAt = null,
   periodFilter = "last_7_days",
+  selectedDate = "",
   customStartDate = "",
   customEndDate = "",
   productFilter = "all",
   onProductChange = () => {},
   onPeriodChange = () => {},
+  onSelectedDateChange = () => {},
   onCustomStartDateChange = () => {},
   onCustomEndDateChange = () => {},
   onBack = () => {},
@@ -7032,8 +7506,19 @@ export const RegionDetail = ({
       healthFilter ||
       periodFilter !==
         "last_7_days" ||
-      customStartDate ||
-      customEndDate
+      (
+        periodFilter ===
+          "specific_day" &&
+        selectedDate
+      ) ||
+      (
+        periodFilter ===
+          "custom" &&
+        (
+          customStartDate ||
+          customEndDate
+        )
+      )
     );
 
   const clearDetailFilters =
@@ -7056,6 +7541,10 @@ export const RegionDetail = ({
 
       onPeriodChange(
         "last_7_days"
+      );
+
+      onSelectedDateChange(
+        ""
       );
 
       onCustomStartDateChange(
@@ -7137,6 +7626,9 @@ export const RegionDetail = ({
               value={
                 periodFilter
               }
+              selectedDate={
+                selectedDate
+              }
               customStartDate={
                 customStartDate
               }
@@ -7145,6 +7637,9 @@ export const RegionDetail = ({
               }
               onChange={
                 onPeriodChange
+              }
+              onSelectedDateChange={
+                onSelectedDateChange
               }
               onCustomStartDateChange={
                 onCustomStartDateChange
