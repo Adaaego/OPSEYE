@@ -1,12 +1,13 @@
-
-
-
 import {
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+
+import {
+  createPortal,
+} from "react-dom";
 
 import {
   Bar,
@@ -405,6 +406,32 @@ const getOrganizationLevel = (
     organization?.type ||
       organization?.organizationType ||
       organization?.level
+  );
+};
+
+/*
+ * Converts the stored hierarchy level into a short label that can be shown
+ * consistently in organisation selectors and context panels.
+ */
+const getOrganizationLevelLabel = (
+  organization
+) => {
+  const level =
+    getOrganizationLevel(
+      organization
+    );
+
+  const labels = {
+    enterprise: "Enterprise",
+    country: "Country",
+    region: "Region",
+    branch: "Branch",
+    location: "Branch",
+  };
+
+  return (
+    labels[level] ||
+    "Organisation"
   );
 };
 
@@ -2384,9 +2411,16 @@ const RoleDrilldownDrawer = ({
       ? "workforce gap"
       : "employees";
 
-  return (
+  if (
+    typeof document ===
+      "undefined"
+  ) {
+    return null;
+  }
+
+  return createPortal(
     <div
-      className={`fixed inset-0 z-[90] transition-visibility duration-300 ${
+      className={`fixed inset-0 z-[90] min-h-[100dvh] w-screen transition-visibility duration-300 ${
         open
           ? "visible"
           : "invisible"
@@ -2742,7 +2776,8 @@ const RoleDrilldownDrawer = ({
           </section>
         </div>
       </aside>
-    </div>
+    </div>,
+    document.body
   );
 };
 
@@ -3476,7 +3511,7 @@ const WorkforceRegionalMap = ({
 const WorkforceRoleModal = ({
   open,
   mode = "add",
-  organizations = [],
+  organization = null,
   initialValues = null,
   saving = false,
   error = "",
@@ -3502,9 +3537,17 @@ const WorkforceRoleModal = ({
     }
 
     setForm({
+      /*
+       * The signed-in user's organization is the source of truth for new
+       * workforce records. The organization is resolved by the page from the
+       * user's Firestore profile, so the administrator only enters the role
+       * and workforce figures. Existing records retain their saved owner.
+       */
       organizationId:
         initialValues?.organizationId ||
-        organizations[0]?.id ||
+        getOrganizationId(
+          organization
+        ) ||
         "",
       roleId:
         initialValues?.roleId ||
@@ -3536,10 +3579,68 @@ const WorkforceRoleModal = ({
   }, [
     initialValues,
     open,
-    organizations,
+    organization,
   ]);
 
-  if (!open) {
+  /*
+   * Render the modal at document.body level rather than inside the Workforce
+   * page. The dashboard page transition uses CSS transforms, and transformed
+   * ancestors redefine the containing block for position: fixed. Without a
+   * portal, the overlay is constrained to the page content area and leaves
+   * visible gaps around the viewport.
+   */
+  useEffect(() => {
+    if (
+      !open ||
+      typeof document ===
+        "undefined"
+    ) {
+      return undefined;
+    }
+
+    const previousOverflow =
+      document.body.style
+        .overflow;
+
+    const handleKeyDown =
+      (event) => {
+        if (
+          event.key ===
+          "Escape" &&
+          !saving
+        ) {
+          onClose();
+        }
+      };
+
+    document.body.style.overflow =
+      "hidden";
+
+    window.addEventListener(
+      "keydown",
+      handleKeyDown
+    );
+
+    return () => {
+      document.body.style.overflow =
+        previousOverflow;
+
+      window.removeEventListener(
+        "keydown",
+        handleKeyDown
+      );
+    };
+  }, [
+    onClose,
+    open,
+    saving,
+  ]);
+
+  if (
+    !open ||
+    typeof document ===
+      "undefined"
+  ) {
     return null;
   }
 
@@ -3593,6 +3694,40 @@ const WorkforceRoleModal = ({
       form.roleId
     );
 
+  const selectedOrganization =
+    initialValues?.organization ||
+    organization ||
+    null;
+
+  const selectedOrganizationId =
+    getOrganizationId(
+      selectedOrganization
+    ) ||
+    form.organizationId;
+
+  const selectedOrganizationName =
+    selectedOrganization?.name ||
+    initialValues?.organizationName ||
+    "Organisation unavailable";
+
+  const selectedOrganizationLogo =
+    selectedOrganization?.displayLogo ||
+    getOrganizationLogo(
+      selectedOrganization
+    );
+
+  const selectedOrganizationLevel =
+    selectedOrganization?.levelLabel ||
+    getOrganizationLevelLabel(
+      selectedOrganization
+    );
+
+  const selectedOrganizationRegion =
+    selectedOrganization?.regionName ||
+    getRegionName(
+      selectedOrganization?.regionId
+    );
+
   const groupedRoles =
     Object.values(
       WORKFORCE_ROLE_CATEGORIES
@@ -3612,8 +3747,8 @@ const WorkforceRoleModal = ({
       })
     );
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex min-h-[100dvh] w-screen items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
       <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl">
         <div
           className="flex items-start justify-between gap-4 px-6 py-5 text-white"
@@ -3652,6 +3787,8 @@ const WorkforceRoleModal = ({
             event.preventDefault();
             onSave({
               ...form,
+              organizationId:
+                selectedOrganizationId,
               totalEmployees,
               localEmployees,
               expatriateEmployees,
@@ -3670,50 +3807,59 @@ const WorkforceRoleModal = ({
           )}
 
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-            <label className="md:col-span-2">
+            <div className="md:col-span-2">
               <span className="mb-1.5 block text-xs font-semibold text-slate-700">
                 Organisation
               </span>
 
-              <select
-                value={
-                  form.organizationId
-                }
-                onChange={(event) =>
-                  setForm(
-                    (current) => ({
-                      ...current,
-                      organizationId:
-                        event.target.value,
-                    })
-                  )
-                }
-                disabled={
-                  mode === "edit"
-                }
-                required
-                className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-100 disabled:text-slate-500"
-              >
-                <option value="">
-                  Select organisation
-                </option>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white">
+                      {selectedOrganizationLogo ? (
+                        <img
+                          src={
+                            selectedOrganizationLogo
+                          }
+                          alt={`${selectedOrganizationName} logo`}
+                          className="h-full w-full object-contain p-1.5"
+                        />
+                      ) : (
+                        <Building2
+                          className="h-5 w-5"
+                          style={{
+                            color: NAVY,
+                          }}
+                        />
+                      )}
+                    </div>
 
-                {organizations.map(
-                  (organization) => (
-                    <option
-                      key={
-                        organization.id
-                      }
-                      value={
-                        organization.id
-                      }
-                    >
-                      {organization.name}
-                    </option>
-                  )
-                )}
-              </select>
-            </label>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-900">
+                        {selectedOrganizationName}
+                      </p>
+
+                      <p className="mt-1 text-xs text-slate-500">
+                        {selectedOrganization?.parentName
+                          ? `Part of ${selectedOrganization.parentName}`
+                          : "Account organisation"}
+                        {selectedOrganizationRegion
+                          ? ` · ${selectedOrganizationRegion}`
+                          : ""}
+                      </p>
+                    </div>
+                  </div>
+
+                  <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600 ring-1 ring-inset ring-slate-200">
+                    {selectedOrganizationLevel}
+                  </span>
+                </div>
+
+                <p className="mt-3 border-t border-slate-200 pt-3 text-[11px] leading-relaxed text-slate-500">
+                  This workforce role will be saved automatically under {selectedOrganizationName}. Its organization, company, region and hierarchy metadata are supplied by the system.
+                </p>
+              </div>
+            </div>
 
             <label className="md:col-span-2">
               <span className="mb-1.5 block text-xs font-semibold text-slate-700">
@@ -4029,7 +4175,8 @@ const WorkforceRoleModal = ({
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
@@ -5281,39 +5428,6 @@ const Workforce = () => {
       roleSearch,
     ]);
 
-  const manageableOrganizations =
-    useMemo(() => {
-      if (isMinistryUser) {
-        return [];
-      }
-
-      return visibleOrganizations
-        .filter(
-          (organization) =>
-            !isMinistryOrganization(
-              organization
-            )
-        )
-        .map((organization) => ({
-          id:
-            getOrganizationId(
-              organization
-            ),
-          name:
-            organization.name ||
-            "Unnamed organisation",
-        }))
-        .sort(
-          (first, second) =>
-            first.name.localeCompare(
-              second.name
-            )
-        );
-    }, [
-      isMinistryUser,
-      visibleOrganizations,
-    ]);
-
   const organizationFilterOptions =
     useMemo(() => {
       return visibleOrganizations
@@ -5339,6 +5453,89 @@ const Workforce = () => {
             )
         );
     }, [visibleOrganizations]);
+
+  /*
+   * New records belong to the organization saved on the signed-in user's
+   * Firestore profile. Edit mode keeps the organization already attached to
+   * the record. The modal receives a prepared display object so it can show
+   * the exact organization name, hierarchy level, region and real company
+   * logo without asking the user to select any of them.
+   */
+  const modalOrganization =
+    useMemo(() => {
+      const sourceOrganization =
+        editingRecord?.organization ||
+        organizationMap.get(
+          editingRecord?.organizationId
+        ) ||
+        currentOrganization;
+
+      if (!sourceOrganization) {
+        return null;
+      }
+
+      const sourceOrganizationId =
+        getOrganizationId(
+          sourceOrganization
+        );
+
+      const enterpriseId =
+        getEnterpriseIdForOrganization(
+          sourceOrganization,
+          organizationMap
+        ) ||
+        sourceOrganizationId;
+
+      const enterprise =
+        organizationMap.get(
+          enterpriseId
+        ) ||
+        sourceOrganization;
+
+      const parent =
+        sourceOrganization.parentId
+          ? organizationMap.get(
+              sourceOrganization.parentId
+            )
+          : null;
+
+      const regionId =
+        getOrganizationRegionId(
+          sourceOrganization,
+          organizationMap
+        );
+
+      return {
+        ...sourceOrganization,
+        id:
+          sourceOrganizationId,
+        organizationId:
+          sourceOrganizationId,
+        parentName:
+          parent?.name ||
+          "",
+        levelLabel:
+          getOrganizationLevelLabel(
+            sourceOrganization
+          ),
+        regionId,
+        regionName:
+          getRegionName(
+            regionId
+          ),
+        displayLogo:
+          getOrganizationLogo(
+            sourceOrganization
+          ) ||
+          getOrganizationLogo(
+            enterprise
+          ),
+      };
+    }, [
+      currentOrganization,
+      editingRecord,
+      organizationMap,
+    ]);
 
   const updatedAt =
     useMemo(() => {
@@ -5572,6 +5769,20 @@ const Workforce = () => {
         const payload = {
           organizationId:
             form.organizationId,
+          organizationName:
+            organization.name ||
+            "",
+          organizationType:
+            getOrganizationLevel(
+              organization
+            ) ||
+            "organisation",
+          parentId:
+            organization.parentId ||
+            "",
+          parentOrganizationId:
+            organization.parentId ||
+            "",
           enterpriseId,
           rootEnterpriseId:
             organization.rootEnterpriseId ||
@@ -5613,6 +5824,14 @@ const Workforce = () => {
             form.shortage,
           notes:
             form.notes.trim(),
+
+          /*
+           * Each workforce role record represents only the people directly
+           * assigned to the selected organisation. Parent dashboards calculate
+           * their totals by rolling up these source records from descendants.
+           */
+          reportingScope:
+            "direct_organization",
           status: "active",
           updatedBy:
             currentUserId,
@@ -6993,8 +7212,8 @@ const Workforce = () => {
             ? "edit"
             : "add"
         }
-        organizations={
-          manageableOrganizations
+        organization={
+          modalOrganization
         }
         initialValues={
           editingRecord
