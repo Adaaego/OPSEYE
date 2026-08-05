@@ -11,13 +11,13 @@ import {
   AlertCircle,
   X,
 } from "lucide-react";
-import { sendEmailVerification } from "firebase/auth";
 import { Logo } from "../logos/logo";
 import {
   doSignInWithEmailAndPassword,
   doCreateWithEmailAndPassword,
   doResetPassword,
   doSignOut,
+  doSendEmailVerification
 } from "../../firebase/authMethods";
 import { createUserDocument,getUserDocument, updateUserDocument, getOrganizationDocument, } from "../../lib/functions";
 import { useNavigate } from "react-router-dom";
@@ -301,7 +301,7 @@ export default function LandingPage() {
       const user = userCredentials.user;
   
       await createUserDocument(user);
-      await sendEmailVerification(user);
+      await doSendEmailVerification(user);
       await doSignOut();
   
       setMode("signin");
