@@ -1,5 +1,9 @@
-import { COMPANIES, getCompanyById } from "./companies";
-
+/*
+ * Shared organization, onboarding and access-control constants.
+ *
+ * This file contains configuration and factory helpers only. Component event
+ * handlers belong in the React component that owns the related state.
+ */
 
 export const ORGANIZATION_TYPES = {
   MINISTRY: "ministry",
@@ -21,9 +25,9 @@ export const SECTORS = [
 ];
 
 export const ENERGY_INDUSTRY_SEGMENTS = [
-  // "Upstream",   // Exploration and production (e.g., Tullow, Eni)
-  // "Midstream",  // Storage and bulk transit (e.g., BOST, TOR)
-  "Downstream", // Retail marketing and distribution (e.g., GOIL, Shell, Puma, Star Oil)
+  // "Upstream",  // Exploration and production (for example, Tullow and Eni).
+  // "Midstream", // Storage and bulk transit (for example, BOST and TOR).
+  "Downstream", // Retail marketing and distribution.
 ];
 
 export const COUNTRIES = [
@@ -46,14 +50,49 @@ export const ORGANIZATION_LEVEL_CODES = {
   branch: "BRN",
 };
 
+/*
+ * Role values are stored as stable codes in Firestore.
+ *
+ * The UI may display labels such as "Reporting Officer", but saved user and
+ * invitation records should always use values such as "reporting_officer".
+ */
 export const USER_ROLES = {
   MINISTRY_ADMIN: "ministry_admin",
   ENTERPRISE_ADMIN: "enterprise_admin",
   COUNTRY_ADMIN: "country_admin",
   REGION_ADMIN: "region_admin",
   BRANCH_ADMIN: "branch_admin",
+
+  ORGANIZATION_ADMIN: "organization_admin",
+  REPORTING_OFFICER: "reporting_officer",
+  CONTRIBUTOR: "contributor",
+  VIEWER: "viewer",
   EMPLOYEE: "employee",
 };
+
+/*
+ * These are the roles an organization administrator may assign from the Team
+ * tab. Keeping labels and values together prevents display text from being
+ * written into Firestore as the role code.
+ */
+export const TEAM_INVITABLE_ROLES = [
+  {
+    label: "Organization Admin",
+    value: USER_ROLES.ORGANIZATION_ADMIN,
+  },
+  {
+    label: "Reporting Officer",
+    value: USER_ROLES.REPORTING_OFFICER,
+  },
+  {
+    label: "Contributor",
+    value: USER_ROLES.CONTRIBUTOR,
+  },
+  {
+    label: "Viewer",
+    value: USER_ROLES.VIEWER,
+  },
+];
 
 export const SECTOR_CODES = {
   Energy: "ENE",
@@ -96,30 +135,4 @@ export const initialAppState = {
   isAuthenticated: false,
   userEmail: null,
   onboarding: createOnboardingData(),
-};
-
-const handleCompanyChange = (event) => {
-  const selectedCompanyId = event.target.value;
-
-  setCompanyId(selectedCompanyId);
-
-  // Load all related company information using the selected ID.
-  const selectedCompany = getCompanyById(
-    selectedCompanyId
-  );
-
-  if (!selectedCompany) {
-    setOrganizationName("");
-    setSector("");
-    setIndustrySegment("");
-    setCompanyLogo("");
-    return;
-  }
-
-  setOrganizationName(selectedCompany.name);
-  setSector(selectedCompany.sector);
-  setIndustrySegment(
-    selectedCompany.industrySegment
-  );
-  setCompanyLogo(selectedCompany.logo);
 };

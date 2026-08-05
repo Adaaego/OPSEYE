@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertCircle,
@@ -34,6 +34,23 @@ import {
   updateUserDocument,
 } from "../../lib/functions";
 import {
+  getOrganizationDescendants,
+} from "../../lib/organization-functions";
+import {
+  createDefaultOrganizationTeam,
+  getOrganizationTeams,
+} from "../../lib/team-functions";
+import {
+  getPendingInvitations,
+} from "../../lib/invitation-functions";
+import {
+  createRegionAndInviteAdministrator,
+  inviteOrganizationTeamMember,
+} from "../../lib/organization-workflows";
+import {
+  TEAM_INVITABLE_ROLES,
+} from "../../lib/types";
+import {
   getCompanyById,
   getCompanyByNormalizedName,
   getMinistryById,
@@ -46,7 +63,6 @@ import {
   EmptyCell,
   PageHeader,
   SectionHeader,
-  Select,
   Table,
 } from "../ui/interface";
 import { Button } from "../ui/Button";
@@ -69,12 +85,6 @@ const SETTINGS_TABS = [
   },
 ];
 
-const DEFAULT_TEAM_ROLES = [
-  "Organization Admin",
-  "Reporting Officer",
-  "Contributor",
-  "Viewer",
-];
 
 const createProfileForm = (profile = {}) => ({
   fullName: profile.fullName || "",
@@ -134,15 +144,6 @@ const getOrganizationBrandMetadata = (organization) => {
   );
 };
 
-const createDemoId = (prefix) => {
-  const randomId =
-    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-
-  return `${prefix}-${randomId}`;
-};
-
 const getHierarchyIcon = (level) => {
   switch (String(level).toLowerCase()) {
     case "enterprise":
@@ -162,14 +163,55 @@ const getHierarchyIcon = (level) => {
   }
 };
 
-// Converts values such as branch_admin into Branch Admin.
+// Converts stored values such as branch_admin into Branch Admin.
 const formatRole = (role) => {
   return String(role || "")
+    .replace(/[\s-]+/g, "_")
     .split("_")
     .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 };
+
+/*
+ * Role values are stored as stable lowercase codes in Firestore. This helper
+ * also supports older UI labels such as "Reporting Officer" while they are
+ * being migrated to reporting_officer.
+ */
+const normalizeRoleCode = (role) => {
+  return normalizeText(role).replace(/[\s-]+/g, "_");
+};
+
+const getInvitationId = (invitation) => {
+  return invitation?.invitationId || invitation?.id || "";
+};
+
+const getTimestampMilliseconds = (value) => {
+  if (!value) {
+    return 0;
+  }
+
+  if (typeof value?.toDate === "function") {
+    return value.toDate().getTime();
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+};
+
+/*
+ * Existing organizations created before the team workflow may not yet have a
+ * default team. Only organization administrators may create that missing team
+ * while Account Settings is loading.
+ */
+const DEFAULT_TEAM_CREATOR_ROLES = new Set([
+  "ministry_admin",
+  "enterprise_admin",
+  "region_admin",
+  "branch_admin",
+  "organization_admin",
+]);
 
 const getOrganizationDisplayName = (organization, brandMetadata) => {
   const configuredName =
@@ -339,7 +381,7 @@ const CreateRegionModal = ({
         administratorEmail: email,
       });
     } catch (createError) {
-      console.error("Unable to create the simulated region:", createError);
+      console.error("Unable to create the regional organization:", createError);
       setError(
         createError?.message || "The region invitation could not be created."
       );
@@ -363,8 +405,8 @@ const CreateRegionModal = ({
 
           <p className="mt-1 max-w-xl text-sm text-slate-300">
             The selected region will inherit the current enterprise hierarchy.
-            This demo keeps the new organization and invitation in local page
-            state only.
+            OPSEYE will create the regional organization, its default team and
+            the pending administrator invitation in Firestore.
           </p>
         </div>
 
@@ -530,17 +572,22 @@ const CreateRegionModal = ({
   );
 };
 
-const AccountSettings = ({ roles = [], onInvite = null }) => {
+const AccountSettings = ({ roles = [] }) => {
   const [activeTab, setActiveTab] = useState("account");
 
   const [profile, setProfile] = useState({});
   const [organization, setOrganization] = useState(null);
+  const [defaultTeam, setDefaultTeam] = useState(null);
 
   const [teamMembers, setTeamMembers] = useState([]);
   const [pendingInvites, setPendingInvites] = useState([]);
-
   const [hierarchyLevels, setHierarchyLevels] = useState([]);
-  const [simulatedRegions, setSimulatedRegions] = useState([]);
+
+  /*
+   * Raw invitation tokens are intentionally not stored in Firestore. A link can
+   * therefore be copied only during the browser session in which it was created.
+   */
+  const [recentInvitationLinks, setRecentInvitationLinks] = useState({});
 
   const [organizationLogo, setOrganizationLogo] = useState("");
   const [organizationMetadata, setOrganizationMetadata] = useState(null);
@@ -558,196 +605,360 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
   const [inviteRole, setInviteRole] = useState("");
 
   const [createRegionOpen, setCreateRegionOpen] = useState(false);
-
   const [formData, setFormData] = useState(createProfileForm());
 
-  useEffect(() => {
-    const loadAccountData = async () => {
+  /*
+   * Account Settings loads the signed-in user, their organization, the real
+   * default team, descendants and pending invitations from Firestore.
+   *
+   * showLoading is disabled after successful writes so the page can refresh its
+   * data without replacing the whole interface with the initial loading screen.
+   */
+  const loadAccountData = useCallback(async ({ showLoading = true } = {}) => {
+    if (showLoading) {
       setLoadingPage(true);
-      setPageError("");
+    }
 
-      try {
-        const currentUser = auth.currentUser;
+    setPageError("");
 
-        if (!currentUser?.uid) {
-          throw new Error("We could not find the signed-in user.");
+    try {
+      const currentUser = auth.currentUser;
+
+      if (!currentUser?.uid) {
+        throw new Error("We could not find the signed-in user.");
+      }
+
+      const userDocument = await getUserDocument(currentUser.uid);
+
+      if (!userDocument) {
+        throw new Error("Your user profile could not be found.");
+      }
+
+      const loadedProfile = {
+        ...userDocument,
+        email: userDocument.email || currentUser.email || "",
+      };
+
+      if (!loadedProfile.organizationId) {
+        throw new Error("Your account is not linked to an organization.");
+      }
+
+      const currentOrganization = await getOrganizationDocument(
+        loadedProfile.organizationId
+      );
+
+      if (!currentOrganization) {
+        throw new Error("Your organization record could not be found.");
+      }
+
+      const normalizedOrganization = {
+        ...currentOrganization,
+        organizationId: getOrganizationId(currentOrganization),
+      };
+
+      const brandMetadata = getOrganizationBrandMetadata(
+        normalizedOrganization
+      );
+
+      const resolvedOrganizationLogo =
+        normalizedOrganization.logoUrl ||
+        normalizedOrganization.logo ||
+        brandMetadata?.logo ||
+        "";
+
+      /*
+       * Public enterprise onboarding did not originally create default teams.
+       * Create the deterministic default team once for eligible administrators
+       * so existing organizations can use the new invitation workflow.
+       */
+      let organizationTeams = await getOrganizationTeams(
+        normalizedOrganization.organizationId
+      );
+
+      let resolvedDefaultTeam =
+        organizationTeams.find((team) => team.isDefault) ||
+        organizationTeams.find((team) => normalizeText(team.status) === "active") ||
+        null;
+
+      if (
+        !resolvedDefaultTeam &&
+        DEFAULT_TEAM_CREATOR_ROLES.has(normalizeRoleCode(loadedProfile.role))
+      ) {
+        resolvedDefaultTeam = await createDefaultOrganizationTeam({
+          organization: normalizedOrganization,
+          createdBy: currentUser.uid,
+        });
+
+        organizationTeams = [resolvedDefaultTeam];
+      }
+
+      /*
+       * Users with the same organizationId share the organization dashboard.
+       * teamIds describe collaboration groups, while organizationId remains the
+       * source of dashboard access and data scope.
+       */
+      const organizationUsers = await getOrganizationUsers(
+        normalizedOrganization.organizationId
+      );
+
+      const descendants = await getOrganizationDescendants(
+        normalizedOrganization.organizationId,
+        {
+          includeArchived: true,
         }
+      );
 
-        // Load the Firestore profile linked to the current Firebase account.
-        const userDocument = await getUserDocument(currentUser.uid);
+      const ancestorIds = Array.isArray(normalizedOrganization.ancestorIds)
+        ? normalizedOrganization.ancestorIds
+        : [];
 
-        if (!userDocument) {
-          throw new Error("Your user profile could not be found.");
-        }
+      const ancestorOrganizations = await Promise.all(
+        ancestorIds.map((organizationId) =>
+          getOrganizationDocument(organizationId)
+        )
+      );
 
-        const loadedProfile = {
-          ...userDocument,
-          email: userDocument.email || currentUser.email || "",
-        };
+      /*
+       * Invitations are loaded for the current organization and every
+       * descendant. Enterprise Admins can therefore see pending regional-admin
+       * invitations as well as invitations for their own default team.
+       */
+      const invitationOrganizationIds = Array.from(
+        new Set([
+          normalizedOrganization.organizationId,
+          ...descendants.map(getOrganizationId),
+        ].filter(Boolean))
+      );
 
-        setProfile(loadedProfile);
-        setFormData(createProfileForm(loadedProfile));
-
-        if (!userDocument.organizationId) {
-          throw new Error("Your account is not linked to an organization.");
-        }
-
-        // The organization document remains the source of hierarchy metadata.
-        const currentOrganization = await getOrganizationDocument(
-          userDocument.organizationId
-        );
-
-        if (!currentOrganization) {
-          throw new Error("Your organization record could not be found.");
-        }
-
-        const normalizedOrganization = {
-          ...currentOrganization,
-          organizationId: getOrganizationId(currentOrganization),
-        };
-
-        setOrganization(normalizedOrganization);
-
-        const brandMetadata =
-          getOrganizationBrandMetadata(currentOrganization);
-
-        setOrganizationMetadata(brandMetadata || null);
-        setOrganizationLogo(
-          currentOrganization.logoUrl ||
-            currentOrganization.logo ||
-            brandMetadata?.logo ||
-            ""
-        );
-
-        // For the current prototype, users with the same organizationId share
-        // the same organization team and dashboard scope.
-        const organizationUsers = await getOrganizationUsers(
-          normalizedOrganization.organizationId
-        );
-
-        setTeamMembers(
-          organizationUsers.map((member) => ({
-            ...member,
-            hierarchyLevel: currentOrganization.type,
-            status: member.status || "active",
-          }))
-        );
-
-        const hierarchyIds = Array.from(
-          new Set([
-            ...(currentOrganization.ancestorIds || []),
-            normalizedOrganization.organizationId,
-          ])
-        );
-
-        const hierarchyOrganizations = await Promise.all(
-          hierarchyIds.map((organizationId) =>
-            getOrganizationDocument(organizationId)
-          )
-        );
-
-        const validOrganizations = hierarchyOrganizations.filter(Boolean);
-
-        const hierarchyWithAdmins = await Promise.all(
-          validOrganizations.map(async (organizationItem, index) => {
-            const primaryAdminId = organizationItem.adminIds?.[0];
-
-            let administrator = null;
-
-            if (primaryAdminId) {
-              administrator = await getUserDocument(primaryAdminId);
-            }
-
-            return {
-              id: getOrganizationId(organizationItem),
-              organizationId: getOrganizationId(organizationItem),
-              level: organizationItem.type,
-              type: organizationItem.type,
-              name: organizationItem.name,
-              parent:
-                index > 0 ? validOrganizations[index - 1]?.name || "" : "",
-              parentId: organizationItem.parentId || "",
-              rootEnterpriseId:
-                organizationItem.rootEnterpriseId ||
-                validOrganizations[0]?.organizationId ||
-                validOrganizations[0]?.id ||
-                "",
-              ancestorIds: organizationItem.ancestorIds || [],
-              regionId: organizationItem.regionId || "",
-              adminName: administrator?.fullName || administrator?.email || "",
-              adminRole: formatRole(administrator?.role),
-              status: organizationItem.status || "active",
-              invitationStatus: "accepted",
-              logo:
-                organizationItem.logoUrl ||
-                organizationItem.logo ||
-                getOrganizationBrandMetadata(organizationItem)?.logo ||
-                brandMetadata?.logo ||
-                "",
-            };
+      const invitationGroups = await Promise.all(
+        invitationOrganizationIds.map((organizationId) =>
+          getPendingInvitations({
+            organizationId,
           })
+        )
+      );
+
+      const loadedInvitations = invitationGroups
+        .flat()
+        .sort(
+          (first, second) =>
+            getTimestampMilliseconds(second.createdAt) -
+            getTimestampMilliseconds(first.createdAt)
         );
 
-        setHierarchyLevels(hierarchyWithAdmins);
-      } catch (error) {
-        console.error("Unable to load account settings:", error);
+      const hierarchyOrganizationMap = new Map();
 
-        setPageError(
-          error.message || "We could not load your account information."
-        );
-      } finally {
+      [
+        ...ancestorOrganizations.filter(Boolean),
+        normalizedOrganization,
+        ...descendants,
+      ].forEach((organizationItem) => {
+        const organizationId = getOrganizationId(organizationItem);
+
+        if (organizationId) {
+          hierarchyOrganizationMap.set(organizationId, {
+            ...organizationItem,
+            organizationId,
+          });
+        }
+      });
+
+      const hierarchyOrganizations = Array.from(
+        hierarchyOrganizationMap.values()
+      );
+
+      const pendingAdminInvitationByOrganization = new Map();
+
+      loadedInvitations.forEach((invitation) => {
+        const invitationType = normalizeRoleCode(invitation.invitationType);
+
+        if (
+          ["region_admin", "branch_admin"].includes(invitationType) &&
+          !pendingAdminInvitationByOrganization.has(invitation.organizationId)
+        ) {
+          pendingAdminInvitationByOrganization.set(
+            invitation.organizationId,
+            invitation
+          );
+        }
+      });
+
+      const administratorIds = Array.from(
+        new Set(
+          hierarchyOrganizations
+            .flatMap((organizationItem) => [
+              organizationItem.primaryAdminUserId,
+              ...(Array.isArray(organizationItem.adminIds)
+                ? organizationItem.adminIds
+                : []),
+            ])
+            .filter(Boolean)
+        )
+      );
+
+      const administratorDocuments = await Promise.all(
+        administratorIds.map((userId) => getUserDocument(userId))
+      );
+
+      const administratorMap = new Map(
+        administratorDocuments
+          .filter(Boolean)
+          .map((administrator) => [
+            administrator.uid || administrator.id,
+            administrator,
+          ])
+      );
+
+      const hierarchyWithAdmins = hierarchyOrganizations.map(
+        (organizationItem) => {
+          const organizationId = getOrganizationId(organizationItem);
+          const parentOrganization = hierarchyOrganizationMap.get(
+            organizationItem.parentId
+          );
+
+          const primaryAdminId =
+            organizationItem.primaryAdminUserId ||
+            organizationItem.adminIds?.[0] ||
+            "";
+
+          const administrator = administratorMap.get(primaryAdminId) || null;
+          const pendingInvitation =
+            pendingAdminInvitationByOrganization.get(organizationId) || null;
+
+          let invitationStatus = "unassigned";
+
+          if (administrator) {
+            invitationStatus = "accepted";
+          } else if (
+            pendingInvitation ||
+            normalizeRoleCode(organizationItem.adminAssignmentStatus) ===
+              "pending" ||
+            normalizeRoleCode(organizationItem.adminStatus) ===
+              "invitation_pending"
+          ) {
+            invitationStatus = "pending";
+          }
+
+          return {
+            id: organizationId,
+            organizationId,
+            level: organizationItem.type,
+            type: organizationItem.type,
+            name: organizationItem.name,
+            parent: parentOrganization?.name || "",
+            parentId: organizationItem.parentId || "",
+            rootEnterpriseId:
+              organizationItem.rootEnterpriseId || organizationId,
+            ancestorIds: organizationItem.ancestorIds || [],
+            regionId: organizationItem.regionId || "",
+            adminName:
+              administrator?.fullName ||
+              administrator?.email ||
+              pendingInvitation?.email ||
+              "",
+            adminRole: administrator
+              ? formatRole(administrator.role)
+              : pendingInvitation
+                ? formatRole(pendingInvitation.role)
+                : "",
+            status: organizationItem.status || "active",
+            invitationStatus,
+            invitationId: pendingInvitation
+              ? getInvitationId(pendingInvitation)
+              : "",
+            logo:
+              organizationItem.logoUrl ||
+              organizationItem.logo ||
+              getOrganizationBrandMetadata(organizationItem)?.logo ||
+              brandMetadata?.logo ||
+              "",
+          };
+        }
+      );
+
+      setProfile(loadedProfile);
+      setFormData(createProfileForm(loadedProfile));
+      setOrganization(normalizedOrganization);
+      setOrganizationMetadata(brandMetadata || null);
+      setOrganizationLogo(resolvedOrganizationLogo);
+      setDefaultTeam(resolvedDefaultTeam);
+      setTeamMembers(
+        organizationUsers.map((member) => ({
+          ...member,
+          hierarchyLevel: normalizedOrganization.type,
+          status: member.status || "active",
+        }))
+      );
+      setPendingInvites(loadedInvitations);
+      setHierarchyLevels(hierarchyWithAdmins);
+    } catch (error) {
+      console.error("Unable to load account settings:", error);
+
+      setPageError(
+        error.message || "We could not load your account information."
+      );
+    } finally {
+      if (showLoading) {
         setLoadingPage(false);
       }
-    };
-
-    loadAccountData();
+    }
   }, []);
+
+  useEffect(() => {
+    loadAccountData();
+  }, [loadAccountData]);
 
   useEffect(() => {
     setFormData(createProfileForm(profile));
   }, [profile]);
 
   const roleOptions = useMemo(() => {
-    const suppliedRoles = roles
-      .map((role) => {
-        if (typeof role === "string") {
-          return role;
+    const sourceRoles = roles.length > 0 ? roles : TEAM_INVITABLE_ROLES;
+    const roleMap = new Map();
+
+    sourceRoles.forEach((role) => {
+      if (typeof role === "string") {
+        const value = normalizeRoleCode(role);
+
+        if (value) {
+          roleMap.set(value, {
+            value,
+            label: formatRole(value),
+          });
         }
 
-        return role.label || role.name || role.role;
-      })
-      .filter(Boolean);
+        return;
+      }
 
-    return suppliedRoles.length > 0 ? suppliedRoles : DEFAULT_TEAM_ROLES;
+      const value = normalizeRoleCode(
+        role?.value || role?.role || role?.id || role?.name || role?.label
+      );
+
+      if (!value) {
+        return;
+      }
+
+      roleMap.set(value, {
+        value,
+        label: role.label || role.name || formatRole(value),
+      });
+    });
+
+    return Array.from(roleMap.values());
   }, [roles]);
 
   useEffect(() => {
-    if (!inviteRole && roleOptions.length > 0) {
-      setInviteRole(roleOptions[0]);
+    const roleStillAvailable = roleOptions.some(
+      (roleOption) => roleOption.value === inviteRole
+    );
+
+    if (!roleStillAvailable) {
+      setInviteRole(roleOptions[0]?.value || "");
     }
   }, [inviteRole, roleOptions]);
 
-  const initials = useMemo(() => {
-    const name = formData.fullName || formData.email || "User";
-
-    return name
-      .split(/\s+/)
-      .filter(Boolean)
-      .map((part) => part[0])
-      .join("")
-      .slice(0, 2)
-      .toUpperCase();
-  }, [formData.fullName, formData.email]);
-
   const currentOrganizationId = getOrganizationId(organization);
-
-  const teamId = useMemo(() => {
-    return (
-      profile.teamId ||
-      organization?.teamId ||
-      (currentOrganizationId ? `team-${currentOrganizationId}` : "")
-    );
-  }, [currentOrganizationId, organization?.teamId, profile.teamId]);
+  const teamId = defaultTeam?.teamId || defaultTeam?.id || "";
 
   const companyDisplayName = useMemo(() => {
     return getOrganizationDisplayName(organization, organizationMetadata);
@@ -758,10 +969,19 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
   }, [organization?.type]);
 
   const isEnterpriseAdmin = useMemo(() => {
-    const role = normalizeText(profile.role).replace(/[\s-]+/g, "_");
+    const role = normalizeRoleCode(profile.role);
 
-    return role === "enterprise_admin" || (isEnterpriseContext && role === "admin");
+    return (
+      role === "enterprise_admin" ||
+      (isEnterpriseContext && role === "admin")
+    );
   }, [isEnterpriseContext, profile.role]);
+
+  const canInviteTeamMembers = useMemo(() => {
+    return ["enterprise_admin", "region_admin"].includes(
+      normalizeRoleCode(profile.role)
+    );
+  }, [profile.role]);
 
   const enterpriseLevel = useMemo(() => {
     return (
@@ -792,24 +1012,39 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
   ]);
 
   const existingRegions = useMemo(() => {
-    const loadedRegions = hierarchyLevels.filter(
-      (item) => normalizeText(item.level) === "region"
-    );
-
-    const regionMap = new Map();
-
-    [...loadedRegions, ...simulatedRegions].forEach((region) => {
-      regionMap.set(region.organizationId || region.id, region);
-    });
-
-    return Array.from(regionMap.values()).sort((first, second) =>
-      String(first.name || "").localeCompare(String(second.name || ""))
-    );
-  }, [hierarchyLevels, simulatedRegions]);
+    return hierarchyLevels
+      .filter((item) => normalizeText(item.level) === "region")
+      .sort((first, second) =>
+        String(first.name || "").localeCompare(String(second.name || ""))
+      );
+  }, [hierarchyLevels]);
 
   const existingRegionIds = useMemo(() => {
     return existingRegions.map((region) => region.regionId).filter(Boolean);
   }, [existingRegions]);
+
+  const teamPendingInvites = useMemo(() => {
+    return pendingInvites.filter((invitation) => {
+      return (
+        invitation.organizationId === currentOrganizationId &&
+        normalizeRoleCode(invitation.invitationType) === "team_member" &&
+        (!teamId || !invitation.teamId || invitation.teamId === teamId)
+      );
+    });
+  }, [currentOrganizationId, pendingInvites, teamId]);
+
+  const rememberInvitationLink = (invitation, invitationUrl) => {
+    const invitationId = getInvitationId(invitation);
+
+    if (!invitationId || !invitationUrl) {
+      return;
+    }
+
+    setRecentInvitationLinks((currentLinks) => ({
+      ...currentLinks,
+      [invitationId]: invitationUrl,
+    }));
+  };
 
   const handleFieldChange = (event) => {
     const { name, value } = event.target;
@@ -898,46 +1133,47 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
       return;
     }
 
+    if (!organization || !defaultTeam) {
+      setPageError(
+        "The organization default team is not available. Refresh the page and try again."
+      );
+      return;
+    }
+
+    if (!canInviteTeamMembers) {
+      setPageError("You do not have permission to invite organization members.");
+      return;
+    }
+
     try {
       setIsInviting(true);
       setPageError("");
 
-      const invitationId = createDemoId("invite");
-      const invitationUrl = `${window.location.origin}/invite/${invitationId}`;
-
-      const invitationPayload = {
-        invitationId,
-        invitationType: "team_member",
-        email,
+      const result = await inviteOrganizationTeamMember({
+        organization,
+        team: defaultTeam,
+        memberEmail: email,
         role: inviteRole,
-        organizationId: currentOrganizationId,
-        organizationName: organization?.name || "",
-        teamId,
-        invitationUrl,
-      };
+        currentUser: profile,
+      });
 
-      if (onInvite) {
-        await onInvite(invitationPayload);
-      } else {
-        await new Promise((resolve) => window.setTimeout(resolve, 650));
-      }
-
-      setPendingInvites((currentInvites) => [
-        {
-          ...invitationPayload,
-          status: "pending",
-          createdAt: new Date(),
-        },
-        ...currentInvites,
-      ]);
+      rememberInvitationLink(result.invitation, result.invitationUrl);
 
       setInviteEmail("");
-      setInviteRole(roleOptions[0] || "");
+      setInviteRole(roleOptions[0]?.value || "");
       setShowInviteForm(false);
 
+      await loadAccountData({
+        showLoading: false,
+      });
+
+      const emailWasSent = Boolean(result.emailDelivery?.success);
+
       setPageNotice({
-        type: "success",
-        message: `Invitation prepared for ${email}. The demo invitation is now visible below.`,
+        type: emailWasSent ? "success" : "warning",
+        message: emailWasSent
+          ? `An invitation was sent to ${email}.`
+          : `The invitation for ${email} was created, but EmailJS could not send it. Copy the invitation link shown below and share it manually.`,
       });
     } catch (error) {
       console.error("Error inviting team member:", error);
@@ -952,78 +1188,33 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
       throw new Error("The parent enterprise could not be resolved.");
     }
 
-    const organizationId = createDemoId(`region-${normalizeRegionId(region.id)}`);
-    const invitationId = createDemoId("invite");
-    const invitationUrl = `${window.location.origin}/invite/${invitationId}`;
-    const parentOrganizationId = currentOrganizationId;
-    const rootEnterpriseId =
-      organization.rootEnterpriseId || parentOrganizationId;
-    const ancestorIds = Array.from(
-      new Set([...(organization.ancestorIds || []), parentOrganizationId])
-    );
-    const regionOrganizationName = `${companyDisplayName} ${region.name}`;
+    const regionOrganizationName = `${companyDisplayName} ${region.name}`
+      .replace(/\s+/g, " ")
+      .trim();
 
-    const invitationPayload = {
-      invitationId,
-      invitationType: "region_admin",
-      email: administratorEmail,
-      role: "region_admin",
-      organizationId,
+    const result = await createRegionAndInviteAdministrator({
+      parentOrganization: organization,
+      regionId: normalizeRegionId(region.id),
       organizationName: regionOrganizationName,
-      parentOrganizationId,
-      rootEnterpriseId,
-      ancestorIds,
-      regionId: normalizeRegionId(region.id),
-      invitationUrl,
-    };
+      administratorEmail,
+      currentUser: profile,
+    });
 
-    if (onInvite) {
-      await onInvite(invitationPayload);
-    } else {
-      await new Promise((resolve) => window.setTimeout(resolve, 800));
-    }
-
-    const simulatedRegion = {
-      id: organizationId,
-      organizationId,
-      level: "region",
-      type: "region",
-      name: regionOrganizationName,
-      parent: organization.name || companyDisplayName,
-      parentId: parentOrganizationId,
-      rootEnterpriseId,
-      ancestorIds,
-      regionId: normalizeRegionId(region.id),
-      companyId: organization.companyId || organizationMetadata?.id || "",
-      adminName: administratorEmail,
-      adminRole: "Region Admin",
-      adminEmail: administratorEmail,
-      status: "pending",
-      invitationStatus: "pending",
-      invitationId,
-      invitationUrl,
-      logo: organizationLogo,
-      simulated: true,
-    };
-
-    setSimulatedRegions((currentRegions) => [
-      ...currentRegions,
-      simulatedRegion,
-    ]);
-
-    setPendingInvites((currentInvites) => [
-      {
-        ...invitationPayload,
-        status: "pending",
-        createdAt: new Date(),
-      },
-      ...currentInvites,
-    ]);
+    rememberInvitationLink(result.invitation, result.invitationUrl);
 
     setCreateRegionOpen(false);
+
+    await loadAccountData({
+      showLoading: false,
+    });
+
+    const emailWasSent = Boolean(result.emailDelivery?.success);
+
     setPageNotice({
-      type: "success",
-      message: `${regionOrganizationName} was created for this demo and an invitation was prepared for ${administratorEmail}. No organization document was written to Firestore.`,
+      type: emailWasSent ? "success" : "warning",
+      message: emailWasSent
+        ? `${regionOrganizationName} was created and the Regional Administrator invitation was sent to ${administratorEmail}.`
+        : `${regionOrganizationName} was created, but EmailJS could not send the invitation. Copy the invitation link from the region card and share it manually.`,
     });
   };
 
@@ -1059,23 +1250,38 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
         </div>
       )}
 
-      {pageNotice && (
-        <div className="mb-5 flex items-start justify-between gap-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-          <div className="flex items-start gap-3">
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-            <p>{pageNotice.message}</p>
-          </div>
+      {pageNotice && (() => {
+        const isWarning = pageNotice.type === "warning";
+        const NoticeIcon = isWarning ? AlertCircle : CheckCircle2;
 
-          <button
-            type="button"
-            onClick={() => setPageNotice(null)}
-            className="rounded p-1 text-emerald-700 transition hover:bg-emerald-100"
-            aria-label="Dismiss notice"
+        return (
+          <div
+            className={`mb-5 flex items-start justify-between gap-4 rounded-lg border px-4 py-3 text-sm ${
+              isWarning
+                ? "border-amber-200 bg-amber-50 text-amber-800"
+                : "border-emerald-200 bg-emerald-50 text-emerald-800"
+            }`}
           >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
+            <div className="flex items-start gap-3">
+              <NoticeIcon className="mt-0.5 h-4 w-4 shrink-0" />
+              <p>{pageNotice.message}</p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setPageNotice(null)}
+              className={`rounded p-1 transition ${
+                isWarning
+                  ? "text-amber-700 hover:bg-amber-100"
+                  : "text-emerald-700 hover:bg-emerald-100"
+              }`}
+              aria-label="Dismiss notice"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        );
+      })()}
 
       <div className="mb-8 inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
         {SETTINGS_TABS.map((tab) => {
@@ -1270,7 +1476,7 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
                     Shared dashboard team
                   </p>
                   <h2 className="mt-1 truncate text-xl font-semibold">
-                    {organization?.name || "Organization"} Team
+                    {defaultTeam?.name || `${organization?.name || "Organization"} Team`}
                   </h2>
                   <p className="mt-1 text-sm text-slate-300">
                     Members of this team share access to the same organization dashboard.
@@ -1299,7 +1505,7 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
                 },
                 {
                   label: "Pending invites",
-                  value: pendingInvites.length,
+                  value: teamPendingInvites.length,
                 },
                 {
                   label: "Organization level",
@@ -1331,13 +1537,16 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
               </p>
             </div>
 
-            <Button
-              onClick={() => setShowInviteForm((currentValue) => !currentValue)}
-              className="bg-navy-950 text-white hover:bg-navy-900"
-            >
-              <Plus className="h-4 w-4" />
-              Invite Member
-            </Button>
+            {canInviteTeamMembers && (
+              <Button
+                onClick={() => setShowInviteForm((currentValue) => !currentValue)}
+                disabled={!defaultTeam}
+                className="bg-navy-950 text-white hover:bg-navy-900"
+              >
+                <Plus className="h-4 w-4" />
+                Invite Member
+              </Button>
+            )}
           </div>
 
           {showInviteForm && (
@@ -1370,12 +1579,20 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
                     Role
                   </label>
 
-                  <Select
+                  <select
                     value={inviteRole}
-                    onChange={setInviteRole}
-                    options={roleOptions}
-                    placeholder="Select a role"
-                  />
+                    onChange={(event) => setInviteRole(event.target.value)}
+                    className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+                  >
+                    {roleOptions.map((roleOption) => (
+                      <option
+                        key={roleOption.value}
+                        value={roleOption.value}
+                      >
+                        {roleOption.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -1409,7 +1626,7 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
             </Card>
           )}
 
-          {pendingInvites.length > 0 && (
+          {teamPendingInvites.length > 0 && (
             <Card className="overflow-hidden">
               <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
                 <div>
@@ -1417,17 +1634,17 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
                     Pending Invitations
                   </h3>
                   <p className="mt-0.5 text-xs text-slate-500">
-                    Demo invitations remain on this page until it is refreshed.
+                    Pending invitation records are loaded from Firestore.
                   </p>
                 </div>
 
                 <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
-                  {pendingInvites.length} pending
+                  {teamPendingInvites.length} pending
                 </span>
               </div>
 
               <div className="divide-y divide-slate-100">
-                {pendingInvites.map((invitation) => (
+                {teamPendingInvites.map((invitation) => (
                   <div
                     key={invitation.invitationId}
                     className="flex flex-col gap-3 px-5 py-4 lg:flex-row lg:items-center lg:justify-between"
@@ -1451,7 +1668,16 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
                       <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
                         Pending
                       </span>
-                      <CopyButton value={invitation.invitationUrl} label="Copy invite link" />
+                      {recentInvitationLinks[getInvitationId(invitation)] ? (
+                        <CopyButton
+                          value={recentInvitationLinks[getInvitationId(invitation)]}
+                          label="Copy invite link"
+                        />
+                      ) : (
+                        <span className="text-[11px] font-medium text-slate-400">
+                          Link sent by email
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1630,7 +1856,24 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
               {existingRegions.map((item) => {
                 const FallbackIcon = getHierarchyIcon(item.level);
-                const pending = item.invitationStatus === "pending";
+                const invitationStatus = normalizeRoleCode(item.invitationStatus);
+                const pending = invitationStatus === "pending";
+                const active = ["accepted", "active"].includes(invitationStatus);
+                const statusLabel = pending
+                  ? "Invitation pending"
+                  : active
+                    ? "Active"
+                    : "Administrator unassigned";
+
+                const statusClassName = pending
+                  ? "bg-amber-100 text-amber-700"
+                  : active
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-slate-200 text-slate-600";
+
+                const invitationUrl = item.invitationId
+                  ? recentInvitationLinks[item.invitationId]
+                  : "";
 
                 return (
                   <Card
@@ -1661,11 +1904,6 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
                                 Region
                               </span>
 
-                              {item.simulated && (
-                                <span className="rounded-md bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700">
-                                  Demo only
-                                </span>
-                              )}
                             </div>
 
                             <p className="mt-2 truncate text-base font-semibold text-navy-950">
@@ -1709,18 +1947,14 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
 
                     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3">
                       <span
-                        className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${
-                          pending
-                            ? "bg-amber-100 text-amber-700"
-                            : "bg-emerald-100 text-emerald-700"
-                        }`}
+                        className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${statusClassName}`}
                       >
-                        {pending ? "Invitation pending" : "Active"}
+                        {statusLabel}
                       </span>
 
-                      {item.invitationUrl && (
+                      {invitationUrl && (
                         <CopyButton
-                          value={item.invitationUrl}
+                          value={invitationUrl}
                           label="Copy invite link"
                         />
                       )}
@@ -1738,8 +1972,8 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
               </p>
 
               <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-400">
-                Create the first region to simulate its organization metadata and
-                Regional Administrator invitation.
+                Create the first region to write its hierarchy, default team and
+                Regional Administrator invitation to Firestore.
               </p>
             </Card>
           )}
@@ -1752,13 +1986,12 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
 
               <div>
                 <h3 className="text-sm font-semibold text-slate-900">
-                  Demo behavior
+                  Invitation security
                 </h3>
                 <p className="mt-1 text-sm leading-relaxed text-slate-500">
-                  Creating a region updates this page immediately and prepares an
-                  invitation URL. It does not create an organization, invitation or
-                  team document in Firestore. The optional <code>onInvite</code>
-                  callback is the point where EmailJS can send the invitation.
+                  OPSEYE stores only the invitation token hash in Firestore. The
+                  usable link is emailed to the invitee and is available for copying
+                  on this page only during the browser session that created it.
                 </p>
               </div>
             </div>
