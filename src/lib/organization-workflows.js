@@ -398,29 +398,26 @@ import {
   
       try {
         emailDelivery =
-          await sendRegionAdminInvitation({
-            toEmail:
-              recipientEmail,
-  
-            inviterName:
-              getInviterName(
-                currentUser
-              ),
-  
-            organizationName:
-              organization.name,
-  
-            role:
-              REGION_ADMIN_ROLE,
-  
-            teamName:
-              defaultTeam.name,
-  
-            invitationUrl,
-  
-            expiresAt:
-              invitation.expiresAt,
-          });
+        await sendRegionAdminInvitation({
+          toEmail: recipientEmail,
+      
+          inviterName:
+            getInviterName(currentUser),
+      
+          organizationName:
+            organization.name,
+      
+          role:
+            "region_admin",
+      
+          teamName:
+            defaultTeam.name,
+      
+          invitationUrl,
+      
+          expiresAt:
+            invitation.expiresAt,
+        });
       } catch (error) {
         console.error(
           "Region invitation email error:",

@@ -1,35 +1,16 @@
-/*
- * EmailJS invitation delivery helpers.
- *
- * This file is responsible only for:
- * 1. Preparing the values expected by the EmailJS invitation template.
- * 2. Sending invitation emails through EmailJS.
- *
- * It does not:
- * - Create organizations.
- * - Create Firestore invitation records.
- * - Generate invitation tokens or URLs.
- * - Create Firebase Authentication accounts.
- *
- * Those responsibilities remain in their dedicated files.
- */
-
 import emailjs from "@emailjs/browser";
 
 import {
+  EMAILJS_CONFIG,
   requireEmailJsConfiguration,
 } from "./emailjs-config";
 
 /*
- * All invitation emails use one EmailJS template.
+ * The same EmailJS template handles every OPSEYE invitation.
  *
- * The invitation type determines:
- * - Email subject
- * - Heading
- * - Message
- * - Default role label
- * - Team description
- * - Call-to-action button text
+ * invitationType determines the subject, title, message and button label.
+ * The remaining values come from the organization workflow that created the
+ * invitation.
  */
 export const INVITATION_EMAIL_TYPES = Object.freeze({
   REGION_ADMIN: "region_admin",
@@ -46,7 +27,7 @@ const normalizeEmail = (value) => {
   return normalizeText(value).toLowerCase();
 };
 
-const normalizeInvitationType = (value) => {
+const normalizeIdentifier = (value) => {
   return normalizeText(value)
     .toLowerCase()
     .replace(/[\s-]+/g, "_");
@@ -59,27 +40,43 @@ const requireValue = (value, message) => {
 };
 
 /*
- * Converts stored values such as:
- *
- * reporting_officer
- * reporting-officer
- *
- * into a readable label:
- *
- * Reporting Officer
+ * Converts stored role codes such as region_admin and reporting_officer into
+ * labels suitable for the invitation email.
  */
-const formatLabel = (value) => {
-  return normalizeText(value)
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
+const formatRoleName = (role) => {
+  const normalizedRole = normalizeIdentifier(role);
+
+  const roleLabels = {
+    ministry_admin: "Ministry Administrator",
+    enterprise_admin: "Enterprise Administrator",
+    country_admin: "Country Administrator",
+    region_admin: "Regional Administrator",
+    branch_admin: "Branch Administrator",
+    organization_admin: "Organization Administrator",
+    reporting_officer: "Reporting Officer",
+    contributor: "Contributor",
+    viewer: "Viewer",
+    employee: "Employee",
+  };
+
+  if (roleLabels[normalizedRole]) {
+    return roleLabels[normalizedRole];
+  }
+
+  return normalizedRole
+    .split("_")
+    .filter(Boolean)
+    .map(
+      (word) =>
+        word.charAt(0).toUpperCase() +
+        word.slice(1)
+    )
+    .join(" ");
 };
 
 /*
- * Supports:
- * - JavaScript Date objects
- * - Firestore Timestamp objects
- * - ISO-compatible date strings
+ * Firestore timestamps expose toDate(). This helper also supports normal Date
+ * values and date strings so the email layer does not depend on one date type.
  */
 const toDate = (value) => {
   if (!value) {
@@ -91,7 +88,9 @@ const toDate = (value) => {
   }
 
   if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value;
+    return Number.isNaN(value.getTime())
+      ? null
+      : value;
   }
 
   const convertedDate = new Date(value);
@@ -101,424 +100,368 @@ const toDate = (value) => {
     : convertedDate;
 };
 
-/*
- * Formats the invitation expiry date for display in the email.
- *
- * Example:
- * 8 August 2026
- */
 const formatExpiryDate = (value) => {
   const expiryDate = toDate(value);
 
   if (!expiryDate) {
-    throw new Error(
-      "A valid invitation expiry date is required."
-    );
+    return "the date stated in your invitation";
   }
 
-  return new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "long",
-  }).format(expiryDate);
+  return expiryDate.toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 };
 
-const validateEmailAddress = (email) => {
-  const normalizedEmail = normalizeEmail(email);
+const validateInvitationUrl = (value) => {
+  const invitationUrl = normalizeText(value);
 
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
-    throw new Error(
-      "A valid recipient email address is required."
-    );
-  }
-
-  return normalizedEmail;
-};
-
-const validateInvitationUrl = (invitationUrl) => {
   requireValue(
     invitationUrl,
-    "An invitation URL is required to send the email."
+    "An invitation URL is required before the email can be sent."
   );
 
   try {
-    return new URL(normalizeText(invitationUrl)).toString();
+    new URL(invitationUrl);
   } catch {
     throw new Error(
-      "The invitation URL is not a valid browser URL."
+      "The invitation URL supplied to EmailJS is invalid."
     );
   }
+
+  return invitationUrl;
 };
 
 /*
- * Invitation-specific wording.
+ * Builds the text that changes between invitation types.
  *
- * Keeping the wording in one configuration object prevents the sending
- * functions from becoming filled with repeated if/else statements.
+ * The EmailJS template itself stays unchanged. This prevents the project from
+ * needing separate templates for regions, branches and ordinary team members.
  */
-const INVITATION_CONTENT = Object.freeze({
-  [INVITATION_EMAIL_TYPES.REGION_ADMIN]: {
-    defaultRoleName: "Region Administrator",
+const buildInvitationContent = ({
+  invitationType,
+  inviterName,
+  organizationName,
+  roleName,
+}) => {
+  const normalizedType =
+    normalizeIdentifier(invitationType);
 
-    getSubject: ({ organizationName, isReminder }) => {
-      const prefix = isReminder ? "Reminder: " : "";
+  const safeInviterName =
+    normalizeText(inviterName) ||
+    "An OPSEYE administrator";
 
-      return `${prefix}Invitation to manage ${organizationName} on OPSEYE`;
-    },
+  if (
+    normalizedType ===
+    INVITATION_EMAIL_TYPES.REGION_ADMIN
+  ) {
+    return {
+      emailSubject:
+        `You have been invited to manage ${organizationName} on OPSEYE`,
 
-    getTitle: ({ isReminder }) => {
-      return isReminder
-        ? "Reminder: your regional administrator invitation"
-        : "You have been invited to manage a region";
-    },
+      invitationTitle:
+        "You have been invited to join OPSEYE",
 
-    getMessage: ({
-      inviterName,
-      organizationName,
-      roleName,
-      isReminder,
-    }) => {
-      const introduction = isReminder
-        ? "This is a reminder that"
-        : "";
+      invitationMessage:
+        `${safeInviterName} has invited you to manage ${organizationName} as its ${roleName}.`,
 
-      return [
-        introduction,
-        inviterName,
-        "has invited you to join OPSEYE as the",
-        roleName,
-        "for",
-        `${organizationName}.`,
-      ]
-        .filter(Boolean)
-        .join(" ");
-    },
+      buttonLabel:
+        "Accept Invitation",
+    };
+  }
 
-    getButtonLabel: ({ isReminder }) => {
-      return isReminder
-        ? "Review administrator invitation"
-        : "Create your administrator account";
-    },
+  if (
+    normalizedType ===
+    INVITATION_EMAIL_TYPES.BRANCH_ADMIN
+  ) {
+    return {
+      emailSubject:
+        `You have been invited to manage ${organizationName} on OPSEYE`,
 
-    getTeamDetails: ({ teamName }) => {
-      return teamName
-        ? `You will also be added to the ${teamName}.`
-        : "";
-    },
-  },
+      invitationTitle:
+        "You have been invited to join OPSEYE",
 
-  [INVITATION_EMAIL_TYPES.BRANCH_ADMIN]: {
-    defaultRoleName: "Branch Administrator",
+      invitationMessage:
+        `${safeInviterName} has invited you to manage ${organizationName} as its ${roleName}.`,
 
-    getSubject: ({ organizationName, isReminder }) => {
-      const prefix = isReminder ? "Reminder: " : "";
+      buttonLabel:
+        "Accept Invitation",
+    };
+  }
 
-      return `${prefix}Invitation to manage ${organizationName} on OPSEYE`;
-    },
+  if (
+    normalizedType ===
+    INVITATION_EMAIL_TYPES.TEAM_MEMBER
+  ) {
+    return {
+      emailSubject:
+        `You have been invited to join ${organizationName} on OPSEYE`,
 
-    getTitle: ({ isReminder }) => {
-      return isReminder
-        ? "Reminder: your branch administrator invitation"
-        : "You have been invited to manage a branch";
-    },
+      invitationTitle:
+        "You have been invited to join an OPSEYE team",
 
-    getMessage: ({
-      inviterName,
-      organizationName,
-      roleName,
-      isReminder,
-    }) => {
-      const introduction = isReminder
-        ? "This is a reminder that"
-        : "";
+      invitationMessage:
+        `${safeInviterName} has invited you to join ${organizationName} as a ${roleName}.`,
 
-      return [
-        introduction,
-        inviterName,
-        "has invited you to join OPSEYE as the",
-        roleName,
-        "for",
-        `${organizationName}.`,
-      ]
-        .filter(Boolean)
-        .join(" ");
-    },
+      buttonLabel:
+        "Join Organization",
+    };
+  }
 
-    getButtonLabel: ({ isReminder }) => {
-      return isReminder
-        ? "Review administrator invitation"
-        : "Create your administrator account";
-    },
+  return {
+    emailSubject:
+      `You have been invited to join ${organizationName} on OPSEYE`,
 
-    getTeamDetails: ({ teamName }) => {
-      return teamName
-        ? `You will also be added to the ${teamName}.`
-        : "";
-    },
-  },
+    invitationTitle:
+      "You have been invited to join OPSEYE",
 
-  [INVITATION_EMAIL_TYPES.TEAM_MEMBER]: {
-    defaultRoleName: "Team Member",
+    invitationMessage:
+      `${safeInviterName} has invited you to join ${organizationName} as a ${roleName}.`,
 
-    getSubject: ({ teamName, organizationName, isReminder }) => {
-      const prefix = isReminder ? "Reminder: " : "";
-      const invitationTarget =
-        teamName || organizationName;
-
-      return `${prefix}Invitation to join ${invitationTarget} on OPSEYE`;
-    },
-
-    getTitle: ({ isReminder }) => {
-      return isReminder
-        ? "Reminder: your team invitation"
-        : "You have been invited to join a team";
-    },
-
-    getMessage: ({
-      inviterName,
-      organizationName,
-      teamName,
-      roleName,
-      isReminder,
-    }) => {
-      const introduction = isReminder
-        ? "This is a reminder that"
-        : "";
-
-      return [
-        introduction,
-        inviterName,
-        "has invited you to join",
-        teamName,
-        "within",
-        `${organizationName}.`,
-        `Your assigned role is ${roleName}.`,
-      ]
-        .filter(Boolean)
-        .join(" ");
-    },
-
-    getButtonLabel: ({ isReminder }) => {
-      return isReminder
-        ? "Review team invitation"
-        : "Accept invitation and create account";
-    },
-
-    getTeamDetails: ({ teamName }) => {
-      return teamName ? `Team: ${teamName}` : "";
-    },
-  },
-
-  [INVITATION_EMAIL_TYPES.ORGANIZATION_USER]: {
-    defaultRoleName: "Organization User",
-
-    getSubject: ({ organizationName, isReminder }) => {
-      const prefix = isReminder ? "Reminder: " : "";
-
-      return `${prefix}Invitation to join ${organizationName} on OPSEYE`;
-    },
-
-    getTitle: ({ isReminder }) => {
-      return isReminder
-        ? "Reminder: your organization invitation"
-        : "You have been invited to join an organization";
-    },
-
-    getMessage: ({
-      inviterName,
-      organizationName,
-      roleName,
-      isReminder,
-    }) => {
-      const introduction = isReminder
-        ? "This is a reminder that"
-        : "";
-
-      return [
-        introduction,
-        inviterName,
-        "has invited you to join",
-        organizationName,
-        "on OPSEYE as a",
-        `${roleName}.`,
-      ]
-        .filter(Boolean)
-        .join(" ");
-    },
-
-    getButtonLabel: ({ isReminder }) => {
-      return isReminder
-        ? "Review organization invitation"
-        : "Accept invitation and create account";
-    },
-
-    getTeamDetails: ({ teamName }) => {
-      return teamName ? `Assigned team: ${teamName}` : "";
-    },
-  },
-});
+    buttonLabel:
+      "Accept Invitation",
+  };
+};
 
 /*
- * Builds all dynamic values expected by the single EmailJS invitation template.
+ * Produces the exact variable names used inside the EmailJS template.
  *
- * @param {Object} options
- * @param {string} options.invitationType
- * @param {string} options.toEmail
- * @param {string} [options.recipientName]
- * @param {string} options.inviterName
- * @param {string} options.organizationName
- * @param {string} [options.role] Stored role value, for example region_admin.
- * @param {string} [options.roleName] Optional display label.
- * @param {string} [options.teamName]
- * @param {string} options.invitationUrl
- * @param {Date|Object|string} options.expiresAt
- * @param {boolean} [options.isReminder=false]
- * @returns {Object} EmailJS template parameters.
+ * Do not rename these keys unless the corresponding {{variable}} values are
+ * also changed in EmailJS.
  */
 export const buildInvitationTemplateParams = ({
   invitationType,
   toEmail,
   recipientName = "",
-  inviterName,
+  inviterName = "",
   organizationName,
-  role = "",
-  roleName = "",
+  role,
   teamName = "",
   invitationUrl,
   expiresAt,
-  isReminder = false,
 }) => {
-  const normalizedType =
-    normalizeInvitationType(invitationType);
-
-  const invitationContent =
-    INVITATION_CONTENT[normalizedType];
-
-  if (!invitationContent) {
-    throw new Error(
-      `Unsupported invitation type: ${
-        normalizedType || "not provided"
-      }.`
-    );
-  }
-
-  const recipientEmail =
-    validateEmailAddress(toEmail);
+  const normalizedEmail =
+    normalizeEmail(toEmail);
 
   requireValue(
-    inviterName,
-    "The inviter's name is required."
+    normalizedEmail,
+    "The invitation recipient email is required."
   );
 
-  requireValue(
-    organizationName,
-    "The organization name is required."
-  );
-
-  /*
-   * Team-member invitations must identify the team being joined.
-   * Other invitation types may include a team, but it is optional.
-   */
   if (
-    normalizedType ===
-      INVITATION_EMAIL_TYPES.TEAM_MEMBER &&
-    !normalizeText(teamName)
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+      normalizedEmail
+    )
   ) {
     throw new Error(
-      "A team name is required for a team-member invitation."
+      "The invitation recipient email is invalid."
     );
   }
 
-  const resolvedRoleName =
-    normalizeText(roleName) ||
-    formatLabel(role) ||
-    invitationContent.defaultRoleName;
+  const normalizedOrganizationName =
+    normalizeText(organizationName);
 
-  const context = {
-    invitationType: normalizedType,
-    recipientName: normalizeText(recipientName),
-    inviterName: normalizeText(inviterName),
-    organizationName: normalizeText(organizationName),
-    roleName: resolvedRoleName,
-    teamName: normalizeText(teamName),
-    isReminder: Boolean(isReminder),
-  };
+  requireValue(
+    normalizedOrganizationName,
+    "The organization name is required for the invitation email."
+  );
+
+  const roleName =
+    formatRoleName(role);
+
+  requireValue(
+    roleName,
+    "The invited user role is required for the invitation email."
+  );
+
+  const validatedInvitationUrl =
+    validateInvitationUrl(
+      invitationUrl
+    );
+
+  const normalizedType =
+    normalizeIdentifier(
+      invitationType
+    );
+
+  const invitationContent =
+    buildInvitationContent({
+      invitationType:
+        normalizedType,
+
+      inviterName,
+
+      organizationName:
+        normalizedOrganizationName,
+
+      roleName,
+    });
+
+  const normalizedTeamName =
+    normalizeText(teamName);
+
+  /*
+   * The invitation does not know the invited person's name yet, so "there" is
+   * used rather than allowing the template to display "Hello ,".
+   */
+  const safeRecipientName =
+    normalizeText(recipientName) ||
+    "there";
 
   return {
-    /*
-     * Recipient information.
-     */
-    to_email: recipientEmail,
-    recipient_name:
-      context.recipientName || "there",
+    to_email:
+      normalizedEmail,
 
-    /*
-     * Dynamic subject and email content.
-     *
-     * Set the EmailJS template subject field to:
-     * {{email_subject}}
-     */
+    recipient_name:
+      safeRecipientName,
+
     email_subject:
-      invitationContent.getSubject(context),
+      invitationContent.emailSubject,
 
     invitation_title:
-      invitationContent.getTitle(context),
+      invitationContent.invitationTitle,
 
     invitation_message:
-      invitationContent.getMessage(context),
+      invitationContent.invitationMessage,
+
+    inviter_name:
+      normalizeText(inviterName) ||
+      "An OPSEYE administrator",
+
+    organization_name:
+      normalizedOrganizationName,
+
+    role_name:
+      roleName,
+
+    team_name:
+      normalizedTeamName,
 
     /*
-     * Invitation context displayed in the email.
+     * Keeping this as a complete sentence allows it to sit naturally inside
+     * the shared email template. Non-team invitations may safely leave it blank.
      */
-    inviter_name: context.inviterName,
-    organization_name: context.organizationName,
-    role_name: context.roleName,
-    team_name: context.teamName,
     team_details:
-      invitationContent.getTeamDetails(context),
+      normalizedTeamName
+        ? `Team: ${normalizedTeamName}`
+        : "",
 
-    /*
-     * Invitation action.
-     */
     invitation_url:
-      validateInvitationUrl(invitationUrl),
+      validatedInvitationUrl,
 
     button_label:
-      invitationContent.getButtonLabel(context),
+      invitationContent.buttonLabel,
 
-    expiry_date: formatExpiryDate(expiresAt),
+    expiry_date:
+      formatExpiryDate(expiresAt),
 
-    /*
-     * These values may be useful for EmailJS delivery history and debugging,
-     * even when they are not displayed in the visual template.
-     */
-    invitation_type: normalizedType,
+    invitation_type:
+      normalizedType,
+
     role_code:
-      normalizeInvitationType(role) || normalizedType,
+      normalizeIdentifier(role),
 
-    app_name: "OPSEYE",
+    app_name:
+      "OPSEYE",
   };
 };
 
 /*
- * Sends the invitation using the single EmailJS invitation template.
- *
- * EmailJS configuration is validated immediately before sending so the rest of
- * the application can continue running even when email delivery has not yet
- * been configured.
+ * Sends one invitation using the single EmailJS invitation template.
  */
-export const sendInvitationEmail = async (options) => {
-  const emailJsConfig =
-    requireEmailJsConfiguration();
+export const sendInvitationEmail = async (
+  invitationDetails
+) => {
+  /*
+   * This throws a clear error before EmailJS is called when a required Vite
+   * environment variable is missing.
+   */
+  requireEmailJsConfiguration();
 
   const templateParams =
-    buildInvitationTemplateParams(options);
+    buildInvitationTemplateParams(
+      invitationDetails
+    );
+
+    /*
+ * This development-only log confirms that the application is supplying the
+ * values expected by the EmailJS template. The secure invitation URL is not
+ * printed because it contains the raw invitation token.
+ */
+if (import.meta.env.DEV) {
+    console.log("EmailJS invitation payload:", {
+      toEmail: templateParams.to_email,
+      recipientName: templateParams.recipient_name,
+      subject: templateParams.email_subject,
+      title: templateParams.invitation_title,
+      message: templateParams.invitation_message,
+      organizationName: templateParams.organization_name,
+      roleName: templateParams.role_name,
+      teamDetails: templateParams.team_details,
+      buttonLabel: templateParams.button_label,
+      expiryDate: templateParams.expiry_date,
+      hasInvitationUrl: Boolean(
+        templateParams.invitation_url
+      ),
+    });
+  }
+
+  /*
+   * During development, log a safe summary of what is being sent.
+   *
+   * The raw invitation URL is deliberately not logged because it contains the
+   * secure invitation token.
+   */
+  if (import.meta.env.DEV) {
+    console.log(
+      "EmailJS invitation parameters:",
+      {
+        to_email:
+          templateParams.to_email,
+
+        email_subject:
+          templateParams.email_subject,
+
+        invitation_title:
+          templateParams.invitation_title,
+
+        recipient_name:
+          templateParams.recipient_name,
+
+        organization_name:
+          templateParams.organization_name,
+
+        role_name:
+          templateParams.role_name,
+
+        team_details:
+          templateParams.team_details,
+
+        button_label:
+          templateParams.button_label,
+
+        expiry_date:
+          templateParams.expiry_date,
+
+        hasInvitationUrl:
+          Boolean(
+            templateParams.invitation_url
+          ),
+      }
+    );
+  }
 
   try {
     const response = await emailjs.send(
-      emailJsConfig.serviceId,
-      emailJsConfig.invitationTemplateId,
+      EMAILJS_CONFIG.serviceId,
+      EMAILJS_CONFIG.invitationTemplateId,
       templateParams,
       {
-        publicKey: emailJsConfig.publicKey,
+        publicKey:
+          EMAILJS_CONFIG.publicKey,
       }
     );
 
@@ -526,88 +469,98 @@ export const sendInvitationEmail = async (options) => {
       success: true,
       status: response.status,
       text: response.text,
-      toEmail: templateParams.to_email,
-      invitationType:
-        templateParams.invitation_type,
     };
   } catch (error) {
-    /*
-     * EmailJS errors may expose either "text" or "message", depending on the
-     * source of the failure. Convert both into one predictable application
-     * error for the Settings interface.
-     */
-    const errorMessage =
-      normalizeText(error?.text) ||
-      normalizeText(error?.message) ||
-      "The invitation email could not be sent.";
+    console.error(
+      "EmailJS invitation delivery failed:",
+      error
+    );
 
     throw new Error(
-      `EmailJS invitation delivery failed: ${errorMessage}`
+      error?.text ||
+        error?.message ||
+        "The invitation email could not be sent."
     );
   }
 };
 
 /*
- * Readable invitation-specific wrappers.
+ * The wrapper names describe the workflow calling them, while all parameter
+ * construction remains centralized inside sendInvitationEmail.
  *
- * These functions all use the same EmailJS template and sending function.
- * Their purpose is to prevent UI and workflow components from repeatedly
- * specifying the invitation type.
+ * These wrappers accept the same property names currently passed by
+ * organization-workflows.js:
+ *
+ * toEmail
+ * inviterName
+ * organizationName
+ * role
+ * teamName
+ * invitationUrl
+ * expiresAt
  */
-
-export const sendRegionAdminInvitation = async (
-  options
+export const sendRegionAdminInvitation = (
+  invitationDetails
 ) => {
   return sendInvitationEmail({
-    ...options,
+    ...invitationDetails,
+
     invitationType:
       INVITATION_EMAIL_TYPES.REGION_ADMIN,
+
+    role:
+      invitationDetails.role ||
+      "region_admin",
   });
 };
 
-export const sendBranchAdminInvitation = async (
-  options
+export const sendBranchAdminInvitation = (
+  invitationDetails
 ) => {
   return sendInvitationEmail({
-    ...options,
+    ...invitationDetails,
+
     invitationType:
       INVITATION_EMAIL_TYPES.BRANCH_ADMIN,
+
+    role:
+      invitationDetails.role ||
+      "branch_admin",
   });
 };
 
-export const sendTeamMemberInvitation = async (
-  options
+export const sendTeamMemberInvitation = (
+  invitationDetails
 ) => {
   return sendInvitationEmail({
-    ...options,
+    ...invitationDetails,
+
     invitationType:
       INVITATION_EMAIL_TYPES.TEAM_MEMBER,
   });
 };
 
-export const sendOrganizationUserInvitation = async (
-  options
+export const sendOrganizationUserInvitation = (
+  invitationDetails
 ) => {
   return sendInvitationEmail({
-    ...options,
+    ...invitationDetails,
+
     invitationType:
       INVITATION_EMAIL_TYPES.ORGANIZATION_USER,
   });
 };
 
 /*
- * Resends any supported invitation type with reminder-specific wording.
+ * Resends an existing invitation using the same content rules.
  *
- * The invitation workflow should generate the new token and URL before calling
- * this function. This email helper does not update the Firestore invitation.
+ * The calling workflow must first generate the new token, update the Firestore
+ * invitation and provide the newly generated invitation URL.
  */
-export const sendInvitationReminder = async ({
-  invitationType,
-  ...options
-}) => {
-  return sendInvitationEmail({
-    ...options,
-    invitationType,
-    isReminder: true,
-  });
+export const sendInvitationReminder = (
+  invitationDetails
+) => {
+  return sendInvitationEmail(
+    invitationDetails
+  );
 };
