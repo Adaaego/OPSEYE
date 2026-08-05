@@ -1,4 +1,3 @@
-
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -35,7 +34,10 @@ import {
   updateUserDocument,
 } from "../../lib/functions";
 import {
+  getCompanyById,
   getCompanyByNormalizedName,
+  getMinistryById,
+  getMinistryByNormalizedName,
   REGIONS,
 } from "../../lib/companies";
 
@@ -96,6 +98,42 @@ const getOrganizationId = (organization) => {
   return organization?.organizationId || organization?.id || "";
 };
 
+const getOrganizationCategory = (organization) => {
+  return normalizeText(
+    organization?.organizationCategory ||
+      organization?.category ||
+      organization?.orgType
+  );
+};
+
+/*
+ * Companies and ministries use separate controlled metadata arrays because
+ * they represent different organization categories. Account Settings resolves
+ * the correct brand record from the signed-in user's Firestore organization so
+ * ministry accounts receive the Ministry of Energy logo instead of falling back
+ * to the generic building icon.
+ */
+const getOrganizationBrandMetadata = (organization) => {
+  if (!organization) {
+    return null;
+  }
+
+  const organizationId = getOrganizationId(organization);
+  const normalizedName = organization.normalizedName || organization.name;
+
+  if (getOrganizationCategory(organization) === "ministry") {
+    return (
+      getMinistryById(organization.ministryId || organizationId) ||
+      getMinistryByNormalizedName(normalizedName)
+    );
+  }
+
+  return (
+    getCompanyById(organization.companyId || organizationId) ||
+    getCompanyByNormalizedName(normalizedName)
+  );
+};
+
 const createDemoId = (prefix) => {
   const randomId =
     typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -133,8 +171,9 @@ const formatRole = (role) => {
     .join(" ");
 };
 
-const getCompanyDisplayName = (organization, company) => {
-  const configuredName = company?.name || company?.displayName || "";
+const getOrganizationDisplayName = (organization, brandMetadata) => {
+  const configuredName =
+    brandMetadata?.name || brandMetadata?.displayName || "";
 
   if (configuredName) {
     return configuredName;
@@ -447,7 +486,7 @@ const CreateRegionModal = ({
 
               <div>
                 <p className="font-semibold text-slate-900">
-                  {getCompanyDisplayName(organization, null)} {selectedRegion.name}
+                  {getOrganizationDisplayName(organization, null)} {selectedRegion.name}
                 </p>
                 <p className="mt-0.5 text-xs text-slate-500">
                   Region Admin · Invitation pending
@@ -504,7 +543,7 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
   const [simulatedRegions, setSimulatedRegions] = useState([]);
 
   const [organizationLogo, setOrganizationLogo] = useState("");
-  const [companyMetadata, setCompanyMetadata] = useState(null);
+  const [organizationMetadata, setOrganizationMetadata] = useState(null);
 
   const [loadingPage, setLoadingPage] = useState(true);
   const [pageError, setPageError] = useState("");
@@ -569,13 +608,15 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
 
         setOrganization(normalizedOrganization);
 
-        const company = getCompanyByNormalizedName(
-          currentOrganization.normalizedName || currentOrganization.name
-        );
+        const brandMetadata =
+          getOrganizationBrandMetadata(currentOrganization);
 
-        setCompanyMetadata(company || null);
+        setOrganizationMetadata(brandMetadata || null);
         setOrganizationLogo(
-          currentOrganization.logoUrl || currentOrganization.logo || company?.logo || ""
+          currentOrganization.logoUrl ||
+            currentOrganization.logo ||
+            brandMetadata?.logo ||
+            ""
         );
 
         // For the current prototype, users with the same organizationId share
@@ -640,7 +681,8 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
               logo:
                 organizationItem.logoUrl ||
                 organizationItem.logo ||
-                company?.logo ||
+                getOrganizationBrandMetadata(organizationItem)?.logo ||
+                brandMetadata?.logo ||
                 "",
             };
           })
@@ -708,8 +750,8 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
   }, [currentOrganizationId, organization?.teamId, profile.teamId]);
 
   const companyDisplayName = useMemo(() => {
-    return getCompanyDisplayName(organization, companyMetadata);
-  }, [companyMetadata, organization]);
+    return getOrganizationDisplayName(organization, organizationMetadata);
+  }, [organization, organizationMetadata]);
 
   const isEnterpriseContext = useMemo(() => {
     return normalizeText(organization?.type) === "enterprise";
@@ -952,7 +994,7 @@ const AccountSettings = ({ roles = [], onInvite = null }) => {
       rootEnterpriseId,
       ancestorIds,
       regionId: normalizeRegionId(region.id),
-      companyId: organization.companyId || companyMetadata?.id || "",
+      companyId: organization.companyId || organizationMetadata?.id || "",
       adminName: administratorEmail,
       adminRole: "Region Admin",
       adminEmail: administratorEmail,
