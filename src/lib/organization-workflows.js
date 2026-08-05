@@ -23,9 +23,7 @@ import {
     generateInvitationToken,
   } from "./invitation-link-functions";
   
-  import {
-    createInvitation,
-  } from "./invitation-functions";
+  import { createInvitation } from "./invitation-links";
   
   import {
     sendRegionAdminInvitation,

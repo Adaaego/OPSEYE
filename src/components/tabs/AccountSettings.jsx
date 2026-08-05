@@ -40,9 +40,7 @@ import {
   createDefaultOrganizationTeam,
   getOrganizationTeams,
 } from "../../lib/team-functions";
-import {
-  getPendingInvitations,
-} from "../../lib/invitation-functions";
+import { getPendingInvitations } from "../../lib/invitation-links";
 import {
   createRegionAndInviteAdministrator,
   inviteOrganizationTeamMember,
