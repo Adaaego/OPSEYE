@@ -30,11 +30,9 @@ import {
   
   import { db } from "../firebase/firebase";
   
-  import {
-    getInvitationById,
-    hashInvitationToken,
-    validateInvitation,
-  } from "./invitation-functions";
+import { getInvitationById,
+  hashInvitationToken,
+  validateInvitation, } from "./invitation-links";
   
   const USERS_COLLECTION = "users";
   const ORGANIZATIONS_COLLECTION = "organizations";
