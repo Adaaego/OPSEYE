@@ -42,6 +42,9 @@ import {
 } from "../../lib/team-functions";
 import { getPendingInvitations } from "../../lib/invitation-links";
 import {
+  createBranchAndAssignExistingAdministrator,
+  createBranchAndInviteAdministrator,
+  createRegionAndAssignExistingAdministrator,
   createRegionAndInviteAdministrator,
   inviteOrganizationTeamMember,
 } from "../../lib/organization-workflows";
@@ -319,18 +322,108 @@ const CopyButton = ({ value, label = "Copy" }) => {
   );
 };
 
-const CreateRegionModal = ({
+const CreateChildOrganizationModal = ({
   open,
+  childType,
   organization,
   organizationLogo,
+  teamMembers = [],
+  currentUserId = "",
   existingRegionIds = [],
   onClose,
   onCreate,
 }) => {
-  const [regionId, setRegionId] = useState("");
-  const [administratorEmail, setAdministratorEmail] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
+  const [regionId, setRegionId] =
+    useState("");
+
+  const [branchName, setBranchName] =
+    useState("");
+
+  const [assignmentMode, setAssignmentMode] =
+    useState("existing");
+
+  const [selectedUserId, setSelectedUserId] =
+    useState("");
+
+  const [administratorEmail, setAdministratorEmail] =
+    useState("");
+
+  const [submitting, setSubmitting] =
+    useState(false);
+
+  const [error, setError] =
+    useState("");
+
+  const isRegionCreation =
+    childType === "region";
+
+  const administratorRoleLabel =
+    isRegionCreation
+      ? "Regional Administrator"
+      : "Branch Administrator";
+
+  const childLabel =
+    isRegionCreation
+      ? "Region"
+      : "Branch";
+
+  /*
+   * Existing hierarchy administrators are excluded because moving one of those
+   * accounts could leave the parent organization without its active admin.
+   * The current signed-in administrator is also excluded to prevent accidental
+   * self-transfer.
+   */
+  const eligibleTeamMembers =
+    useMemo(() => {
+      const protectedRoles =
+        new Set([
+          "ministry_admin",
+          "enterprise_admin",
+          "region_admin",
+          "branch_admin",
+        ]);
+
+      return teamMembers
+        .filter((member) => {
+          const memberId =
+            member.uid ||
+            member.id ||
+            "";
+
+          const memberStatus =
+            normalizeRoleCode(
+              member.status ||
+              "active"
+            );
+
+          return (
+            memberId &&
+            memberId !== currentUserId &&
+            memberStatus === "active" &&
+            !protectedRoles.has(
+              normalizeRoleCode(
+                member.role
+              )
+            )
+          );
+        })
+        .sort((first, second) =>
+          String(
+            first.fullName ||
+              first.email ||
+              ""
+          ).localeCompare(
+            String(
+              second.fullName ||
+                second.email ||
+                ""
+            )
+          )
+        );
+    }, [
+      currentUserId,
+      teamMembers,
+    ]);
 
   useEffect(() => {
     if (!open) {
@@ -338,35 +431,135 @@ const CreateRegionModal = ({
     }
 
     setRegionId("");
+    setBranchName("");
     setAdministratorEmail("");
     setSubmitting(false);
     setError("");
-  }, [open]);
 
-  const availableRegions = useMemo(() => {
-    const existing = new Set(existingRegionIds.map(normalizeRegionId));
+    /*
+     * Prefer existing-member assignment when a suitable team member exists.
+     * Otherwise, default to the invitation path.
+     */
+    const defaultMode =
+      eligibleTeamMembers.length
+        ? "existing"
+        : "invite";
 
-    return REGIONS.filter(
-      (region) => !existing.has(normalizeRegionId(region.id))
-    ).sort((first, second) => first.name.localeCompare(second.name));
-  }, [existingRegionIds]);
+    setAssignmentMode(
+      defaultMode
+    );
 
-  const selectedRegion = availableRegions.find(
-    (region) => normalizeRegionId(region.id) === normalizeRegionId(regionId)
-  );
+    setSelectedUserId(
+      eligibleTeamMembers[0]?.uid ||
+        eligibleTeamMembers[0]?.id ||
+        ""
+    );
+  }, [
+    eligibleTeamMembers,
+    open,
+  ]);
 
-  const handleSubmit = async (event) => {
+  const availableRegions =
+    useMemo(() => {
+      const existing =
+        new Set(
+          existingRegionIds.map(
+            normalizeRegionId
+          )
+        );
+
+      return REGIONS
+        .filter(
+          (region) =>
+            !existing.has(
+              normalizeRegionId(
+                region.id
+              )
+            )
+        )
+        .sort((first, second) =>
+          first.name.localeCompare(
+            second.name
+          )
+        );
+    }, [existingRegionIds]);
+
+  const selectedRegion =
+    availableRegions.find(
+      (region) =>
+        normalizeRegionId(
+          region.id
+        ) ===
+        normalizeRegionId(
+          regionId
+        )
+    );
+
+  const selectedMember =
+    eligibleTeamMembers.find(
+      (member) =>
+        (
+          member.uid ||
+          member.id
+        ) === selectedUserId
+    );
+
+  const childName =
+    isRegionCreation
+      ? selectedRegion?.name || ""
+      : branchName.trim();
+
+  const canSubmit =
+    Boolean(childName) &&
+    (
+      assignmentMode === "existing"
+        ? Boolean(selectedUserId)
+        : Boolean(
+            administratorEmail.trim()
+          )
+    );
+
+  const handleSubmit = async (
+    event
+  ) => {
     event.preventDefault();
 
-    const email = administratorEmail.trim().toLowerCase();
+    if (!childName) {
+      setError(
+        isRegionCreation
+          ? "Select the region you are creating."
+          : "Enter the branch name."
+      );
 
-    if (!selectedRegion) {
-      setError("Select the region you are creating.");
       return;
     }
 
-    if (!/^\S+@\S+\.\S+$/.test(email)) {
-      setError("Enter a valid email address for the Regional Administrator.");
+    const email =
+      administratorEmail
+        .trim()
+        .toLowerCase();
+
+    if (
+      assignmentMode === "existing" &&
+      !selectedMember
+    ) {
+      setError(
+        `Select the existing team member who should become the ${administratorRoleLabel}.`
+      );
+
+      return;
+    }
+
+    if (
+      assignmentMode === "invite" &&
+      !/^\S+@\S+\.\S+$/.test(
+        email
+      )
+    ) {
+      setError(
+        `Enter a valid email address for the ${administratorRoleLabel}.`
+      );
+
       return;
     }
 
@@ -375,13 +568,38 @@ const CreateRegionModal = ({
       setError("");
 
       await onCreate({
-        region: selectedRegion,
-        administratorEmail: email,
+        childType,
+
+        region:
+          selectedRegion ||
+          null,
+
+        branchName:
+          branchName.trim(),
+
+        assignmentMode,
+
+        selectedUserId:
+          assignmentMode ===
+          "existing"
+            ? selectedUserId
+            : "",
+
+        administratorEmail:
+          assignmentMode ===
+          "invite"
+            ? email
+            : "",
       });
     } catch (createError) {
-      console.error("Unable to create the regional organization:", createError);
+      console.error(
+        `Unable to create the ${childType}:`,
+        createError
+      );
+
       setError(
-        createError?.message || "The region invitation could not be created."
+        createError?.message ||
+          `The ${childLabel.toLowerCase()} could not be created.`
       );
     } finally {
       setSubmitting(false);
@@ -389,22 +607,30 @@ const CreateRegionModal = ({
   };
 
   return (
-    <ModalPortal open={open} title="Create New Region" onClose={onClose}>
+    <ModalPortal
+      open={open}
+      title={`Create New ${childLabel}`}
+      onClose={onClose}
+    >
       <div
         className="flex items-start justify-between gap-4 px-6 py-5 text-white"
-        style={{ backgroundColor: NAVY }}
+        style={{
+          backgroundColor: NAVY,
+        }}
       >
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">
             Organization Structure
           </p>
 
-          <h2 className="mt-1 text-xl font-semibold">Create New Region</h2>
+          <h2 className="mt-1 text-xl font-semibold">
+            Create New {childLabel}
+          </h2>
 
           <p className="mt-1 max-w-xl text-sm text-slate-300">
-            The selected region will inherit the current enterprise hierarchy.
-            OPSEYE will create the regional organization, its default team and
-            the pending administrator invitation in Firestore.
+            {isRegionCreation
+              ? "Create a regional organization beneath this enterprise and assign its Regional Administrator."
+              : "Create a branch beneath this region and assign its Branch Administrator."}
           </p>
         </div>
 
@@ -412,13 +638,16 @@ const CreateRegionModal = ({
           type="button"
           onClick={onClose}
           className="rounded-lg p-2 text-slate-300 transition hover:bg-white/10 hover:text-white"
-          aria-label="Close create region form"
+          aria-label={`Close create ${childLabel.toLowerCase()} form`}
         >
           <X className="h-5 w-5" />
         </button>
       </div>
 
-      <form onSubmit={handleSubmit} className="p-6">
+      <form
+        onSubmit={handleSubmit}
+        className="p-6"
+      >
         {error && (
           <div className="mb-5 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -436,7 +665,12 @@ const CreateRegionModal = ({
           ) : (
             <div
               className="flex h-12 w-12 items-center justify-center rounded-xl"
-              style={{ backgroundColor: PALE_BLUE, color: NAVY }}
+              style={{
+                backgroundColor:
+                  PALE_BLUE,
+
+                color: NAVY,
+              }}
             >
               <Building2 className="h-5 w-5" />
             </div>
@@ -444,95 +678,234 @@ const CreateRegionModal = ({
 
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Parent enterprise
+              Parent organization
             </p>
+
             <p className="mt-1 truncate font-semibold text-slate-900">
-              {organization?.name || "Current enterprise"}
+              {organization?.name ||
+                "Current organization"}
             </p>
+
             <p className="mt-0.5 text-xs text-slate-500">
-              Organization ID: {getOrganizationId(organization) || "Not available"}
+              Organization ID:{" "}
+              {getOrganizationId(
+                organization
+              ) || "Not available"}
             </p>
           </div>
         </div>
 
         <div className="space-y-5">
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-semibold text-slate-800">
-              Region
-            </span>
+          {isRegionCreation ? (
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-semibold text-slate-800">
+                Region
+              </span>
 
-            <select
-              value={regionId}
-              onChange={(event) => setRegionId(event.target.value)}
-              className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-              required
-            >
-              <option value="">Select a region</option>
-
-              {availableRegions.map((region) => (
-                <option key={region.id} value={region.id}>
-                  {region.name}
+              <select
+                value={regionId}
+                onChange={(event) =>
+                  setRegionId(
+                    event.target.value
+                  )
+                }
+                className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                required
+              >
+                <option value="">
+                  Select a region
                 </option>
-              ))}
-            </select>
 
-            <span className="mt-1.5 block text-xs text-slate-500">
-              Regions come from the same controlled Ghana region list used by
-              the rest of the platform, rather than from the map geometry file.
-            </span>
-          </label>
-
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-semibold text-slate-800">
-              Regional Administrator Email
-            </span>
-
-            <div className="relative">
-              <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                {availableRegions.map(
+                  (region) => (
+                    <option
+                      key={region.id}
+                      value={region.id}
+                    >
+                      {region.name}
+                    </option>
+                  )
+                )}
+              </select>
+            </label>
+          ) : (
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-semibold text-slate-800">
+                Branch Name
+              </span>
 
               <input
-                type="email"
-                value={administratorEmail}
-                onChange={(event) => setAdministratorEmail(event.target.value)}
-                placeholder="regional.admin@company.com"
-                className="h-11 w-full rounded-lg border border-slate-300 bg-white pl-10 pr-3 text-sm font-medium text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                type="text"
+                value={branchName}
+                onChange={(event) =>
+                  setBranchName(
+                    event.target.value
+                  )
+                }
+                placeholder="e.g. Tema Industrial Area Branch"
+                className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 required
               />
-            </div>
-          </label>
-        </div>
+            </label>
+          )}
 
-        {selectedRegion && (
-          <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Region preview
+          <div>
+            <p className="mb-2 text-sm font-semibold text-slate-800">
+              {administratorRoleLabel}
             </p>
 
-            <div className="mt-3 flex items-center gap-3">
-              {organizationLogo ? (
-                <img
-                  src={organizationLogo}
-                  alt="Company logo"
-                  className="h-10 w-10 rounded-lg border border-slate-200 bg-white object-contain p-1"
-                />
-              ) : (
-                <div
-                  className="flex h-10 w-10 items-center justify-center rounded-lg"
-                  style={{ backgroundColor: PALE_BLUE, color: NAVY }}
-                >
-                  <MapPin className="h-4 w-4" />
-                </div>
-              )}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setAssignmentMode(
+                    "existing"
+                  )
+                }
+                disabled={
+                  !eligibleTeamMembers.length
+                }
+                className={`rounded-xl border p-4 text-left transition ${
+                  assignmentMode ===
+                  "existing"
+                    ? "border-navy-950 bg-navy-50"
+                    : "border-slate-200 bg-white hover:border-slate-300"
+                } disabled:cursor-not-allowed disabled:opacity-50`}
+              >
+                <Users className="h-5 w-5 text-navy-700" />
 
-              <div>
-                <p className="font-semibold text-slate-900">
-                  {getOrganizationDisplayName(organization, null)} {selectedRegion.name}
+                <p className="mt-3 text-sm font-semibold text-slate-900">
+                  Existing Team Member
                 </p>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  Region Admin · Invitation pending
+
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  Transfer an active member to the new organization and assign the administrator role immediately.
                 </p>
-              </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setAssignmentMode(
+                    "invite"
+                  )
+                }
+                className={`rounded-xl border p-4 text-left transition ${
+                  assignmentMode ===
+                  "invite"
+                    ? "border-navy-950 bg-navy-50"
+                    : "border-slate-200 bg-white hover:border-slate-300"
+                }`}
+              >
+                <Mail className="h-5 w-5 text-navy-700" />
+
+                <p className="mt-3 text-sm font-semibold text-slate-900">
+                  Invite New Person
+                </p>
+
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  Create a pending invitation and complete the standard email-verification onboarding flow.
+                </p>
+              </button>
             </div>
+          </div>
+
+          {assignmentMode ===
+          "existing" ? (
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-semibold text-slate-800">
+                Select Team Member
+              </span>
+
+              <select
+                value={selectedUserId}
+                onChange={(event) =>
+                  setSelectedUserId(
+                    event.target.value
+                  )
+                }
+                className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                required
+              >
+                <option value="">
+                  Select a team member
+                </option>
+
+                {eligibleTeamMembers.map(
+                  (member) => {
+                    const memberId =
+                      member.uid ||
+                      member.id;
+
+                    return (
+                      <option
+                        key={memberId}
+                        value={memberId}
+                      >
+                        {member.fullName ||
+                          member.email}{" "}
+                        ·{" "}
+                        {formatRole(
+                          member.role
+                        )}
+                      </option>
+                    );
+                  }
+                )}
+              </select>
+
+              <span className="mt-1.5 block text-xs leading-5 text-slate-500">
+                Their primary organization, role and team membership will move to the new {childLabel.toLowerCase()}.
+              </span>
+            </label>
+          ) : (
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-semibold text-slate-800">
+                {administratorRoleLabel} Email
+              </span>
+
+              <div className="relative">
+                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+                <input
+                  type="email"
+                  value={
+                    administratorEmail
+                  }
+                  onChange={(event) =>
+                    setAdministratorEmail(
+                      event.target.value
+                    )
+                  }
+                  placeholder="administrator@company.com"
+                  className="h-11 w-full rounded-lg border border-slate-300 bg-white pl-10 pr-3 text-sm font-medium text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  required
+                />
+              </div>
+            </label>
+          )}
+        </div>
+
+        {childName && (
+          <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Assignment preview
+            </p>
+
+            <p className="mt-2 font-semibold text-slate-900">
+              {childName}
+            </p>
+
+            <p className="mt-1 text-xs text-slate-500">
+              {administratorRoleLabel} ·{" "}
+              {assignmentMode ===
+              "existing"
+                ? selectedMember?.fullName ||
+                  selectedMember?.email ||
+                  "Existing member"
+                : administratorEmail ||
+                  "Invitation pending"}
+            </p>
           </div>
         )}
 
@@ -548,19 +921,30 @@ const CreateRegionModal = ({
 
           <Button
             type="submit"
-            disabled={submitting || !regionId || !administratorEmail.trim()}
+            disabled={
+              submitting ||
+              !canSubmit
+            }
             className="text-white hover:opacity-90"
-            style={{ backgroundColor: NAVY }}
+            style={{
+              backgroundColor: NAVY,
+            }}
           >
             {submitting ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Sending Invite...
+                Creating...
+              </>
+            ) : assignmentMode ===
+              "existing" ? (
+              <>
+                <CheckCircle2 className="h-4 w-4" />
+                Create & Assign Admin
               </>
             ) : (
               <>
                 <Send className="h-4 w-4" />
-                Create Region & Send Invite
+                Create & Send Invite
               </>
             )}
           </Button>
@@ -602,7 +986,7 @@ const AccountSettings = ({ roles = [] }) => {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("");
 
-  const [createRegionOpen, setCreateRegionOpen] = useState(false);
+  const [createChildOpen, setCreateChildOpen] = useState(false);
   const [formData, setFormData] = useState(createProfileForm());
 
   /*
@@ -962,64 +1346,180 @@ const AccountSettings = ({ roles = [] }) => {
     return getOrganizationDisplayName(organization, organizationMetadata);
   }, [organization, organizationMetadata]);
 
-  const isEnterpriseContext = useMemo(() => {
-    return normalizeText(organization?.type) === "enterprise";
-  }, [organization?.type]);
-
-  const isEnterpriseAdmin = useMemo(() => {
-    const role = normalizeRoleCode(profile.role);
-
-    return (
-      role === "enterprise_admin" ||
-      (isEnterpriseContext && role === "admin")
+  const currentRole =
+    normalizeRoleCode(
+      profile.role
     );
-  }, [isEnterpriseContext, profile.role]);
 
-  const canInviteTeamMembers = useMemo(() => {
-    return ["enterprise_admin", "region_admin"].includes(
-      normalizeRoleCode(profile.role)
+  const currentUserId =
+    profile.uid ||
+    profile.id ||
+    auth.currentUser?.uid ||
+    "";
+
+  const organizationType =
+    normalizeText(
+      organization?.type
     );
-  }, [profile.role]);
 
-  const enterpriseLevel = useMemo(() => {
-    return (
-      hierarchyLevels.find(
-        (item) => normalizeText(item.level) === "enterprise"
-      ) ||
-      (isEnterpriseContext
-        ? {
-            id: currentOrganizationId,
-            organizationId: currentOrganizationId,
-            level: "enterprise",
-            type: "enterprise",
-            name: organization?.name,
-            adminName: profile.fullName || profile.email || "",
-            adminRole: formatRole(profile.role),
-            logo: organizationLogo,
-            status: organization?.status || "active",
-          }
-        : null)
+  const isMinistryContext =
+    organizationType ===
+    "ministry";
+
+  const isEnterpriseContext =
+    organizationType ===
+    "enterprise";
+
+  const isRegionContext =
+    organizationType ===
+    "region";
+
+  const isBranchContext =
+    organizationType ===
+    "branch";
+
+  const isEnterpriseAdmin =
+    currentRole ===
+      "enterprise_admin" ||
+    (
+      isEnterpriseContext &&
+      currentRole === "admin"
     );
-  }, [
-    currentOrganizationId,
-    hierarchyLevels,
-    isEnterpriseContext,
-    organization,
-    organizationLogo,
-    profile,
-  ]);
 
-  const existingRegions = useMemo(() => {
-    return hierarchyLevels
-      .filter((item) => normalizeText(item.level) === "region")
-      .sort((first, second) =>
-        String(first.name || "").localeCompare(String(second.name || ""))
+  const isRegionAdmin =
+    currentRole ===
+      "region_admin" &&
+    isRegionContext;
+
+  /*
+   * Every hierarchy administrator may manage their own organization's team.
+   * This includes Ministry and Branch Admins, but it does not grant either role
+   * permission to create child organizations.
+   */
+  const canInviteTeamMembers =
+    [
+      "ministry_admin",
+      "enterprise_admin",
+      "region_admin",
+      "branch_admin",
+      "organization_admin",
+    ].includes(
+      currentRole
+    );
+
+  /*
+   * Enterprise Admins create regions. Regional Admins create branches beneath
+   * their own region. Ministry and Branch Admins remain view-only in the
+   * organization hierarchy tab.
+   */
+  const childTypeToCreate =
+    isEnterpriseAdmin
+      ? "region"
+      : isRegionAdmin
+        ? "branch"
+        : "";
+
+  const canCreateChildOrganization =
+    Boolean(
+      childTypeToCreate
+    );
+
+  const existingRegions =
+    useMemo(() => {
+      return hierarchyLevels
+        .filter(
+          (item) =>
+            normalizeText(
+              item.level
+            ) === "region" &&
+            (
+              !currentOrganizationId ||
+              item.parentId ===
+                currentOrganizationId
+            )
+        )
+        .sort((first, second) =>
+          String(
+            first.name || ""
+          ).localeCompare(
+            String(
+              second.name || ""
+            )
+          )
+        );
+    }, [
+      currentOrganizationId,
+      hierarchyLevels,
+    ]);
+
+  const existingBranches =
+    useMemo(() => {
+      return hierarchyLevels
+        .filter(
+          (item) =>
+            normalizeText(
+              item.level
+            ) === "branch" &&
+            item.parentId ===
+              currentOrganizationId
+        )
+        .sort((first, second) =>
+          String(
+            first.name || ""
+          ).localeCompare(
+            String(
+              second.name || ""
+            )
+          )
+        );
+    }, [
+      currentOrganizationId,
+      hierarchyLevels,
+    ]);
+
+  const existingRegionIds =
+    useMemo(() => {
+      return existingRegions
+        .map(
+          (region) =>
+            region.regionId
+        )
+        .filter(Boolean);
+    }, [existingRegions]);
+
+  const visibleChildOrganizations =
+    childTypeToCreate ===
+    "region"
+      ? existingRegions
+      : childTypeToCreate ===
+          "branch"
+        ? existingBranches
+        : [];
+
+  /*
+   * Regional and branch administrator assignment must use a person who is
+   * already in the parent organization's default team. The backend validates
+   * this again before any organization is created.
+   */
+  const defaultTeamMembers =
+    useMemo(() => {
+      if (!teamId) {
+        return [];
+      }
+
+      return teamMembers.filter(
+        (member) =>
+          Array.isArray(
+            member.teamIds
+          ) &&
+          member.teamIds.includes(
+            teamId
+          )
       );
-  }, [hierarchyLevels]);
-
-  const existingRegionIds = useMemo(() => {
-    return existingRegions.map((region) => region.regionId).filter(Boolean);
-  }, [existingRegions]);
+    }, [
+      teamId,
+      teamMembers,
+    ]);
 
   const teamPendingInvites = useMemo(() => {
     return pendingInvites.filter((invitation) => {
@@ -1181,40 +1681,193 @@ const AccountSettings = ({ roles = [] }) => {
     }
   };
 
-  const handleCreateRegion = async ({ region, administratorEmail }) => {
-    if (!organization) {
-      throw new Error("The parent enterprise could not be resolved.");
-    }
-
-    const regionOrganizationName = `${companyDisplayName} ${region.name}`
-      .replace(/\s+/g, " ")
-      .trim();
-
-    const result = await createRegionAndInviteAdministrator({
-      parentOrganization: organization,
-      regionId: normalizeRegionId(region.id),
-      organizationName: regionOrganizationName,
+  const handleCreateChildOrganization =
+    async ({
+      childType,
+      region,
+      branchName,
+      assignmentMode,
+      selectedUserId,
       administratorEmail,
-      currentUser: profile,
-    });
+    }) => {
+      if (!organization) {
+        throw new Error(
+          "The parent organization could not be resolved."
+        );
+      }
 
-    rememberInvitationLink(result.invitation, result.invitationUrl);
+      if (!defaultTeam) {
+        throw new Error(
+          "The parent organization's default team is not available."
+        );
+      }
 
-    setCreateRegionOpen(false);
+      let result;
+      let organizationName;
+      let administratorRoleLabel;
 
-    await loadAccountData({
-      showLoading: false,
-    });
+      if (childType === "region") {
+        if (!region?.id) {
+          throw new Error(
+            "Select the region you are creating."
+          );
+        }
 
-    const emailWasSent = Boolean(result.emailDelivery?.success);
+        organizationName =
+          `${companyDisplayName} ${region.name}`
+            .replace(/\s+/g, " ")
+            .trim();
 
-    setPageNotice({
-      type: emailWasSent ? "success" : "warning",
-      message: emailWasSent
-        ? `${regionOrganizationName} was created and the Regional Administrator invitation was sent to ${administratorEmail}.`
-        : `${regionOrganizationName} was created, but EmailJS could not send the invitation. Copy the invitation link from the region card and share it manually.`,
-    });
-  };
+        administratorRoleLabel =
+          "Regional Administrator";
+
+        result =
+          assignmentMode ===
+          "existing"
+            ? await createRegionAndAssignExistingAdministrator({
+                parentOrganization:
+                  organization,
+
+                sourceTeam:
+                  defaultTeam,
+
+                regionId:
+                  normalizeRegionId(
+                    region.id
+                  ),
+
+                organizationName,
+
+                selectedUserId,
+
+                currentUser:
+                  profile,
+              })
+            : await createRegionAndInviteAdministrator({
+                parentOrganization:
+                  organization,
+
+                regionId:
+                  normalizeRegionId(
+                    region.id
+                  ),
+
+                organizationName,
+
+                administratorEmail,
+
+                currentUser:
+                  profile,
+              });
+      } else if (
+        childType === "branch"
+      ) {
+        const trimmedBranchName =
+          String(
+            branchName || ""
+          ).trim();
+
+        if (!trimmedBranchName) {
+          throw new Error(
+            "Enter the branch name."
+          );
+        }
+
+        /*
+         * Prefixing the branch with its region keeps names understandable in
+         * Ministry and enterprise roll-up views where the parent may not be
+         * visible beside every record.
+         */
+        organizationName =
+          `${organization.name} - ${trimmedBranchName}`
+            .replace(/\s+/g, " ")
+            .trim();
+
+        administratorRoleLabel =
+          "Branch Administrator";
+
+        result =
+          assignmentMode ===
+          "existing"
+            ? await createBranchAndAssignExistingAdministrator({
+                parentOrganization:
+                  organization,
+
+                sourceTeam:
+                  defaultTeam,
+
+                organizationName,
+
+                selectedUserId,
+
+                currentUser:
+                  profile,
+              })
+            : await createBranchAndInviteAdministrator({
+                parentOrganization:
+                  organization,
+
+                organizationName,
+
+                administratorEmail,
+
+                currentUser:
+                  profile,
+              });
+      } else {
+        throw new Error(
+          "Your organization cannot create child organizations."
+        );
+      }
+
+      if (
+        result.invitation &&
+        result.invitationUrl
+      ) {
+        rememberInvitationLink(
+          result.invitation,
+          result.invitationUrl
+        );
+      }
+
+      setCreateChildOpen(false);
+
+      await loadAccountData({
+        showLoading: false,
+      });
+
+      if (
+        assignmentMode ===
+        "existing"
+      ) {
+        setPageNotice({
+          type: "success",
+
+          message:
+            `${organizationName} was created and the selected team member is now its ${administratorRoleLabel}.`,
+        });
+
+        return;
+      }
+
+      const emailWasSent =
+        Boolean(
+          result.emailDelivery
+            ?.success
+        );
+
+      setPageNotice({
+        type:
+          emailWasSent
+            ? "success"
+            : "warning",
+
+        message:
+          emailWasSent
+            ? `${organizationName} was created and the ${administratorRoleLabel} invitation was sent to ${administratorEmail}.`
+            : `${organizationName} was created, but EmailJS could not send the invitation. Copy the invitation link from the organization card and share it manually.`,
+      });
+    };
 
   if (loadingPage) {
     return (
@@ -1764,13 +2417,18 @@ const AccountSettings = ({ roles = [] }) => {
                   {organizationLogo ? (
                     <img
                       src={organizationLogo}
-                      alt={`${enterpriseLevel?.name || organization?.name || "Organization"} logo`}
+                      alt={`${organization?.name || "Organization"} logo`}
                       className="h-16 w-16 shrink-0 rounded-2xl border border-slate-200 bg-white object-contain p-1.5"
                     />
                   ) : (
                     <div
                       className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl"
-                      style={{ backgroundColor: PALE_BLUE, color: NAVY }}
+                      style={{
+                        backgroundColor:
+                          PALE_BLUE,
+
+                        color: NAVY,
+                      }}
                     >
                       <Building2 className="h-6 w-6" />
                     </div>
@@ -1778,13 +2436,23 @@ const AccountSettings = ({ roles = [] }) => {
 
                   <div className="min-w-0">
                     <span className="rounded-md bg-slate-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                      {enterpriseLevel?.level || organization?.type || "Organization"}
+                      {organization?.type ||
+                        "Organization"}
                     </span>
+
                     <h2 className="mt-3 truncate text-xl font-semibold text-slate-900">
-                      {enterpriseLevel?.name || organization?.name || "Organization"}
+                      {organization?.name ||
+                        "Organization"}
                     </h2>
+
                     <p className="mt-1 text-sm text-slate-500">
-                      Parent organization for regional and branch-level operations.
+                      {isMinistryContext
+                        ? "Government oversight organization. Operator hierarchy creation is not available from Ministry accounts."
+                        : isEnterpriseContext
+                          ? "Enterprise parent for regional operating organizations."
+                          : isRegionContext
+                            ? "Regional organization with permission to create and manage branches beneath it."
+                            : "Branch organization and terminal level in the current hierarchy."}
                     </p>
                   </div>
                 </div>
@@ -1792,26 +2460,43 @@ const AccountSettings = ({ roles = [] }) => {
 
               <div className="border-t border-slate-200 bg-slate-50 p-5 lg:border-l lg:border-t-0">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Enterprise metadata
+                  Organization metadata
                 </p>
 
                 <div className="mt-3 space-y-3 text-xs">
                   <div className="flex items-center justify-between gap-4">
-                    <span className="text-slate-500">Organization ID</span>
+                    <span className="text-slate-500">
+                      Organization ID
+                    </span>
+
                     <code className="max-w-[190px] truncate font-semibold text-slate-800">
-                      {enterpriseLevel?.organizationId || currentOrganizationId || "—"}
+                      {currentOrganizationId ||
+                        "—"}
                     </code>
                   </div>
+
                   <div className="flex items-center justify-between gap-4">
-                    <span className="text-slate-500">Root enterprise ID</span>
+                    <span className="text-slate-500">
+                      Root enterprise ID
+                    </span>
+
                     <code className="max-w-[190px] truncate font-semibold text-slate-800">
-                      {organization?.rootEnterpriseId || currentOrganizationId || "—"}
+                      {organization?.rootEnterpriseId ||
+                        (
+                          isEnterpriseContext
+                            ? currentOrganizationId
+                            : "—"
+                        )}
                     </code>
                   </div>
+
                   <div className="flex items-center justify-between gap-4">
-                    <span className="text-slate-500">Regions</span>
+                    <span className="text-slate-500">
+                      Child organizations
+                    </span>
+
                     <span className="font-semibold text-slate-800">
-                      {existingRegions.length}
+                      {visibleChildOrganizations.length}
                     </span>
                   </div>
                 </div>
@@ -1819,161 +2504,256 @@ const AccountSettings = ({ roles = [] }) => {
             </div>
           </Card>
 
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <SectionHeader>Regional Organizations</SectionHeader>
+          {canCreateChildOrganization ? (
+            <>
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <SectionHeader>
+                    {childTypeToCreate ===
+                    "region"
+                      ? "Regional Organizations"
+                      : "Branch Organizations"}
+                  </SectionHeader>
 
-              <p className="-mt-2 max-w-2xl text-sm text-slate-500">
-                Each region receives its own organization ID while inheriting the
-                enterprise parent, root enterprise and ancestor metadata.
-              </p>
-            </div>
+                  <p className="-mt-2 max-w-2xl text-sm text-slate-500">
+                    {childTypeToCreate ===
+                    "region"
+                      ? "Each region receives its own organization and default team while inheriting the enterprise hierarchy."
+                      : "Each branch is created directly beneath this region and inherits the same enterprise and region metadata."}
+                  </p>
+                </div>
 
-            {isEnterpriseAdmin && (
-              <Button
-                onClick={() => setCreateRegionOpen(true)}
-                className="bg-navy-950 text-white hover:bg-navy-900"
-              >
-                <Plus className="h-4 w-4" />
-                Create New Region
-              </Button>
-            )}
-          </div>
+                <Button
+                  onClick={() =>
+                    setCreateChildOpen(
+                      true
+                    )
+                  }
+                  className="bg-navy-950 text-white hover:bg-navy-900"
+                >
+                  <Plus className="h-4 w-4" />
 
-          {!isEnterpriseAdmin && (
+                  Create New{" "}
+                  {childTypeToCreate ===
+                  "region"
+                    ? "Region"
+                    : "Branch"}
+                </Button>
+              </div>
+
+              {visibleChildOrganizations.length >
+              0 ? (
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  {visibleChildOrganizations.map(
+                    (item) => {
+                      const FallbackIcon =
+                        getHierarchyIcon(
+                          item.level
+                        );
+
+                      const invitationStatus =
+                        normalizeRoleCode(
+                          item.invitationStatus
+                        );
+
+                      const pending =
+                        invitationStatus ===
+                        "pending";
+
+                      const active =
+                        [
+                          "accepted",
+                          "active",
+                        ].includes(
+                          invitationStatus
+                        );
+
+                      const statusLabel =
+                        pending
+                          ? "Invitation pending"
+                          : active
+                            ? "Active"
+                            : "Administrator unassigned";
+
+                      const statusClassName =
+                        pending
+                          ? "bg-amber-100 text-amber-700"
+                          : active
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-slate-200 text-slate-600";
+
+                      const invitationUrl =
+                        item.invitationId
+                          ? recentInvitationLinks[
+                              item
+                                .invitationId
+                            ]
+                          : "";
+
+                      const administratorLabel =
+                        normalizeText(
+                          item.level
+                        ) === "region"
+                          ? "Regional Administrator"
+                          : "Branch Administrator";
+
+                      return (
+                        <Card
+                          key={
+                            item.organizationId ||
+                            item.id
+                          }
+                          className="overflow-hidden transition hover:border-slate-300 hover:shadow-md"
+                        >
+                          <div className="p-5">
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="flex min-w-0 items-start gap-4">
+                                {item.logo ||
+                                organizationLogo ? (
+                                  <img
+                                    src={
+                                      item.logo ||
+                                      organizationLogo
+                                    }
+                                    alt={`${item.name} logo`}
+                                    className="h-11 w-11 shrink-0 rounded-xl border border-slate-200 bg-white object-contain p-1"
+                                  />
+                                ) : (
+                                  <div
+                                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
+                                    style={{
+                                      backgroundColor:
+                                        PALE_BLUE,
+
+                                      color:
+                                        NAVY,
+                                    }}
+                                  >
+                                    <FallbackIcon className="h-5 w-5" />
+                                  </div>
+                                )}
+
+                                <div className="min-w-0">
+                                  <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                                    {item.level}
+                                  </span>
+
+                                  <p className="mt-2 truncate text-base font-semibold text-navy-950">
+                                    <EmptyCell
+                                      value={
+                                        item.name
+                                      }
+                                    />
+                                  </p>
+
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    {normalizeText(
+                                      item.level
+                                    ) ===
+                                    "region"
+                                      ? `${getRegionName(
+                                          item.regionId
+                                        )} · Parent: ${
+                                          item.parent ||
+                                          organization?.name
+                                        }`
+                                      : `Parent: ${
+                                          item.parent ||
+                                          organization?.name
+                                        }`}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <ChevronRight className="h-5 w-5 shrink-0 text-slate-300" />
+                            </div>
+
+                            <div className="mt-5 grid grid-cols-1 gap-3 border-t border-slate-100 pt-4 sm:grid-cols-2">
+                              <div>
+                                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                                  {administratorLabel}
+                                </p>
+
+                                <p className="mt-1 truncate text-sm font-semibold text-slate-800">
+                                  {item.adminName ||
+                                    "No admin assigned"}
+                                </p>
+
+                                {item.adminRole && (
+                                  <p className="mt-0.5 text-xs text-slate-500">
+                                    {
+                                      item.adminRole
+                                    }
+                                  </p>
+                                )}
+                              </div>
+
+                              <div>
+                                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                                  Organization ID
+                                </p>
+
+                                <code className="mt-1 block truncate text-xs font-semibold text-slate-700">
+                                  {item.organizationId ||
+                                    item.id}
+                                </code>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3">
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${statusClassName}`}
+                            >
+                              {statusLabel}
+                            </span>
+
+                            {invitationUrl && (
+                              <CopyButton
+                                value={
+                                  invitationUrl
+                                }
+                                label="Copy invite link"
+                              />
+                            )}
+                          </div>
+                        </Card>
+                      );
+                    }
+                  )}
+                </div>
+              ) : (
+                <Card className="border-dashed px-6 py-14 text-center">
+                  <Layers3 className="mx-auto h-8 w-8 text-slate-400" />
+
+                  <p className="mt-3 text-sm font-semibold text-slate-700">
+                    No{" "}
+                    {childTypeToCreate ===
+                    "region"
+                      ? "regional"
+                      : "branch"}{" "}
+                    organizations created
+                  </p>
+
+                  <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-400">
+                    Create the first{" "}
+                    {childTypeToCreate} and choose whether to assign an existing team member or invite a new administrator.
+                  </p>
+                </Card>
+              )}
+            </>
+          ) : (
             <div className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+
               <p>
-                Regional organization creation is available to Enterprise Admins.
-                Your current organization hierarchy remains view-only here.
+                {isMinistryContext
+                  ? "Ministry accounts can manage their own team, but they cannot create operator regions or branches."
+                  : isBranchContext
+                    ? "A branch is the final organization level and cannot create additional child organizations."
+                    : "Your current role has view-only access to organization hierarchy settings."}
               </p>
             </div>
-          )}
-
-          {existingRegions.length > 0 ? (
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-              {existingRegions.map((item) => {
-                const FallbackIcon = getHierarchyIcon(item.level);
-                const invitationStatus = normalizeRoleCode(item.invitationStatus);
-                const pending = invitationStatus === "pending";
-                const active = ["accepted", "active"].includes(invitationStatus);
-                const statusLabel = pending
-                  ? "Invitation pending"
-                  : active
-                    ? "Active"
-                    : "Administrator unassigned";
-
-                const statusClassName = pending
-                  ? "bg-amber-100 text-amber-700"
-                  : active
-                    ? "bg-emerald-100 text-emerald-700"
-                    : "bg-slate-200 text-slate-600";
-
-                const invitationUrl = item.invitationId
-                  ? recentInvitationLinks[item.invitationId]
-                  : "";
-
-                return (
-                  <Card
-                    key={item.organizationId || item.id}
-                    className="overflow-hidden transition hover:border-slate-300 hover:shadow-md"
-                  >
-                    <div className="p-5">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex min-w-0 items-start gap-4">
-                          {item.logo || organizationLogo ? (
-                            <img
-                              src={item.logo || organizationLogo}
-                              alt={`${item.name} logo`}
-                              className="h-11 w-11 shrink-0 rounded-xl border border-slate-200 bg-white object-contain p-1"
-                            />
-                          ) : (
-                            <div
-                              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
-                              style={{ backgroundColor: PALE_BLUE, color: NAVY }}
-                            >
-                              <FallbackIcon className="h-5 w-5" />
-                            </div>
-                          )}
-
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                                Region
-                              </span>
-
-                            </div>
-
-                            <p className="mt-2 truncate text-base font-semibold text-navy-950">
-                              <EmptyCell value={item.name} />
-                            </p>
-
-                            <p className="mt-1 text-xs text-slate-500">
-                              {getRegionName(item.regionId)} · Parent: {item.parent || organization?.name}
-                            </p>
-                          </div>
-                        </div>
-
-                        <ChevronRight className="h-5 w-5 shrink-0 text-slate-300" />
-                      </div>
-
-                      <div className="mt-5 grid grid-cols-1 gap-3 border-t border-slate-100 pt-4 sm:grid-cols-2">
-                        <div>
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                            Regional Administrator
-                          </p>
-                          <p className="mt-1 truncate text-sm font-semibold text-slate-800">
-                            {item.adminName || "No admin assigned"}
-                          </p>
-                          {item.adminRole && (
-                            <p className="mt-0.5 text-xs text-slate-500">
-                              {item.adminRole}
-                            </p>
-                          )}
-                        </div>
-
-                        <div>
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                            Organization ID
-                          </p>
-                          <code className="mt-1 block truncate text-xs font-semibold text-slate-700">
-                            {item.organizationId || item.id}
-                          </code>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3">
-                      <span
-                        className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${statusClassName}`}
-                      >
-                        {statusLabel}
-                      </span>
-
-                      {invitationUrl && (
-                        <CopyButton
-                          value={invitationUrl}
-                          label="Copy invite link"
-                        />
-                      )}
-                    </div>
-                  </Card>
-                );
-              })}
-            </div>
-          ) : (
-            <Card className="border-dashed px-6 py-14 text-center">
-              <Layers3 className="mx-auto h-8 w-8 text-slate-400" />
-
-              <p className="mt-3 text-sm font-semibold text-slate-700">
-                No regional organizations created
-              </p>
-
-              <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-400">
-                Create the first region to write its hierarchy, default team and
-                Regional Administrator invitation to Firestore.
-              </p>
-            </Card>
           )}
 
           <Card className="p-5">
@@ -1984,12 +2764,11 @@ const AccountSettings = ({ roles = [] }) => {
 
               <div>
                 <h3 className="text-sm font-semibold text-slate-900">
-                  Invitation security
+                  Administrator assignment
                 </h3>
+
                 <p className="mt-1 text-sm leading-relaxed text-slate-500">
-                  OPSEYE stores only the invitation token hash in Firestore. The
-                  usable link is emailed to the invitee and is available for copying
-                  on this page only during the browser session that created it.
+                  Existing-member assignments take effect immediately and transfer the selected user's organization and team. New-person assignments use a secure invitation whose raw token is never stored in Firestore.
                 </p>
               </div>
             </div>
@@ -1997,13 +2776,20 @@ const AccountSettings = ({ roles = [] }) => {
         </div>
       )}
 
-      <CreateRegionModal
-        open={createRegionOpen}
+      <CreateChildOrganizationModal
+        open={createChildOpen}
+        childType={childTypeToCreate}
         organization={organization}
         organizationLogo={organizationLogo}
+        teamMembers={defaultTeamMembers}
+        currentUserId={currentUserId}
         existingRegionIds={existingRegionIds}
-        onClose={() => setCreateRegionOpen(false)}
-        onCreate={handleCreateRegion}
+        onClose={() =>
+          setCreateChildOpen(false)
+        }
+        onCreate={
+          handleCreateChildOrganization
+        }
       />
     </div>
   );

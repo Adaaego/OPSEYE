@@ -495,6 +495,203 @@ export const createRegionOrganization = async ({
   );
 };
 
+
+/*
+ * Checks whether the selected parent organization already has a branch with
+ * the same normalized name.
+ *
+ * Branches do not currently use a controlled catalogue like REGIONS, so the
+ * normalized branch name and direct parent organization form the duplicate key.
+ */
+export const checkBranchExists = async ({
+  parentOrganizationId,
+  branchName,
+  includeArchived = false,
+}) => {
+  requireValue(
+    parentOrganizationId,
+    "A parent organization ID is required."
+  );
+
+  const normalizedBranchName =
+    normalizeText(branchName);
+
+  requireValue(
+    normalizedBranchName,
+    "A branch name is required."
+  );
+
+  const branchesQuery = query(
+    collection(db, ORGANIZATIONS_COLLECTION),
+    where(
+      "parentId",
+      "==",
+      parentOrganizationId
+    ),
+    where("type", "==", "branch"),
+    where(
+      "normalizedName",
+      "==",
+      normalizedBranchName
+    )
+  );
+
+  const snapshot = await getDocs(
+    branchesQuery
+  );
+
+  const matchingOrganizations =
+    snapshot.docs
+      .map((organizationDocument) => ({
+        id: organizationDocument.id,
+        ...organizationDocument.data(),
+      }))
+      .filter(
+        (organization) =>
+          includeArchived ||
+          normalizeStatus(
+            organization.status
+          ) !== "archived"
+      );
+
+  return matchingOrganizations[0] || null;
+};
+
+/*
+ * Creates a branch beneath an existing regional organization.
+ *
+ * Region Administrators use this function after the workflow has confirmed
+ * that they manage the selected parent region. The branch inherits company,
+ * sector, root-enterprise and region metadata from its parent.
+ */
+export const createBranchOrganization = async ({
+  parentOrganization,
+  organizationName,
+  createdBy,
+  organizationId = "",
+  status = "active",
+}) => {
+  requireValue(
+    createdBy,
+    "The user creating the branch is required."
+  );
+
+  const parentOrganizationId =
+    getOrganizationId(parentOrganization);
+
+  requireValue(
+    parentOrganizationId,
+    "A parent regional organization is required."
+  );
+
+  if (
+    normalizeStatus(
+      parentOrganization?.type
+    ) !== "region"
+  ) {
+    throw new Error(
+      "A branch can only be created beneath a regional organization."
+    );
+  }
+
+  if (
+    normalizeStatus(
+      parentOrganization.status
+    ) === "archived"
+  ) {
+    throw new Error(
+      "A branch cannot be created beneath an archived region."
+    );
+  }
+
+  const existingBranch =
+    await checkBranchExists({
+      parentOrganizationId,
+      branchName: organizationName,
+    });
+
+  if (existingBranch) {
+    throw new Error(
+      `${existingBranch.name || "This branch"} already exists under the selected region.`
+    );
+  }
+
+  const resolvedOrganizationId =
+    String(organizationId || "").trim() ||
+    (await createUniqueChildOrganizationId({
+      type: "branch",
+      sector:
+        parentOrganization.sector,
+      country:
+        parentOrganization.country ||
+        "Ghana",
+    }));
+
+  const organizationReference = doc(
+    db,
+    ORGANIZATIONS_COLLECTION,
+    resolvedOrganizationId
+  );
+
+  const existingIdDocument =
+    await getDoc(
+      organizationReference
+    );
+
+  if (existingIdDocument.exists()) {
+    throw new Error(
+      "An organization already exists with the generated organization ID."
+    );
+  }
+
+  const hierarchyMetadata =
+    buildChildOrganizationMetadata({
+      parentOrganization,
+      organizationId:
+        resolvedOrganizationId,
+      organizationName,
+      organizationType: "branch",
+      regionId:
+        parentOrganization.regionId,
+      createdBy,
+      status,
+    });
+
+  const payload = {
+    ...hierarchyMetadata,
+
+    /*
+     * The branch can be created before a new administrator accepts an
+     * invitation. Existing-member assignment updates these fields immediately.
+     */
+    adminIds: [],
+    adminStatus:
+      "invitation_pending",
+    adminAssignmentStatus:
+      "pending",
+
+    createdAt:
+      serverTimestamp(),
+
+    updatedAt:
+      serverTimestamp(),
+  };
+
+  await setDoc(
+    organizationReference,
+    payload
+  );
+
+  const createdOrganization =
+    await getDoc(
+      organizationReference
+    );
+
+  return getDocumentData(
+    createdOrganization
+  );
+};
+
 /*
  * Returns every region and branch beneath the selected organization.
  *
