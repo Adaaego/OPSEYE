@@ -1,6 +1,22 @@
-import { useMemo, useState } from "react";
+/*
+ * Operator report drawer.
+ *
+ * This viewer is rendered through a portal so the drawer is attached directly
+ * to document.body instead of inheriting width, padding or transform rules from
+ * the dashboard layout. That prevents the empty white strip that previously
+ * appeared on the right side of the open report.
+ *
+ * The drawer uses the same white and dark-navy visual language as the Ministry
+ * report preview while preserving the existing report submission logic.
+ */
+
 import {
-  AlertTriangle,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
+import {
   Building2,
   Calendar,
   CheckCircle2,
@@ -15,6 +31,10 @@ import {
   User,
   X,
 } from "lucide-react";
+
+import {
+  createPortal,
+} from "react-dom";
 
 import { Button } from "../ui/Button";
 
@@ -111,8 +131,8 @@ const ReportViewer = ({
       : [];
 
   /*
-   * Ministry remains visible as the final destination in the
-   * workflow, but no Ministry approval action is required.
+   * Ministry remains visible as the final destination in the workflow, but no
+   * Ministry approval action is required after the operator submits the report.
    */
   const displayStages =
     workflowStages;
@@ -143,8 +163,7 @@ const ReportViewer = ({
   const isCompleted =
     reportStatus === "approved" ||
     reportStatus === "submitted" ||
-    reportStatus ===
-      "submitted_late" ||
+    reportStatus === "submitted_late" ||
     hasReachedMinistry;
 
   const isReadOnly = [
@@ -154,21 +173,6 @@ const ReportViewer = ({
     "approved",
     "rejected",
   ].includes(reportStatus);
-
-  /*
-   * Overdue reports stay editable because the Ministry still needs the
-   * information. Submitting them improves completion, but not on-time
-   * compliance.
-   */
-  const isOverdue =
-    reportStatus ===
-    "overdue";
-
-  const wasSubmittedLate =
-    reportStatus ===
-      "submitted_late" ||
-    report?.wasSubmittedLate ===
-      true;
 
   const activeStageIndex =
     Math.min(
@@ -180,14 +184,12 @@ const ReportViewer = ({
     );
 
   const displayStatus =
-    wasSubmittedLate
-      ? "Submitted Late"
-      : isCompleted
-        ? "Submitted to Ministry"
-        : String(
-            report?.status ||
-              "Pending Submission"
-          ).replace(/_/g, " ");
+    isCompleted
+      ? "Submitted to Ministry"
+      : String(
+          report?.status ||
+            "Pending Submission"
+        ).replace(/_/g, " ");
 
   const operatorCompany =
     useMemo(
@@ -202,19 +204,23 @@ const ReportViewer = ({
       [report]
     );
 
+  const operatorName =
+    report?.operatorName ||
+    report?.organizationName ||
+    operatorCompany?.name ||
+    "Operator";
+
+  const operatorLogo =
+    operatorCompany?.logo ||
+    "";
+
   const readOnlyInfo = useMemo(
     () => [
       {
         icon: Building2,
         label: "Operator",
-        value:
-          report?.operatorName ||
-          report?.organizationName ||
-          operatorCompany?.name ||
-          "—",
-        logo:
-          operatorCompany?.logo ||
-          "",
+        value: operatorName,
+        logo: operatorLogo,
       },
       {
         icon: Building2,
@@ -265,10 +271,59 @@ const ReportViewer = ({
     ],
     [
       report,
-      operatorCompany,
+      operatorLogo,
+      operatorName,
       isCompleted,
     ]
   );
+
+  /*
+   * Reset form state when a different report is opened without unmounting the
+   * drawer. This prevents values or validation errors from one report appearing
+   * in another report.
+   */
+  useEffect(() => {
+    setValues({
+      ...(report?.fieldValues || {}),
+    });
+
+    setErrors({});
+    setSubmitError("");
+    setSubmitting(false);
+  }, [report]);
+
+  /*
+   * The drawer is modal. Lock the page behind it and support Escape so the
+   * interaction remains predictable on both desktop and tablet layouts.
+   */
+  useEffect(() => {
+    const previousOverflow =
+      document.body.style.overflow;
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+
+    document.body.style.overflow =
+      "hidden";
+
+    window.addEventListener(
+      "keydown",
+      handleKeyDown
+    );
+
+    return () => {
+      document.body.style.overflow =
+        previousOverflow;
+
+      window.removeEventListener(
+        "keydown",
+        handleKeyDown
+      );
+    };
+  }, [onClose]);
 
   const handleFieldChange = (
     fieldId,
@@ -315,16 +370,7 @@ const ReportViewer = ({
     onUpdate({
       ...report,
       fieldValues: values,
-
-      /*
-       * An overdue report remains overdue until it is submitted.
-       * Saving progress must not restore it to an ordinary draft and erase
-       * the missed-deadline state used by compliance calculations.
-       */
-      status:
-        isOverdue
-          ? "overdue"
-          : "draft",
+      status: "draft",
     });
   };
 
@@ -391,7 +437,7 @@ const ReportViewer = ({
     const hasError =
       Boolean(errors[field.id]);
 
-    const sharedClassName = `w-full rounded-md border bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100 ${
+    const sharedClassName = `w-full rounded-lg border bg-white px-3.5 py-2.5 text-sm font-medium text-slate-900 outline-none transition focus:border-navy-500 focus:ring-2 focus:ring-navy-100 ${
       hasError
         ? "border-red-300 bg-red-50"
         : "border-slate-300"
@@ -471,7 +517,7 @@ const ReportViewer = ({
                       option
                     )
                   }
-                  className={`rounded-md border px-4 py-2 text-sm font-semibold transition ${
+                  className={`rounded-lg border px-4 py-2.5 text-sm font-semibold transition ${
                     selected
                       ? "border-navy-950 bg-navy-950 text-white"
                       : "border-slate-300 bg-white text-slate-700 hover:border-navy-300 hover:bg-navy-50"
@@ -490,10 +536,10 @@ const ReportViewer = ({
       field.type === "camera"
     ) {
       return (
-        <div className="rounded-md border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center">
+        <div className="rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-7 text-center">
           <Upload className="mx-auto h-5 w-5 text-slate-500" />
 
-          <p className="mt-2 text-sm font-medium text-slate-700">
+          <p className="mt-2 text-sm font-semibold text-slate-700">
             Capture or upload an image
           </p>
 
@@ -543,223 +589,236 @@ const ReportViewer = ({
     );
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex">
+  if (
+    typeof document === "undefined"
+  ) {
+    return null;
+  }
+
+  /*
+   * Rendering through document.body is what removes the unwanted white space.
+   * A fixed element can otherwise become constrained by a transformed dashboard
+   * ancestor and stop before the actual edge of the browser viewport.
+   */
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[140]"
+      role="dialog"
+      aria-modal="true"
+      aria-label={
+        report?.reportName ||
+        report?.name ||
+        "Report"
+      }
+    >
       <button
         type="button"
         aria-label="Close report"
         onClick={onClose}
-        className="absolute inset-0 bg-slate-950/45 backdrop-blur-sm"
+        className="absolute inset-0 bg-slate-950/55 backdrop-blur-[2px]"
       />
 
-      <div className="relative ml-auto flex h-full w-full max-w-3xl flex-col bg-white shadow-2xl animate-[slideIn_0.25s_ease-out]">
-        <div className="flex items-start justify-between border-b border-slate-200 px-6 py-4">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-700">
-              Reporting Task
-            </p>
+      <aside className="absolute inset-y-0 right-0 flex w-full flex-col overflow-hidden bg-slate-50 shadow-[-20px_0_55px_rgba(15,23,42,0.28)] animate-[slideIn_0.25s_ease-out] sm:w-[680px] sm:max-w-[calc(100vw-2rem)]">
+        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-white/10 bg-navy-950 px-5 py-4 text-white">
+          <div className="flex min-w-0 items-center gap-3">
+            {operatorLogo ? (
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/20 bg-white p-1">
+                <img
+                  src={operatorLogo}
+                  alt={`${operatorName} logo`}
+                  className="h-full w-full object-contain"
+                />
+              </div>
+            ) : (
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-white/10">
+                <Building2 className="h-4 w-4 text-white" />
+              </div>
+            )}
 
-            <h2 className="mt-1 truncate text-xl font-bold text-navy-950">
-              {report?.reportName ||
-                report?.name ||
-                "Untitled Report"}
-            </h2>
+            <div className="min-w-0">
+              <h2 className="truncate text-base font-bold text-white">
+                {report?.reportName ||
+                  report?.name ||
+                  "Untitled Report"}
+              </h2>
 
-            <p className="mt-1 text-sm font-medium text-slate-700">
-              {report?.reportingDate ||
-                "No reporting date"}
-              {report?.dueTime
-                ? ` · Due ${report.dueTime}`
-                : ""}
-            </p>
+              <p className="mt-0.5 truncate text-xs font-medium text-slate-300">
+                {operatorName}
+                {report?.branchName ||
+                report?.branch
+                  ? ` · ${
+                      report.branchName ||
+                      report.branch
+                    }`
+                  : ""}
+              </p>
+            </div>
           </div>
 
-          <Button
-            variant="ghost"
-            size="icon"
+          <button
+            type="button"
             onClick={onClose}
             aria-label="Close report"
-            className="shrink-0 border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-100 hover:text-navy-950"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 text-slate-300 transition hover:bg-white/10 hover:text-white"
           >
-            <X className="h-5 w-5" />
-          </Button>
-        </div>
+            <X className="h-4 w-4" />
+          </button>
+        </header>
 
-        <div className="flex-1 overflow-y-auto">
-          <section className="border-b border-slate-200 bg-slate-50 px-6 py-5">
-            <div className="mb-4 flex items-center justify-between gap-4">
+        <div className="flex-1 overflow-y-auto overscroll-contain bg-slate-50">
+          <section className="border-b border-slate-200 bg-white px-5 py-5">
+            <div className="mb-4 flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">
-                  Report Workflow
+                <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-500">
+                  Report workflow
                 </p>
 
-                <p className="mt-1 text-sm font-medium text-slate-700">
-                  {wasSubmittedLate
-                    ? "Submitted after the deadline and delivered to the Ministry"
-                    : isCompleted
-                      ? "Organization review completed and submitted to Ministry"
-                      : `Stage ${
-                          activeStageIndex +
-                          1
-                        } of ${
-                          displayStages.length ||
-                          1
-                        }`}
+                <p className="mt-1 text-sm font-semibold text-navy-950">
+                  {isCompleted
+                    ? "Organization review completed and submitted to Ministry"
+                    : `Stage ${
+                        activeStageIndex +
+                        1
+                      } of ${
+                        displayStages.length ||
+                        1
+                      }`}
                 </p>
               </div>
 
-              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold capitalize text-slate-700">
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-bold capitalize text-slate-700">
                 {displayStatus}
               </span>
             </div>
 
-            <div className="flex items-start">
-              {displayStages.map(
-                (stage, index) => {
-                  const stageRole =
-                    normalizeRole(
-                      stage?.role
-                    );
+            {displayStages.length > 0 ? (
+              <div className="flex items-start">
+                {displayStages.map(
+                  (stage, index) => {
+                    const stageRole =
+                      normalizeRole(
+                        stage?.role
+                      );
 
-                  const isMinistryStage =
-                    stageRole ===
-                    "ministry";
+                    const isMinistryStage =
+                      stageRole ===
+                      "ministry";
 
-                  const isPassed =
-                    index <
-                    activeStageIndex;
+                    const isPassed =
+                      index <
+                      activeStageIndex;
 
-                  const isCurrent =
-                    index ===
-                    activeStageIndex &&
-                    !isCompleted;
+                    const isCurrent =
+                      index ===
+                      activeStageIndex &&
+                      !isCompleted;
 
-                  const isDone =
-                    isCompleted
-                      ? index <=
-                        activeStageIndex
-                      : isPassed;
+                    const isDone =
+                      isCompleted
+                        ? index <=
+                          activeStageIndex
+                        : isPassed;
 
-                  return (
-                    <div
-                      key={
-                        stage.id ||
-                        stage.role ||
-                        stage.label ||
-                        index
-                      }
-                      className="flex flex-1 items-start last:flex-none"
-                    >
-                      <div className="flex shrink-0 flex-col items-center gap-2">
-                        <div
-                          className={`flex h-9 w-9 items-center justify-center rounded-full border-2 text-xs font-bold ${
-                            isDone
-                              ? isMinistryStage
-                                ? "border-navy-950 bg-navy-950 text-white"
-                                : "border-emerald-500 bg-emerald-500 text-white"
-                              : isCurrent
-                                ? "border-navy-950 bg-white text-navy-950"
-                                : "border-slate-300 bg-white text-slate-500"
-                          }`}
-                        >
-                          {isDone ? (
-                            <CheckCircle2 className="h-4 w-4" />
-                          ) : (
-                            index + 1
+                    return (
+                      <div
+                        key={
+                          stage.id ||
+                          stage.role ||
+                          stage.label ||
+                          index
+                        }
+                        className="flex flex-1 items-start last:flex-none"
+                      >
+                        <div className="flex shrink-0 flex-col items-center gap-2">
+                          <div
+                            className={`flex h-8 w-8 items-center justify-center rounded-full border-2 text-xs font-bold ${
+                              isDone
+                                ? isMinistryStage
+                                  ? "border-navy-950 bg-navy-950 text-white"
+                                  : "border-emerald-500 bg-emerald-500 text-white"
+                                : isCurrent
+                                  ? "border-navy-950 bg-white text-navy-950"
+                                  : "border-slate-300 bg-white text-slate-500"
+                            }`}
+                          >
+                            {isDone ? (
+                              <CheckCircle2 className="h-4 w-4" />
+                            ) : (
+                              index + 1
+                            )}
+                          </div>
+
+                          <span
+                            className={`max-w-24 text-center text-[10px] font-bold leading-tight ${
+                              isDone
+                                ? isMinistryStage
+                                  ? "text-navy-950"
+                                  : "text-emerald-700"
+                                : isCurrent
+                                  ? "text-navy-950"
+                                  : "text-slate-500"
+                            }`}
+                          >
+                            {stage.label ||
+                              stage.role ||
+                              `Stage ${
+                                index + 1
+                              }`}
+                          </span>
+
+                          {isMinistryStage && (
+                            <span className="max-w-24 text-center text-[9px] font-semibold leading-tight text-slate-400">
+                              submission complete
+                            </span>
                           )}
                         </div>
 
-                        <span
-                          className={`max-w-24 text-center text-[11px] font-semibold leading-tight ${
-                            isDone
-                              ? isMinistryStage
-                                ? "text-navy-950"
-                                : "text-emerald-700"
-                              : isCurrent
-                                ? "text-navy-950"
-                                : "text-slate-600"
-                          }`}
-                        >
-                          {stage.label ||
-                            stage.role ||
-                            `Stage ${
-                              index + 1
+                        {index <
+                          displayStages.length -
+                            1 && (
+                          <div
+                            className={`mx-2 mt-4 h-px flex-1 ${
+                              index <
+                                activeStageIndex ||
+                              isCompleted
+                                ? "bg-emerald-400"
+                                : "bg-slate-300"
                             }`}
-                        </span>
-
-                        {isMinistryStage && (
-                          <span className="max-w-24 text-center text-[10px] font-medium leading-tight text-slate-500">
-                            submission complete
-                          </span>
+                          />
                         )}
                       </div>
-
-                      {index <
-                        displayStages.length -
-                          1 && (
-                        <div
-                          className={`mx-2 mt-4 h-0.5 flex-1 rounded-full ${
-                            index <
-                              activeStageIndex ||
-                            isCompleted
-                              ? "bg-emerald-400"
-                              : "bg-slate-300"
-                          }`}
-                        />
-                      )}
-                    </div>
-                  );
-                }
-              )}
-            </div>
-
-            {isOverdue && (
-              <div className="mt-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-
-                <p>
-                  This report missed its deadline but remains open. It can still be submitted so the Ministry receives the data, but it will be recorded as a late submission and will not improve on-time compliance.
-                </p>
+                    );
+                  }
+                )}
               </div>
+            ) : (
+              <p className="text-sm font-medium text-slate-500">
+                No workflow stages are available.
+              </p>
             )}
 
             {isCompleted && (
-              <div
-                className={`mt-4 flex items-start gap-2 rounded-md px-3 py-2 text-xs font-medium ${
-                  wasSubmittedLate
-                    ? "border border-amber-200 bg-amber-50 text-amber-800"
-                    : "border border-emerald-200 bg-emerald-50 text-emerald-800"
-                }`}
-              >
-                {wasSubmittedLate ? (
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                ) : (
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-                )}
-
-                <p>
-                  {wasSubmittedLate
-                    ? "The report reached the Ministry after its deadline. It counts toward submission completion, but not on-time compliance."
-                    : "Organization review is complete. The report has reached the Ministry for preview and reporting."}
-                </p>
+              <div className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">
+                <CheckCircle2 className="h-4 w-4 shrink-0" />
+                Organization review is complete. The report has reached the Ministry.
               </div>
             )}
 
             {isReadOnly &&
               !isCompleted && (
-                <div className="mt-4 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
-                  <Lock className="h-4 w-4" />
-                  This report is being reviewed within the organization and cannot be edited.
+                <div className="mt-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                  <Lock className="h-4 w-4 shrink-0" />
+                  This report is being reviewed and cannot be edited.
                 </div>
               )}
           </section>
 
-          <section className="border-b border-slate-200 px-6 py-5">
-            <h3 className="mb-4 text-xs font-semibold uppercase tracking-wide text-slate-700">
-              Report Information
+          <section className="border-b border-slate-200 bg-white px-5 py-5">
+            <h3 className="mb-4 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-500">
+              Report information
             </h3>
 
-            <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {readOnlyInfo.map(
                 ({
                   icon: Icon,
@@ -769,9 +828,9 @@ const ReportViewer = ({
                 }) => (
                   <div
                     key={label}
-                    className="flex items-start gap-3"
+                    className="flex min-w-0 items-start gap-3"
                   >
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white">
                       {logo ? (
                         <img
                           src={logo}
@@ -779,16 +838,16 @@ const ReportViewer = ({
                           className="h-full w-full object-contain p-1"
                         />
                       ) : (
-                        <Icon className="h-4 w-4 text-slate-600" />
+                        <Icon className="h-4 w-4 text-slate-500" />
                       )}
                     </div>
 
                     <div className="min-w-0">
-                      <p className="text-xs font-semibold text-slate-600">
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
                         {label}
                       </p>
 
-                      <p className="mt-0.5 truncate text-sm font-semibold text-slate-900">
+                      <p className="mt-1 truncate text-sm font-semibold text-navy-950">
                         {value}
                       </p>
                     </div>
@@ -798,13 +857,13 @@ const ReportViewer = ({
             </div>
           </section>
 
-          <section className="space-y-5 px-6 py-5">
+          <section className="space-y-4 bg-slate-50 px-5 py-5">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">
-                Reporting Fields
+              <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-500">
+                Reporting fields
               </p>
 
-              <h3 className="mt-1 text-lg font-bold text-navy-950">
+              <h3 className="mt-1 text-base font-bold text-navy-950">
                 {isReadOnly
                   ? "Submitted responses"
                   : "Complete the report"}
@@ -824,7 +883,7 @@ const ReportViewer = ({
                       field.id ||
                       index
                     }
-                    className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+                    className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
                   >
                     <div className="mb-3 flex items-start gap-3">
                       <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-navy-950 text-xs font-bold text-white">
@@ -832,7 +891,7 @@ const ReportViewer = ({
                       </div>
 
                       <div>
-                        <label className="text-sm font-semibold text-slate-900">
+                        <label className="text-sm font-semibold text-navy-950">
                           {field.label ||
                             `Question ${
                               index + 1
@@ -844,7 +903,7 @@ const ReportViewer = ({
                           )}
                         </label>
 
-                        <p className="mt-1 text-xs font-medium text-slate-500">
+                        <p className="mt-1 text-[11px] font-semibold text-slate-500">
                           {formatFieldType(
                             field.type
                           )}
@@ -856,7 +915,7 @@ const ReportViewer = ({
                     </div>
 
                     {isReadOnly ? (
-                      <div className="min-h-10 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-800">
+                      <div className="min-h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-semibold text-slate-800">
                         {report?.fieldValues?.[
                           field.id
                         ] || "—"}
@@ -868,7 +927,7 @@ const ReportViewer = ({
                     )}
 
                     {hasError && (
-                      <p className="mt-1.5 text-xs font-medium text-red-600">
+                      <p className="mt-1.5 text-xs font-semibold text-red-600">
                         This field is required.
                       </p>
                     )}
@@ -878,19 +937,21 @@ const ReportViewer = ({
             )}
 
             {!reportFields.length && (
-              <div className="rounded-xl border-2 border-dashed border-slate-200 py-10 text-center">
-                <p className="text-sm font-medium text-slate-500">
+              <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white py-10 text-center">
+                <p className="text-sm font-semibold text-slate-500">
                   No fields were added to this report.
                 </p>
               </div>
             )}
           </section>
 
-          <section className="border-t border-slate-200 px-6 py-5">
+          <section className="border-t border-slate-200 bg-white px-5 py-5">
             <div className="mb-4 flex items-center gap-2">
+              <div className="h-5 w-1 rounded-full bg-navy-950" />
+
               <History className="h-4 w-4 text-navy-700" />
 
-              <h3 className="text-lg font-bold text-navy-950">
+              <h3 className="text-base font-bold text-navy-950">
                 Report activity
               </h3>
             </div>
@@ -935,44 +996,54 @@ const ReportViewer = ({
                     (entry, index) => (
                       <div
                         key={`${entry.userId || "user"}-${entry.action || "action"}-${index}`}
-                        className="relative flex gap-3 pb-5 last:pb-0"
+                        className="relative flex gap-3 pb-4 last:pb-0"
                       >
                         {index <
                           workflowHistory.length -
                             1 && (
-                          <div className="absolute left-[17px] top-9 h-[calc(100%-1.25rem)] w-px bg-slate-200" />
+                          <div className="absolute left-[15px] top-8 h-[calc(100%-1rem)] w-px bg-slate-200" />
                         )}
 
-                        <div className="relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white">
-                          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                        <div className="relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-navy-950">
+                          <CheckCircle2 className="h-4 w-4 text-white" />
                         </div>
 
                         <div className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-                          <p className="text-sm font-semibold text-slate-900">
-                            {entry.userName ||
-                              "Unknown user"}
-                          </p>
+                          <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                              <p className="text-sm font-semibold text-navy-950">
+                                {entry.userName ||
+                                  "Unknown user"}
+                              </p>
 
-                          <p className="mt-1 text-xs font-medium capitalize text-slate-600">
-                            {String(
-                              entry.role ||
-                                entry.stageLabel ||
-                                "Unknown role"
-                            ).replace(
-                              /_/g,
-                              " "
-                            )}
-                          </p>
+                              <p className="text-xs font-medium capitalize text-slate-500">
+                                {String(
+                                  entry.role ||
+                                    entry.stageLabel ||
+                                    "Unknown role"
+                                ).replace(
+                                  /_/g,
+                                  " "
+                                )}
+                              </p>
+                            </div>
+
+                            <p className="text-[11px] font-medium text-slate-400">
+                              {formatAuditTimestamp(
+                                entry.timestamp
+                              )}
+                            </p>
+                          </div>
 
                           {entry.userEmail && (
-                            <p className="mt-1 text-xs text-slate-500">
+                            <p className="mt-2 text-xs text-slate-500">
                               {
                                 entry.userEmail
                               }
                             </p>
                           )}
 
-                          <p className="mt-2 text-xs font-medium capitalize text-slate-600">
+                          <p className="mt-2 text-xs font-semibold capitalize text-slate-700">
                             {String(
                               entry.action ||
                                 "updated"
@@ -981,20 +1052,14 @@ const ReportViewer = ({
                               " "
                             )}
                           </p>
-
-                          <p className="mt-1 text-xs text-slate-500">
-                            {formatAuditTimestamp(
-                              entry.timestamp
-                            )}
-                          </p>
                         </div>
                       </div>
                     )
                   )}
               </div>
             ) : (
-              <div className="rounded-xl border-2 border-dashed border-slate-200 py-8 text-center">
-                <p className="text-sm font-medium text-slate-500">
+              <div className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 py-8 text-center">
+                <p className="text-sm font-semibold text-slate-500">
                   No report activity has been recorded yet.
                 </p>
               </div>
@@ -1003,16 +1068,16 @@ const ReportViewer = ({
         </div>
 
         {submitError && (
-          <div className="border-t border-red-200 bg-red-50 px-6 py-3 text-sm font-medium text-red-700">
+          <div className="shrink-0 border-t border-red-200 bg-red-50 px-5 py-3 text-sm font-semibold text-red-700">
             {submitError}
           </div>
         )}
 
-        <div className="flex items-center justify-end gap-3 border-t border-slate-200 bg-slate-50 px-6 py-4">
+        <footer className="flex shrink-0 items-center justify-end gap-3 border-t border-slate-200 bg-white px-5 py-4">
           {isReadOnly ? (
             <Button
-              variant="outline"
               onClick={onClose}
+              className="!bg-navy-950 !text-white hover:!bg-navy-900"
             >
               Close
             </Button>
@@ -1024,6 +1089,7 @@ const ReportViewer = ({
                   handleSaveDraft
                 }
                 disabled={submitting}
+                className="!border-slate-300 !bg-white !text-navy-950 hover:!bg-slate-50"
               >
                 <Save className="h-4 w-4" />
                 Save Draft
@@ -1042,15 +1108,14 @@ const ReportViewer = ({
 
                 {submitting
                   ? "Submitting..."
-                  : isOverdue
-                    ? "Submit Late Report"
-                    : "Submit Report"}
+                  : "Submit Report"}
               </Button>
             </>
           )}
-        </div>
-      </div>
-    </div>
+        </footer>
+      </aside>
+    </div>,
+    document.body
   );
 };
 
