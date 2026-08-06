@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowLeft,
   Building2,
@@ -654,16 +655,67 @@ const FormBuilder = ({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex">
+  /*
+   * Render the form builder as a true viewport drawer.
+   *
+   * Appending the modal to document.body prevents dashboard containers,
+   * transforms and padding from constraining its width or leaving an empty
+   * white strip at the right edge.
+   */
+  useEffect(() => {
+    const previousOverflow =
+      document.body.style.overflow;
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+
+    document.body.style.overflow =
+      "hidden";
+
+    window.addEventListener(
+      "keydown",
+      handleKeyDown
+    );
+
+    return () => {
+      document.body.style.overflow =
+        previousOverflow;
+
+      window.removeEventListener(
+        "keydown",
+        handleKeyDown
+      );
+    };
+  }, [onClose]);
+
+  if (
+    typeof document === "undefined"
+  ) {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[140]"
+      role="dialog"
+      aria-modal="true"
+      aria-label={
+        initialData
+          ? "Edit form"
+          : "Create form"
+      }
+    >
       <button
         type="button"
         aria-label="Close form builder"
         onClick={onClose}
-        className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+        className="absolute inset-0 bg-slate-950/45 backdrop-blur-[2px]"
       />
 
-      <div className="relative ml-auto flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl animate-[slideIn_0.25s_ease-out]">
+      <aside className="absolute inset-y-0 right-0 flex w-full max-w-2xl flex-col overflow-hidden bg-white shadow-[-20px_0_55px_rgba(15,23,42,0.28)] animate-[slideIn_0.25s_ease-out]">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
           <div>
@@ -2018,8 +2070,9 @@ const FormBuilder = ({
               : "Schedule Form"}
           </Button>
         </div>
-      </div>
-    </div>
+      </aside>
+    </div>,
+    document.body
   );
 };
 

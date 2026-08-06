@@ -3,6 +3,10 @@ import {
   useMemo,
   useState,
 } from "react";
+
+import {
+  createPortal,
+} from "react-dom";
 import {
   AlignLeft,
   Building2,
@@ -781,6 +785,37 @@ const Forms = ({
     }
   };
 
+  /*
+   * Every Forms overlay is mounted directly under document.body, so it should
+   * also control the document scroll rather than only the dashboard content
+   * area. This prevents the page behind a form drawer or preview from moving.
+   */
+  useEffect(() => {
+    const modalIsOpen =
+      builderOpen ||
+      Boolean(viewingForm) ||
+      Boolean(formPendingDelete);
+
+    if (!modalIsOpen) {
+      return undefined;
+    }
+
+    const previousOverflow =
+      document.body.style.overflow;
+
+    document.body.style.overflow =
+      "hidden";
+
+    return () => {
+      document.body.style.overflow =
+        previousOverflow;
+    };
+  }, [
+    builderOpen,
+    viewingForm,
+    formPendingDelete,
+  ]);
+
   return (
     <>
       <div className="min-h-full">
@@ -1131,29 +1166,44 @@ const Forms = ({
         </div>
       </div>
 
-      {builderOpen && (
-        <FormBuilder
-          initialData={
-            editingForm
-          }
-          organizations={
-            organizations
-          }
-          onClose={
-            closeBuilder
-          }
-          onSaveDraft={
-            handleBuilderSaveDraft
-          }
-          onPublish={
-            handleBuilderPublish
-          }
-        />
-      )}
+      {builderOpen &&
+        typeof document !== "undefined" &&
+        createPortal(
+          /*
+           * The dashboard content area can constrain fixed descendants.
+           * Mounting the builder under document.body keeps its drawer aligned
+           * to the actual browser viewport.
+           */
+          <FormBuilder
+            initialData={
+              editingForm
+            }
+            organizations={
+              organizations
+            }
+            onClose={
+              closeBuilder
+            }
+            onSaveDraft={
+              handleBuilderSaveDraft
+            }
+            onPublish={
+              handleBuilderPublish
+            }
+          />,
+          document.body
+        )}
 
       {/* Read-only form preview */}
-      {viewingForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {viewingForm &&
+        typeof document !== "undefined" &&
+        createPortal(
+          /*
+           * The preview must be relative to the full browser viewport rather
+           * than the dashboard content container. This removes the large white
+           * space and prevents the top of tall previews from being clipped.
+           */
+        <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-6">
           <button
             type="button"
             aria-label="Close form preview"
@@ -1161,7 +1211,7 @@ const Forms = ({
             className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm"
           />
 
-          <div className="relative z-10 flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-900/5">
+          <div className="relative z-10 flex max-h-[calc(100dvh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-900/5 sm:max-h-[calc(100dvh-3rem)]">
             <div className="relative shrink-0 border-b border-slate-200 bg-gradient-to-br from-navy-950 to-navy-900 px-6 py-6 text-white">
               <Button
                 variant="ghost"
@@ -1419,11 +1469,19 @@ const Forms = ({
             </div>
           </div>
         </div>
-      )}
+,
+          document.body
+        )}
 
       {/* Delete confirmation */}
-      {formPendingDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {formPendingDelete &&
+        typeof document !== "undefined" &&
+        createPortal(
+          /*
+           * Delete confirmation uses the same viewport-level modal strategy so
+           * it cannot be clipped by the dashboard layout.
+           */
+        <div className="fixed inset-0 z-[160] flex items-center justify-center p-4">
           <button
             type="button"
             aria-label="Close delete confirmation"
@@ -1475,7 +1533,10 @@ const Forms = ({
             </div>
           </div>
         </div>
-      )}
+,
+          document.body
+        )}
+
     </>
   );
 };
