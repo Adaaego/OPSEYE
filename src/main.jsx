@@ -1,10 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import {
-  createBrowserRouter,
-  RouterProvider,
-} from "react-router-dom";
+import { createBrowserRouter, RouterProvider } from "react-router-dom";
 
 import "./index.css";
 
@@ -16,6 +13,7 @@ import LandingPage from "./components/pages/landing-page.jsx";
 import InvitationSignupPage from "./components/pages/invitation-signup-page.jsx";
 import OnboardingPage from "./components/pages/onbboardingPage.jsx";
 import ComingSoonPage from "./components/pages/coming-soon-page.jsx";
+import CompleteInvitedProfilePage from "./components/pages/complete-invited-profile-page.jsx";
 
 // Dashboard pages
 import MainEnergyDashboard from "./components/pages/dashboards/energy/main-energy-dashboard.jsx";
@@ -57,13 +55,21 @@ const router = createBrowserRouter([
         path: "coming-soon",
         element: <ComingSoonPage />,
       },
+
+      /*
+       * Firebase redirects verified invited users to this route. The raw invitation
+       * token remains in the invite query parameter so the profile can be linked to
+       * the correct organization, role and team.
+       */
+      {
+        path: "complete-invited-profile",
+        element: <CompleteInvitedProfilePage />,
+      },
     ],
   },
 ]);
 
-createRoot(
-  document.getElementById("root")
-).render(
+createRoot(document.getElementById("root")).render(
   <StrictMode>
     <AuthProvider>
       <RouterProvider router={router} />
