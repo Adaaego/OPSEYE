@@ -1,4 +1,3 @@
-
 import {
   useCallback,
   useEffect,
@@ -6,6 +5,10 @@ import {
   useRef,
   useState,
 } from "react";
+
+import {
+  createPortal,
+} from "react-dom";
 
 import {
   BarChart,
@@ -2720,6 +2723,16 @@ const SubmissionViewer = ({
           )
       );
 
+    /*
+     * The viewer is modal. Locking body scroll prevents the page behind the
+     * drawer from moving while the submitted report is being reviewed.
+     */
+    const previousBodyOverflow =
+      document.body.style.overflow;
+
+    document.body.style.overflow =
+      "hidden";
+
     const handleKeyDown = (
       event
     ) => {
@@ -2745,6 +2758,9 @@ const SubmissionViewer = ({
       window.cancelAnimationFrame(
         frame
       );
+
+      document.body.style.overflow =
+        previousBodyOverflow;
 
       window.removeEventListener(
         "keydown",
@@ -2792,9 +2808,21 @@ const SubmissionViewer = ({
       );
     };
 
-  return (
+  if (
+    typeof document ===
+    "undefined"
+  ) {
+    return null;
+  }
+
+  /*
+   * Render directly under document.body. Without the portal, a transformed or
+   * padded dashboard ancestor can constrain position: fixed and leave a white
+   * strip between the drawer and the browser's right edge.
+   */
+  return createPortal(
     <div
-      className={`fixed inset-0 z-[80] transition-colors duration-200 ${
+      className={`fixed inset-0 z-[120] transition-colors duration-200 ${
         visible
           ? "bg-slate-950/40"
           : "bg-transparent"
@@ -2811,7 +2839,7 @@ const SubmissionViewer = ({
       }}
     >
       <aside
-        className={`absolute right-0 top-0 h-full w-full max-w-2xl overflow-y-auto border-l border-slate-200 bg-slate-50 shadow-2xl transition-transform duration-200 ease-out ${
+        className={`absolute inset-y-0 right-0 w-full max-w-2xl overflow-y-auto border-l border-slate-200 bg-slate-50 shadow-[-20px_0_55px_rgba(15,23,42,0.24)] transition-transform duration-200 ease-out ${
           visible
             ? "translate-x-0"
             : "translate-x-full"
@@ -3345,7 +3373,8 @@ const SubmissionViewer = ({
           </div>
         </div>
       </aside>
-    </div>
+    </div>,
+    document.body
   );
 };
 
