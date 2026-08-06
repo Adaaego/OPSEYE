@@ -1,10 +1,8 @@
-
-
-
 import {
   Fragment,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -887,6 +885,83 @@ const getOrganizationLogo = (
   );
 };
 
+
+const formatIdentifierLabel = (
+  value
+) => {
+  return String(value || "")
+    .replace(/[_-]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(
+      (part) =>
+        part.charAt(0).toUpperCase() +
+        part.slice(1)
+    )
+    .join(" ");
+};
+
+/*
+ * Region records normally store a controlled regionId. Older records may use
+ * regionName or region, so resolve those first and format the identifier only
+ * when no display label has been saved.
+ */
+const getOrganizationRegionLabel = (
+  organization
+) => {
+  return (
+    organization?.regionName ||
+    organization?.region ||
+    formatIdentifierLabel(
+      organization?.regionId
+    ) ||
+    organization?.country ||
+    ""
+  );
+};
+
+/*
+ * Administrator identity is read from the organization metadata written by
+ * Account Settings. The users collection supplies the person's readable name.
+ */
+const getOrganizationAdministrator = (
+  organization,
+  userMap
+) => {
+  const administratorId =
+    organization?.primaryAdminUserId ||
+    (
+      Array.isArray(
+        organization?.adminIds
+      )
+        ? organization.adminIds[0]
+        : ""
+    );
+
+  const administrator =
+    administratorId
+      ? userMap.get(
+          administratorId
+        )
+      : null;
+
+  return {
+    id:
+      administratorId ||
+      "",
+    name:
+      administrator?.fullName ||
+      administrator?.name ||
+      administrator?.email ||
+      organization?.adminName ||
+      "",
+    role:
+      administrator?.role ||
+      organization?.adminRole ||
+      "",
+  };
+};
+
 const CompanyLogo = ({
   name,
   logoUrl,
@@ -1067,6 +1142,42 @@ const OperatorsTab = ({
     selectedOperator,
     setSelectedOperator,
   ] = useState(null);
+
+  /*
+   * Detail history allows navigation from an enterprise to a region and then
+   * to a branch without losing the parent profile. Back returns one level at
+   * a time before returning to the Operators table.
+   */
+  const [
+    detailHistory,
+    setDetailHistory,
+  ] = useState([]);
+
+  /*
+   * The detail page is mounted at zero opacity and revealed on the next
+   * animation frame. Moving between the table, an enterprise, a region and a
+   * branch therefore feels like one connected hierarchy rather than an abrupt
+   * component replacement.
+   */
+  const [
+    detailIsVisible,
+    setDetailIsVisible,
+  ] = useState(false);
+
+  const detailTransitionTimer =
+    useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (
+        detailTransitionTimer.current
+      ) {
+        window.clearTimeout(
+          detailTransitionTimer.current
+        );
+      }
+    };
+  }, []);
 
   /*
    * The Operators page loads the same Firestore collections used by
@@ -1523,9 +1634,9 @@ const OperatorsTab = ({
             region:
               report.regionName ||
               report.region ||
-              organization.regionName ||
-              organization.region ||
-              "",
+              getOrganizationRegionLabel(
+                organization
+              ),
 
             sourceMetrics: {
               ...calculatedFallback.sourceMetrics,
@@ -1591,15 +1702,76 @@ const OperatorsTab = ({
           )
       );
 
-    const hierarchyIds =
-      new Set(
-        [
-          organizationId,
-          ...hierarchyOrganizations.map(
-            getOrganizationId
-          ),
-        ].filter(Boolean)
+    const directChildOrganizations =
+      allOrganizations.filter(
+        (child) =>
+          child.parentId ===
+            organizationId
       );
+
+    const descendantOrganizationIds =
+      new Set(
+        hierarchyOrganizations
+          .filter(
+            (candidate) =>
+              getOrganizationId(
+                candidate
+              ) !==
+                organizationId
+          )
+          .map(
+            getOrganizationId
+          )
+          .filter(Boolean)
+      );
+
+    /*
+     * OPSEYE is being migrated from enterprise-level reporting to child-level
+     * reporting. During that transition, an enterprise such as Shell may
+     * already have regions but still submit its operational data from the
+     * enterprise account.
+     *
+     * Child records take over only after descendant report records actually
+     * exist. Until then, the parent keeps showing its own production, revenue
+     * and compliance. This preserves today's data without double counting once
+     * regions or branches begin reporting independently.
+     */
+    const hasDescendantReportRecords =
+      enrichedReports.some(
+        (report) =>
+          descendantOrganizationIds.has(
+            report.organizationId
+          )
+      );
+
+    const reportMetricScopeIds =
+      hasDescendantReportRecords
+        ? descendantOrganizationIds
+        : new Set([
+            organizationId,
+          ]);
+
+    /*
+     * Workforce moves to child organizations independently from report forms,
+     * so it uses its own fallback decision. Parent workforce remains visible
+     * until at least one descendant has dedicated workforce records.
+     */
+    const hasDescendantWorkforceRecords =
+      workforceRecords.some(
+        (record) =>
+          descendantOrganizationIds.has(
+            getWorkforceOrganizationId(
+              record
+            )
+          )
+      );
+
+    const workforceMetricScopeIds =
+      hasDescendantWorkforceRecords
+        ? descendantOrganizationIds
+        : new Set([
+            organizationId,
+          ]);
 
     const isEnterprise =
       isEnterpriseOperator(
@@ -1615,7 +1787,7 @@ const OperatorsTab = ({
       enrichedReports.filter(
         (report) => {
           if (
-            hierarchyIds.has(
+            reportMetricScopeIds.has(
               report.organizationId
             )
           ) {
@@ -1628,6 +1800,8 @@ const OperatorsTab = ({
            */
           return (
             isEnterprise &&
+            !hasDescendantReportRecords &&
+            !report.organizationId &&
             Boolean(
               organizationCompanyId
             ) &&
@@ -1794,7 +1968,7 @@ const OperatorsTab = ({
 
           if (
             recordOrganizationId &&
-            hierarchyIds.has(
+            workforceMetricScopeIds.has(
               recordOrganizationId
             )
           ) {
@@ -1808,6 +1982,8 @@ const OperatorsTab = ({
            */
           if (
             isEnterprise &&
+            !hasDescendantWorkforceRecords &&
+            !recordOrganizationId &&
             (
               record.enterpriseId ===
                 organizationId ||
@@ -1820,6 +1996,8 @@ const OperatorsTab = ({
 
           return (
             isEnterprise &&
+            !hasDescendantWorkforceRecords &&
+            !recordOrganizationId &&
             Boolean(
               organizationCompanyId
             ) &&
@@ -2176,208 +2354,20 @@ const OperatorsTab = ({
         );
 
     /*
-     * Child rows combine organization identity with today's report
-     * status, production and submitter information.
+     * Only direct children are displayed beneath this organization.
+     *
+     * Each child is passed through the same recursive builder, so its values
+     * include the child itself and every descendant below it. This creates the
+     * required roll-up: branches determine region totals, and regions determine
+     * enterprise totals, without adding already-aggregated child totals twice.
      */
     const branches =
-      hierarchyOrganizations
-        .filter(
-          (
+      directChildOrganizations.map(
+        (child) =>
+          buildOperatorData(
             child
-          ) =>
-            getOrganizationId(
-              child
-            ) !==
-            organizationId
-        )
-        .map(
-          (child) => {
-            const childId =
-              getOrganizationId(
-                child
-              );
-
-            const childExpected =
-              expectedToday.filter(
-                (report) =>
-                  report.organizationId ===
-                    childId
-              );
-
-            const childSubmitted =
-              childExpected.filter(
-                isReportSubmitted
-              );
-
-            const childSubmittedLate =
-              childSubmitted.filter(
-                isReportSubmittedLate
-              );
-
-            const latestSubmission =
-              [...childSubmitted].sort(
-                (
-                  first,
-                  second
-                ) =>
-                  (
-                    getSubmittedAt(
-                      second
-                    )?.getTime() ||
-                    0
-                  ) -
-                  (
-                    getSubmittedAt(
-                      first
-                    )?.getTime() ||
-                    0
-                  )
-              )[0];
-
-            const production =
-              childSubmitted.reduce(
-                (
-                  total,
-                  report
-                ) =>
-                  total +
-                  toNumber(
-                    report.calculatedMetrics
-                      .total_volume_sold
-                  ),
-                0
-              );
-
-            /*
-             * Child workforce is calculated from role records attached to the
-             * child organisation itself. Descendant records remain represented
-             * by their own child rows instead of being counted twice here.
-             */
-            const childWorkforceRecords =
-              scopedWorkforceRecords.filter(
-                (record) =>
-                  getWorkforceOrganizationId(
-                    record
-                  ) ===
-                    childId
-              );
-
-            const childWorkforce =
-              childWorkforceRecords.reduce(
-                (
-                  totals,
-                  record
-                ) => ({
-                  local:
-                    totals.local +
-                    getWorkforceLocalEmployees(
-                      record
-                    ),
-                  expat:
-                    totals.expat +
-                    getWorkforceExpatriateEmployees(
-                      record
-                    ),
-                  vacancies:
-                    totals.vacancies +
-                    getWorkforceVacancies(
-                      record
-                    ),
-                }),
-                {
-                  local: 0,
-                  expat: 0,
-                  vacancies: 0,
-                }
-              );
-
-            const childWorkforcePercentages =
-              calculateWorkforcePercentages({
-                localEmployees:
-                  childWorkforce.local,
-                expatEmployees:
-                  childWorkforce.expat,
-              });
-
-            let status =
-              child.status ||
-              "active";
-
-            if (
-              childExpected.length >
-              0
-            ) {
-              status =
-                childSubmitted.length ===
-                childExpected.length
-                  ? childSubmittedLate.length >
-                    0
-                    ? "submitted_late"
-                    : "submitted"
-                  : childSubmitted.length >
-                      0
-                    ? "partial"
-                    : childExpected.some(
-                        (report) =>
-                          normalizeStatus(
-                            report.status
-                          ) ===
-                          "overdue"
-                      )
-                      ? "overdue"
-                      : "missing";
-            }
-
-            return {
-              ...child,
-              id:
-                childId,
-              branch:
-                child.name ||
-                "Unnamed organization",
-              region:
-                child.regionName ||
-                child.region ||
-                child.country ||
-                "",
-              status,
-              submittedBy:
-                latestSubmission
-                  ?.submittedByName ||
-                "",
-              submissionTime:
-                formatTime(
-                  getSubmittedAt(
-                    latestSubmission
-                  )
-                ),
-              production,
-
-              workforce: {
-                local:
-                  childWorkforce.local,
-                expat:
-                  childWorkforce.expat,
-                vacancies:
-                  childWorkforce.vacancies,
-                total:
-                  childWorkforcePercentages
-                    .totalWorkforce,
-                localPercentage:
-                  childWorkforcePercentages
-                    .localWorkforcePercentage,
-                expatPercentage:
-                  childWorkforcePercentages
-                    .expatWorkforcePercentage,
-              },
-
-              submissionsToday:
-                `${childSubmitted.length}/${childExpected.length}`,
-              submissionsLateToday:
-                childSubmittedLate.length,
-            };
-          }
-        );
+          )
+      );
 
     const latestReportDate =
       [
@@ -2428,6 +2418,17 @@ const OperatorsTab = ({
               : "missing";
     }
 
+    const administrator =
+      getOrganizationAdministrator(
+        organization,
+        userMap
+      );
+
+    const regionLabel =
+      getOrganizationRegionLabel(
+        organization
+      );
+
     const externalOperator =
       operators.find(
         (candidate) => {
@@ -2456,7 +2457,7 @@ const OperatorsTab = ({
       ...organization,
 
       id:
-        organization.id,
+        organizationId,
       organizationId,
       companyId:
         organization.companyId,
@@ -2472,6 +2473,21 @@ const OperatorsTab = ({
         organization.rootEnterpriseId,
       ancestorIds:
         organization.ancestorIds,
+      parentId:
+        organization.parentId ||
+        "",
+      organizationLevel:
+        getOrganizationLevel(
+          organization
+        ),
+      region:
+        regionLabel,
+      adminId:
+        administrator.id,
+      adminName:
+        administrator.name,
+      adminRole:
+        administrator.role,
 
       logoUrl:
         getOrganizationLogo(
@@ -2633,6 +2649,7 @@ const OperatorsTab = ({
       organizationsLoadedAt,
       visibleOrganizations,
       workforceRecords,
+      userMap,
     ]);
 
   const regionOptions =
@@ -2964,16 +2981,179 @@ const OperatorsTab = ({
     );
   };
 
+  const revealDetailPage = () => {
+    if (
+      typeof window ===
+      "undefined"
+    ) {
+      setDetailIsVisible(
+        true
+      );
+      return;
+    }
+
+    window.requestAnimationFrame(
+      () => {
+        window.requestAnimationFrame(
+          () =>
+            setDetailIsVisible(
+              true
+            )
+        );
+      }
+    );
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  };
+
   const handleSelectOperator = (
     operator
   ) => {
+    if (
+      detailTransitionTimer.current
+    ) {
+      window.clearTimeout(
+        detailTransitionTimer.current
+      );
+    }
+
+    /*
+     * Opening a detail page from the Operators table starts a fresh navigation
+     * path. Child-to-parent history is used only after entering that profile.
+     */
+    setDetailHistory(
+      []
+    );
+
+    setDetailIsVisible(
+      false
+    );
+
     setSelectedOperator(
       operator
     );
 
+    revealDetailPage();
+
     onSelectOperator?.(
       operator
     );
+  };
+
+  const handleSelectChildOrganization = (
+    organization
+  ) => {
+    if (
+      detailTransitionTimer.current
+    ) {
+      window.clearTimeout(
+        detailTransitionTimer.current
+      );
+    }
+
+    setDetailIsVisible(
+      false
+    );
+
+    /*
+     * Allow the current profile to fade out before replacing it with the child
+     * profile. The parent is retained in history for one-level-at-a-time back
+     * navigation.
+     */
+    detailTransitionTimer.current =
+      window.setTimeout(
+        () => {
+          if (
+            selectedOperator
+          ) {
+            setDetailHistory(
+              (
+                currentHistory
+              ) => [
+                ...currentHistory,
+                selectedOperator,
+              ]
+            );
+          }
+
+          setSelectedOperator(
+            organization
+          );
+
+          revealDetailPage();
+
+          onSelectOperator?.(
+            organization
+          );
+        },
+        180
+      );
+  };
+
+  const handleDetailBack = () => {
+    if (
+      detailTransitionTimer.current
+    ) {
+      window.clearTimeout(
+        detailTransitionTimer.current
+      );
+    }
+
+    setDetailIsVisible(
+      false
+    );
+
+    detailTransitionTimer.current =
+      window.setTimeout(
+        () => {
+          if (
+            detailHistory.length >
+            0
+          ) {
+            const previousOrganization =
+              detailHistory[
+                detailHistory.length -
+                  1
+              ];
+
+            setDetailHistory(
+              (
+                currentHistory
+              ) =>
+                currentHistory.slice(
+                  0,
+                  -1
+                )
+            );
+
+            setSelectedOperator(
+              previousOrganization
+            );
+
+            revealDetailPage();
+
+            return;
+          }
+
+          setSelectedOperator(
+            null
+          );
+
+          if (
+            typeof window !==
+            "undefined"
+          ) {
+            window.scrollTo({
+              top: 0,
+              behavior: "smooth",
+            });
+          }
+        },
+        180
+      );
   };
 
   /*
@@ -2986,24 +3166,49 @@ const OperatorsTab = ({
     selectedOperator
   ) {
     return (
-      <OperatorDetail
-        operator={
-          selectedOperator
-        }
-        regions={
-          regions
-        }
-        updatedAt={
-          selectedOperator.updatedAt ||
-          updatedAt ||
-          organizationsLoadedAt
-        }
-        onBack={() =>
-          setSelectedOperator(
-            null
-          )
-        }
-      />
+      <div
+        className={`transform-gpu transition-all duration-300 ease-out ${
+          detailIsVisible
+            ? "translate-x-0 opacity-100"
+            : "translate-x-2 opacity-0"
+        }`}
+      >
+        <OperatorDetail
+          key={
+            selectedOperator.organizationId ||
+            selectedOperator.id
+          }
+          operator={
+            selectedOperator
+          }
+          regions={
+            regions
+          }
+          updatedAt={
+            selectedOperator.updatedAt ||
+            updatedAt ||
+            organizationsLoadedAt
+          }
+          backLabel={
+            detailHistory.length >
+            0
+              ? `Back to ${
+                  detailHistory[
+                    detailHistory.length -
+                      1
+                  ]?.name ||
+                  "Parent Organization"
+                }`
+              : "Back to Operators"
+          }
+          onBack={
+            handleDetailBack
+          }
+          onSelectOrganization={
+            handleSelectChildOrganization
+          }
+        />
+      </div>
     );
   }
 
@@ -3088,7 +3293,7 @@ const OperatorsTab = ({
           onChange={
             setSearch
           }
-          placeholder="Search operators or branches…"
+          placeholder="Search operators or child organizations…"
         />
 
         <Select
@@ -3368,7 +3573,7 @@ const OperatorsTab = ({
                             {operator.productionToday >
                             0 ? (
                               <div>
-                                <p>
+                                <p className="font-semibold text-navy-950">
                                   {formatNumber(
                                     operator.productionToday
                                   )}{" "}
@@ -3394,7 +3599,7 @@ const OperatorsTab = ({
                             {operator.estimatedDailyRevenue >
                             0 ? (
                               <div>
-                                <p>
+                                <p className="font-semibold text-navy-950">
                                   {formatCurrency(
                                     operator.estimatedDailyRevenue
                                   )}
@@ -3415,7 +3620,7 @@ const OperatorsTab = ({
                             )}
                           </td>
 
-                          <td className="whitespace-nowrap px-4 py-3 tabular-nums">
+                          <td className="whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-navy-950">
                             {operator.workforce
                               ?.total >
                             0
@@ -3442,7 +3647,7 @@ const OperatorsTab = ({
                             0
                               ? (
                                 <div>
-                                  <p>
+                                  <p className="font-semibold text-navy-950">
                                     {`${formatNumber(
                                       operator.compliance,
                                       1
@@ -3511,11 +3716,11 @@ const OperatorsTab = ({
                               <div className="ml-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
                                 <div className="border-b border-slate-200 px-4 py-3">
                                   <p className="text-sm font-semibold text-navy-900">
-                                    Child organization submissions
+                                    Direct child organizations
                                   </p>
 
                                   <p className="mt-0.5 text-xs text-slate-500">
-                                    Today&apos;s reporting status and production for {operator.name}.
+                                    Each child includes its own records and the totals of every organization beneath it.
                                   </p>
                                 </div>
 
@@ -3525,10 +3730,13 @@ const OperatorsTab = ({
                                     headers={[
                                       "Organization",
                                       "Region",
+                                      "Administrator",
+                                      "Latest Production",
+                                      "Local Workforce",
+                                      "Estimated Revenue",
+                                      "On-time Compliance",
                                       "Status",
-                                      "Submitted By",
-                                      "Time",
-                                      "Production (L)",
+                                      "Details",
                                     ]}
                                     rows={
                                       operatorBranches
@@ -3536,63 +3744,184 @@ const OperatorsTab = ({
                                     accentKey="status"
                                     renderRow={(
                                       branch
-                                    ) => (
-                                      <>
-                                        <td className="whitespace-nowrap px-4 py-2.5 font-medium text-navy-900">
-                                          <EmptyCell
-                                            value={
-                                              branch.name ||
-                                              branch.branch
-                                            }
-                                          />
-                                        </td>
+                                    ) => {
+                                      const childName =
+                                        branch.name ||
+                                        branch.branch ||
+                                        "Unnamed organization";
 
-                                        <td className="whitespace-nowrap px-4 py-2.5">
-                                          <EmptyCell
-                                            value={
-                                              branch.region
-                                            }
-                                          />
-                                        </td>
+                                      const openChild = () =>
+                                        handleSelectOperator(
+                                          branch
+                                        );
 
-                                        <td className="px-4 py-2.5">
-                                          <StatusBadge
-                                            status={
-                                              branch.status
+                                      return (
+                                        <>
+                                          <td
+                                            onClick={
+                                              openChild
                                             }
-                                          />
-                                        </td>
+                                            className="cursor-pointer whitespace-nowrap px-4 py-2.5"
+                                          >
+                                            <div className="flex items-center gap-3">
+                                              <CompanyLogo
+                                                name={
+                                                  childName
+                                                }
+                                                logoUrl={
+                                                  branch.logoUrl
+                                                }
+                                              />
 
-                                        <td className="whitespace-nowrap px-4 py-2.5">
-                                          <EmptyCell
-                                            value={
-                                              branch.submittedBy
-                                            }
-                                          />
-                                        </td>
+                                              <div className="min-w-0">
+                                                <p className="truncate font-semibold text-navy-900">
+                                                  {childName}
+                                                </p>
 
-                                        <td className="whitespace-nowrap px-4 py-2.5">
-                                          <EmptyCell
-                                            value={
-                                              branch.submissionTime
-                                            }
-                                          />
-                                        </td>
+                                                <p className="mt-0.5 text-[11px] capitalize text-slate-400">
+                                                  {branch.organizationLevel ||
+                                                    branch.type ||
+                                                    "organization"}
+                                                </p>
+                                              </div>
+                                            </div>
+                                          </td>
 
-                                        <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">
-                                          <EmptyCell
-                                            value={
-                                              branch.production >
-                                              0
-                                                ? formatNumber(
-                                                    branch.production
-                                                  )
-                                                : null
+                                          <td
+                                            onClick={
+                                              openChild
                                             }
-                                          />
-                                        </td>
-                                      </>
-                                    )}
+                                            className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold text-navy-900"
+                                          >
+                                            <EmptyCell
+                                              value={
+                                                branch.region
+                                              }
+                                            />
+                                          </td>
+
+                                          <td
+                                            onClick={
+                                              openChild
+                                            }
+                                            className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold text-navy-900"
+                                          >
+                                            <EmptyCell
+                                              value={
+                                                branch.adminName
+                                              }
+                                            />
+                                          </td>
+
+                                          <td
+                                            onClick={
+                                              openChild
+                                            }
+                                            className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold tabular-nums text-navy-900"
+                                          >
+                                            <EmptyCell
+                                              value={
+                                                branch.productionToday >
+                                                0
+                                                  ? `${formatNumber(
+                                                      branch.productionToday
+                                                    )} L`
+                                                  : null
+                                              }
+                                            />
+                                          </td>
+
+                                          <td
+                                            onClick={
+                                              openChild
+                                            }
+                                            className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold tabular-nums text-navy-900"
+                                          >
+                                            <EmptyCell
+                                              value={
+                                                branch.workforce?.total >
+                                                0
+                                                  ? `${formatNumber(
+                                                      branch.localWorkforce
+                                                    )} (${formatNumber(
+                                                      branch.localWorkforcePct,
+                                                      1
+                                                    )}%)`
+                                                  : null
+                                              }
+                                            />
+                                          </td>
+
+                                          <td
+                                            onClick={
+                                              openChild
+                                            }
+                                            className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold tabular-nums text-navy-900"
+                                          >
+                                            <EmptyCell
+                                              value={
+                                                branch.estimatedDailyRevenue >
+                                                0
+                                                  ? formatCurrency(
+                                                      branch.estimatedDailyRevenue
+                                                    )
+                                                  : null
+                                              }
+                                            />
+                                          </td>
+
+                                          <td
+                                            onClick={
+                                              openChild
+                                            }
+                                            className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold tabular-nums text-navy-900"
+                                          >
+                                            <EmptyCell
+                                              value={
+                                                branch.reportsExpected >
+                                                0
+                                                  ? `${formatNumber(
+                                                      branch.compliance,
+                                                      1
+                                                    )}%`
+                                                  : null
+                                              }
+                                            />
+                                          </td>
+
+                                          <td
+                                            onClick={
+                                              openChild
+                                            }
+                                            className="cursor-pointer px-4 py-2.5"
+                                          >
+                                            <StatusBadge
+                                              status={
+                                                branch.status
+                                              }
+                                            />
+                                          </td>
+
+                                          <td className="px-4 py-2.5">
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              className="text-slate-600 hover:bg-slate-100 hover:text-navy-950"
+                                              onClick={(
+                                                event
+                                              ) => {
+                                                event.stopPropagation();
+
+                                                openChild();
+                                              }}
+                                            >
+                                              <Eye className="h-4 w-4" />
+                                              View
+                                            </Button>
+                                          </td>
+                                        </>
+                                      );
+                                    }}
                                   />
                                 ) : (
                                   <div className="px-4 py-10 text-center">

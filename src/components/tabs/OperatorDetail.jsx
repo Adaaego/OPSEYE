@@ -1,4 +1,3 @@
-
 import {
   useMemo,
   useRef,
@@ -22,6 +21,7 @@ import {
   Building2,
   ClipboardList,
   Download,
+  Eye,
   Factory,
   Filter,
   Search,
@@ -279,6 +279,35 @@ const normalizeFilterValue = (
   return String(value ?? "")
     .trim()
     .toLowerCase();
+};
+
+const formatIdentifierLabel = (
+  value
+) => {
+  return String(value || "")
+    .replace(/[_-]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(
+      (part) =>
+        part.charAt(0).toUpperCase() +
+        part.slice(1)
+    )
+    .join(" ");
+};
+
+const getOrganizationRegionLabel = (
+  organization
+) => {
+  return (
+    organization?.regionName ||
+    organization?.region ||
+    formatIdentifierLabel(
+      organization?.regionId
+    ) ||
+    organization?.country ||
+    ""
+  );
 };
 
 const toFilterDate = (
@@ -1215,7 +1244,18 @@ const EmptyState = ({
 const OperatorAvatar = ({
   name,
   logoUrl,
+  compact = false,
 }) => {
+  const imageClassName =
+    compact
+      ? "h-10 w-10 rounded-lg p-1"
+      : "h-14 w-14 rounded-xl p-1.5 shadow-sm";
+
+  const fallbackClassName =
+    compact
+      ? "h-10 w-10 rounded-lg"
+      : "h-14 w-14 rounded-xl shadow-sm";
+
   if (
     logoUrl
   ) {
@@ -1225,20 +1265,26 @@ const OperatorAvatar = ({
           logoUrl
         }
         alt={`${name} logo`}
-        className="h-14 w-14 rounded-xl border border-slate-200 bg-white object-contain p-1.5 shadow-sm"
+        className={`${imageClassName} border border-slate-200 bg-white object-contain`}
       />
     );
   }
 
   return (
     <div
-      className="flex h-14 w-14 items-center justify-center rounded-xl shadow-sm"
+      className={`flex shrink-0 items-center justify-center ${fallbackClassName}`}
       style={{
         backgroundColor: ICON_BLUE,
         color: NAVY,
       }}
     >
-      <Building2 className="h-6 w-6" />
+      <Building2
+        className={
+          compact
+            ? "h-4 w-4"
+            : "h-6 w-6"
+        }
+      />
     </div>
   );
 };
@@ -1247,7 +1293,9 @@ const OperatorDetail = ({
   operator = null,
   regions = [],
   updatedAt = null,
+  backLabel = "Back to Operators",
   onBack = () => {},
+  onSelectOrganization = null,
   onExport = null,
 }) => {
   const [
@@ -1449,10 +1497,9 @@ const OperatorDetail = ({
             const recordRegion =
               record.regionName ||
               record.region ||
-              organization.regionName ||
-              organization.region ||
-              organization.country ||
-              "";
+              getOrganizationRegionLabel(
+                organization
+              );
 
             return (
               recordRegion ===
@@ -1663,9 +1710,9 @@ const OperatorDetail = ({
 
         ...hierarchyOrganizations.map(
           (organization) =>
-            organization.regionName ||
-            organization.region ||
-            organization.country
+            getOrganizationRegionLabel(
+              organization
+            )
         ),
       ].filter(Boolean);
 
@@ -1758,11 +1805,9 @@ const OperatorDetail = ({
         (report) => {
           const region =
             report.region ||
-            report.organization
-              ?.regionName ||
-            report.organization
-              ?.region ||
-            "";
+            getOrganizationRegionLabel(
+              report.organization
+            );
 
           const reportType =
             getReportType(
@@ -1966,11 +2011,9 @@ const OperatorDetail = ({
                 ...report,
                 region:
                   report.region ||
-                  report.organization
-                    ?.regionName ||
-                  report.organization
-                    ?.region ||
-                  "",
+                  getOrganizationRegionLabel(
+                    report.organization
+                  ),
                 reportType:
                   getReportType(
                     report
@@ -2004,31 +2047,30 @@ const OperatorDetail = ({
         operator?.id ||
         "";
 
+      /*
+       * OperatorsTab supplies direct children as complete organization summaries.
+       * Prefer that list so an enterprise shows only regions and a region shows
+       * only branches. The hierarchy fallback supports older operator objects.
+       */
       const childOrganizations =
-        hierarchyOrganizations.length >
-        0
-          ? hierarchyOrganizations.filter(
+        Array.isArray(
+          operator?.branches
+        )
+          ? operator.branches
+          : hierarchyOrganizations.filter(
               (organization) =>
-                getOrganizationId(
-                  organization
-                ) !==
+                organization.parentId ===
                   operatorId
-            )
-          : Array.isArray(
-              operator?.branches
-            )
-            ? operator.branches
-            : [];
+            );
 
       const branches =
         childOrganizations
           .filter(
             (organization) => {
               const region =
-                organization.regionName ||
-                organization.region ||
-                organization.country ||
-                "";
+                getOrganizationRegionLabel(
+                  organization
+                );
 
               return (
                 !reportingRegion ||
@@ -2044,11 +2086,50 @@ const OperatorDetail = ({
                   organization
                 );
 
+              /*
+               * A child's displayed values include the child itself and every
+               * descendant beneath it. Raw report and workforce records are
+               * scoped once by ID, so parent totals never add an already
+               * aggregated child total and therefore cannot double-count.
+               */
+              const childHierarchyIds =
+                new Set(
+                  [
+                    organizationId,
+                    ...(
+                      Array.isArray(
+                        organization.hierarchyOrganizations
+                      )
+                        ? organization.hierarchyOrganizations.map(
+                            getOrganizationId
+                          )
+                        : hierarchyOrganizations
+                            .filter(
+                              (candidate) =>
+                                candidate.parentId ===
+                                  organizationId ||
+                                (
+                                  Array.isArray(
+                                    candidate.ancestorIds
+                                  ) &&
+                                  candidate.ancestorIds.includes(
+                                    organizationId
+                                  )
+                                )
+                            )
+                            .map(
+                              getOrganizationId
+                            )
+                    ),
+                  ].filter(Boolean)
+                );
+
               const childReports =
                 filteredScopedReports.filter(
                   (report) =>
-                    report.organizationId ===
-                      organizationId
+                    childHierarchyIds.has(
+                      report.organizationId
+                    )
                 );
 
               const childSubmitted =
@@ -2077,7 +2158,170 @@ const OperatorDetail = ({
                 )[0] ||
                 null;
 
+              const childEligibleReports =
+                childReports.filter(
+                  (report) =>
+                    isReportEligibleForCompliance(
+                      report
+                    )
+                );
+
+              const childReportsSubmitted =
+                childEligibleReports.filter(
+                  isReportSubmitted
+                ).length;
+
+              const childReportsSubmittedOnTime =
+                childEligibleReports.filter(
+                  isReportSubmittedOnTime
+                ).length;
+
+              const childReportsSubmittedLate =
+                childEligibleReports.filter(
+                  isReportSubmittedLate
+                ).length;
+
+              const childReportsExpected =
+                childEligibleReports.length;
+
+              const childProduction =
+                childSubmitted.reduce(
+                  (
+                    total,
+                    report
+                  ) =>
+                    total +
+                    toNumber(
+                      report
+                        ?.calculatedMetrics
+                        ?.total_volume_sold
+                    ),
+                  0
+                );
+
+              const childRevenue =
+                childSubmitted.reduce(
+                  (
+                    total,
+                    report
+                  ) =>
+                    total +
+                    toNumber(
+                      report
+                        ?.calculatedMetrics
+                        ?.estimated_daily_revenue
+                    ),
+                  0
+                );
+
+              const childWorkforceRecords =
+                scopedWorkforceRecords.filter(
+                  (record) => {
+                    const recordOrganizationId =
+                      getWorkforceOrganizationId(
+                        record
+                      );
+
+                    if (
+                      !childHierarchyIds.has(
+                        recordOrganizationId
+                      )
+                    ) {
+                      return false;
+                    }
+
+                    if (
+                      !reportingRegion
+                    ) {
+                      return true;
+                    }
+
+                    const recordOrganization =
+                      workforceOrganizationMap.get(
+                        recordOrganizationId
+                      ) ||
+                      {};
+
+                    const recordRegion =
+                      record.regionName ||
+                      record.region ||
+                      getOrganizationRegionLabel(
+                        recordOrganization
+                      );
+
+                    return (
+                      recordRegion ===
+                        reportingRegion
+                    );
+                  }
+                );
+
+              const childWorkforceTotals =
+                childWorkforceRecords.reduce(
+                  (
+                    totals,
+                    record
+                  ) => ({
+                    local:
+                      totals.local +
+                      getWorkforceLocalEmployees(
+                        record
+                      ),
+                    expat:
+                      totals.expat +
+                      getWorkforceExpatriateEmployees(
+                        record
+                      ),
+                    vacancies:
+                      totals.vacancies +
+                      getWorkforceVacancies(
+                        record
+                      ),
+                  }),
+                  {
+                    local: 0,
+                    expat: 0,
+                    vacancies: 0,
+                  }
+                );
+
+              const fallbackWorkforce =
+                !childWorkforceRecords.length &&
+                !reportingRegion
+                  ? organization.workforce ||
+                    {}
+                  : {};
+
+              const childLocalWorkforce =
+                childWorkforceRecords.length
+                  ? childWorkforceTotals.local
+                  : toNumber(
+                      fallbackWorkforce.local
+                    );
+
+              const childExpatWorkforce =
+                childWorkforceRecords.length
+                  ? childWorkforceTotals.expat
+                  : toNumber(
+                      fallbackWorkforce.expat
+                    );
+
+              const childWorkforceTotal =
+                childLocalWorkforce +
+                childExpatWorkforce;
+
+              const childLocalWorkforcePercentage =
+                childWorkforceTotal >
+                0
+                  ? (
+                      childLocalWorkforce /
+                      childWorkforceTotal
+                    ) *
+                    100
+                  : 0;
+
               let status =
+                organization.status ||
                 "no_data";
 
               if (
@@ -2125,10 +2369,9 @@ const OperatorDetail = ({
                   organization.name ||
                   "Unnamed organization",
                 region:
-                  organization.regionName ||
-                  organization.region ||
-                  organization.country ||
-                  "",
+                  getOrganizationRegionLabel(
+                    organization
+                  ),
                 status,
                 submittedBy:
                   latestSubmission
@@ -2143,19 +2386,62 @@ const OperatorDetail = ({
                     )
                   ),
                 production:
-                  childSubmitted.reduce(
-                    (
-                      total,
-                      report
-                    ) =>
-                      total +
-                      toNumber(
-                        report
-                          ?.calculatedMetrics
-                          ?.total_volume_sold
-                      ),
+                  childProduction,
+                productionToday:
+                  childProduction,
+                estimatedDailyRevenue:
+                  childRevenue,
+                reportsExpected:
+                  childReportsExpected,
+                reportsSubmitted:
+                  childReportsSubmitted,
+                reportsSubmittedOnTime:
+                  childReportsSubmittedOnTime,
+                reportsSubmittedLate:
+                  childReportsSubmittedLate,
+                submissionCompletion:
+                  calculateSubmissionCompletion({
+                    reportsSubmitted:
+                      childReportsSubmitted,
+                    reportsExpected:
+                      childReportsExpected,
+                  }),
+                compliance:
+                  calculateOnTimeCompliance({
+                    reportsSubmittedOnTime:
+                      childReportsSubmittedOnTime,
+                    reportsExpected:
+                      childReportsExpected,
+                  }),
+                localWorkforce:
+                  childLocalWorkforce,
+                localWorkforcePct:
+                  childLocalWorkforcePercentage,
+                workforce: {
+                  local:
+                    childLocalWorkforce,
+                  expat:
+                    childExpatWorkforce,
+                  total:
+                    childWorkforceTotal,
+                  vacancies:
+                    childWorkforceRecords.length
+                      ? childWorkforceTotals.vacancies
+                      : toNumber(
+                          fallbackWorkforce.vacancies
+                        ),
+                  localPercentage:
+                    childLocalWorkforcePercentage,
+                  expatPercentage:
+                    childWorkforceTotal >
                     0
-                  ),
+                      ? (
+                          childExpatWorkforce /
+                          childWorkforceTotal
+                        ) *
+                        100
+                      : 0,
+                },
               };
             }
           );
@@ -2211,7 +2497,9 @@ const OperatorDetail = ({
       hierarchyOrganizations,
       operator,
       reportingRegion,
+      scopedWorkforceRecords,
       selectedPeriodRange,
+      workforceOrganizationMap,
     ]);
 
   const production7Day =
@@ -2405,7 +2693,7 @@ const OperatorDetail = ({
             onBack
           }
         >
-          Back to Operators
+          {backLabel}
         </Button>
       </div>
     );
@@ -2415,6 +2703,26 @@ const OperatorDetail = ({
     operator.name ||
     operator.operatorName ||
     "Unnamed operator";
+
+  const organizationLevel =
+    normalizeStatus(
+      operator.organizationLevel ||
+      operator.type ||
+      operator.organizationType ||
+      operator.level
+    );
+
+  const profileLabel =
+    organizationLevel ===
+      "enterprise"
+      ? "Operator Profile"
+      : organizationLevel ===
+          "region"
+        ? "Regional Organization Profile"
+        : organizationLevel ===
+            "branch"
+          ? "Branch Organization Profile"
+          : "Organization Profile";
 
   const operatorColor =
     getChartColor(
@@ -2585,7 +2893,7 @@ const OperatorDetail = ({
         className="mb-5 flex items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-navy-900"
       >
         <ArrowLeft className="h-4 w-4" />
-        Back to Operators
+        {backLabel}
       </button>
 
       <p
@@ -2594,7 +2902,7 @@ const OperatorDetail = ({
           color: NAVY,
         }}
       >
-        Operator Profile
+        {profileLabel}
       </p>
 
       <div className="mb-6 flex items-start gap-4 border-b border-slate-200 pb-6">
@@ -2631,7 +2939,7 @@ const OperatorDetail = ({
           />
 
           <p className="-mt-4 text-xs text-slate-500">
-            Figures include this operator and every child organization below it. Reporting filters recalculate production, compliance, history and child-organization results. The region filter also scopes the current workforce snapshot.
+            Figures include this organization and every descendant below it. Direct children determine this organization&apos;s totals: branches roll up to their region, and regions roll up to the enterprise. Reporting filters recalculate production, compliance, history and child-organization results.
           </p>
         </div>
       </div>
@@ -3411,7 +3719,7 @@ const OperatorDetail = ({
       </div>
 
       <div className="mb-8">
-        <SectionHeader description={`Reporting status and submitted production for child organizations during ${selectedPeriodLabel.toLowerCase()}.`}>
+        <SectionHeader description={`Direct child organizations and their rolled-up performance during ${selectedPeriodLabel.toLowerCase()}. Select a child to open its own profile.`}>
           Child Organizations
         </SectionHeader>
 
@@ -3512,10 +3820,13 @@ const OperatorDetail = ({
               headers={[
                 "Organization",
                 "Region",
+                "Administrator",
+                "Production",
+                "Local Workforce",
+                "Estimated Revenue",
+                "On-time Compliance",
                 "Status",
-                "Submitted By",
-                "Time",
-                "Production (L)",
+                "Details",
               ]}
               rows={
                 filteredBranches
@@ -3523,65 +3834,191 @@ const OperatorDetail = ({
               accentKey="status"
               renderRow={(
                 branch
-              ) => (
-                <>
-                  <td className="whitespace-nowrap px-4 py-3 font-medium text-navy-900">
-                    <EmptyCell
-                      value={
-                        branch.name ||
-                        branch.branch
-                      }
-                    />
-                  </td>
+              ) => {
+                const childName =
+                  branch.name ||
+                  branch.branch ||
+                  "Unnamed organization";
 
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <EmptyCell
-                      value={
-                        branch.region
-                      }
-                    />
-                  </td>
+                const openChild = () => {
+                  onSelectOrganization?.(
+                    branch
+                  );
+                };
 
-                  <td className="px-4 py-3">
-                    <StatusBadge
-                      status={
-                        branch.status
+                return (
+                  <>
+                    <td
+                      onClick={
+                        openChild
                       }
-                    />
-                  </td>
+                      className="cursor-pointer whitespace-nowrap px-4 py-3"
+                    >
+                      <div className="flex items-center gap-3">
+                        <OperatorAvatar
+                          name={
+                            childName
+                          }
+                          logoUrl={
+                            branch.logoUrl
+                          }
+                          compact
+                        />
 
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <EmptyCell
-                      value={
-                        branch.submittedBy
-                      }
-                    />
-                  </td>
+                        <div className="min-w-0">
+                          <p className="truncate font-semibold text-navy-900">
+                            {childName}
+                          </p>
 
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <EmptyCell
-                      value={
-                        branch.submissionTime
-                      }
-                    />
-                  </td>
+                          <p className="mt-0.5 text-[11px] capitalize text-slate-400">
+                            {branch.organizationLevel ||
+                              branch.type ||
+                              "organization"}
+                          </p>
+                        </div>
+                      </div>
+                    </td>
 
-                  <td className="whitespace-nowrap px-4 py-3 tabular-nums">
-                    <EmptyCell
-                      value={
-                        Number(
-                          branch.production
-                        ) >
-                        0
-                          ? formatNumber(
-                              branch.production
-                            )
-                          : null
+                    <td
+                      onClick={
+                        openChild
                       }
-                    />
-                  </td>
-                </>
-              )}
+                      className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold text-navy-900"
+                    >
+                      <EmptyCell
+                        value={
+                          branch.region
+                        }
+                      />
+                    </td>
+
+                    <td
+                      onClick={
+                        openChild
+                      }
+                      className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold text-navy-900"
+                    >
+                      <EmptyCell
+                        value={
+                          branch.adminName
+                        }
+                      />
+                    </td>
+
+                    <td
+                      onClick={
+                        openChild
+                      }
+                      className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-navy-900"
+                    >
+                      <EmptyCell
+                        value={
+                          Number(
+                            branch.productionToday ??
+                            branch.production
+                          ) >
+                          0
+                            ? `${formatNumber(
+                                branch.productionToday ??
+                                branch.production
+                              )} L`
+                            : null
+                        }
+                      />
+                    </td>
+
+                    <td
+                      onClick={
+                        openChild
+                      }
+                      className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-navy-900"
+                    >
+                      <EmptyCell
+                        value={
+                          branch.workforce?.total >
+                          0
+                            ? `${formatNumber(
+                                branch.localWorkforce
+                              )} (${formatNumber(
+                                branch.localWorkforcePct,
+                                1
+                              )}%)`
+                            : null
+                        }
+                      />
+                    </td>
+
+                    <td
+                      onClick={
+                        openChild
+                      }
+                      className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-navy-900"
+                    >
+                      <EmptyCell
+                        value={
+                          Number(
+                            branch.estimatedDailyRevenue
+                          ) >
+                          0
+                            ? formatCurrency(
+                                branch.estimatedDailyRevenue
+                              )
+                            : null
+                        }
+                      />
+                    </td>
+
+                    <td
+                      onClick={
+                        openChild
+                      }
+                      className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-navy-900"
+                    >
+                      <EmptyCell
+                        value={
+                          branch.reportsExpected >
+                          0
+                            ? `${formatNumber(
+                                branch.compliance,
+                                1
+                              )}%`
+                            : null
+                        }
+                      />
+                    </td>
+
+                    <td
+                      onClick={
+                        openChild
+                      }
+                      className="cursor-pointer px-4 py-3"
+                    >
+                      <StatusBadge
+                        status={
+                          branch.status
+                        }
+                      />
+                    </td>
+
+                    <td className="px-4 py-3">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={
+                          openChild
+                        }
+                        disabled={
+                          !onSelectOrganization
+                        }
+                        className="text-slate-600 hover:bg-slate-100 hover:text-navy-950"
+                      >
+                        <Eye className="h-4 w-4" />
+                        View
+                      </Button>
+                    </td>
+                  </>
+                );
+              }}
             />
           ) : (
             <EmptyState message="Child organization records matching the selected filters will appear here" />
