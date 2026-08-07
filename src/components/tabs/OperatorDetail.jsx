@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -58,6 +59,7 @@ import {
  */
 const NAVY = "#020617";
 const ICON_BLUE = "#C8D5E8";
+const REPORTING_HISTORY_PAGE_SIZE = 5;
 
 const KPI_ICON_STYLE = {
   backgroundColor: ICON_BLUE,
@@ -586,6 +588,89 @@ const toNumber = (
 };
 
 /*
+ * Product filters use the stable reporting metric keys rather than form labels.
+ * Petrol and Diesel isolate product performance; the empty value preserves the
+ * existing combined fuel view.
+ */
+const PRODUCT_FILTER_OPTIONS = [
+  { value: "", label: "All fuel products" },
+  { value: "petrol", label: "Petrol" },
+  { value: "diesel", label: "Diesel" },
+];
+
+const getProductLabel = (product) => {
+  if (!product) {
+    return "Fuel";
+  }
+
+  return (
+    PRODUCT_FILTER_OPTIONS.find(
+      (option) => option.value === product
+    )?.label || "Fuel"
+  );
+};
+
+const getReportProductVolume = (
+  report,
+  product = ""
+) => {
+  if (product === "petrol") {
+    return toNumber(
+      report?.sourceMetrics?.petrol_volume_sold
+    );
+  }
+
+  if (product === "diesel") {
+    return toNumber(
+      report?.sourceMetrics?.diesel_volume_sold
+    );
+  }
+
+  return toNumber(
+    report?.calculatedMetrics?.total_volume_sold
+  );
+};
+
+const getReportProductPrice = (
+  report,
+  product
+) => {
+  if (product === "petrol") {
+    return toNumber(
+      report?.referencePrices?.petrolPrice ??
+        report?.pricingSnapshot?.petrolPrice ??
+        report?.pricingSnapshot?.petrolPricePerLitre
+    );
+  }
+
+  if (product === "diesel") {
+    return toNumber(
+      report?.referencePrices?.dieselPrice ??
+        report?.pricingSnapshot?.dieselPrice ??
+        report?.pricingSnapshot?.dieselPricePerLitre
+    );
+  }
+
+  return 0;
+};
+
+const getReportProductRevenue = (
+  report,
+  product = ""
+) => {
+  if (!product) {
+    return toNumber(
+      report?.calculatedMetrics?.estimated_daily_revenue
+    );
+  }
+
+  return (
+    getReportProductVolume(report, product) *
+    getReportProductPrice(report, product)
+  );
+};
+
+/*
  * Workforce values come from the dedicated workforce collection that is
  * loaded by OperatorsTab and passed into this component on the operator
  * object. These helpers intentionally mirror the Workforce page formulas so
@@ -929,7 +1014,8 @@ const formatTime = (
 
 const buildProductionTrend = (
   reports,
-  range
+  range,
+  product = ""
 ) => {
   const datedReports =
     reports
@@ -1047,10 +1133,9 @@ const buildProductionTrend = (
         };
 
       current.production +=
-        toNumber(
-          report
-            ?.calculatedMetrics
-            ?.total_volume_sold
+        getReportProductVolume(
+          report,
+          product
         );
 
       grouped.set(
@@ -1115,7 +1200,8 @@ const buildProductionTrend = (
 };
 
 const buildMonthlyTrend = (
-  reports
+  reports,
+  product = ""
 ) => {
   const grouped =
     new Map();
@@ -1150,10 +1236,9 @@ const buildMonthlyTrend = (
         };
 
       current.value +=
-        toNumber(
-          report
-            ?.calculatedMetrics
-            ?.total_volume_sold
+        getReportProductVolume(
+          report,
+          product
         );
 
       grouped.set(
@@ -1369,9 +1454,32 @@ const OperatorDetail = ({
   ] = useState("");
 
   const [
+    reportingProduct,
+    setReportingProduct,
+  ] = useState("");
+
+  const [
     reportingStatus,
     setReportingStatus,
   ] = useState("");
+
+  const [
+    reportingHistoryPage,
+    setReportingHistoryPage,
+  ] = useState(1);
+
+  /*
+   * Reporting History is intentionally paginated to five records. This small
+   * visibility state lets one page fade/slide out before the next page is
+   * rendered so pagination feels continuous rather than like a hard table swap.
+   */
+  const [
+    reportingHistoryIsVisible,
+    setReportingHistoryIsVisible,
+  ] = useState(true);
+
+  const reportingHistoryTransitionTimer =
+    useRef(null);
 
   const [
     branchSearch,
@@ -1387,6 +1495,18 @@ const OperatorDetail = ({
     branchStatus,
     setBranchStatus,
   ] = useState("");
+
+  useEffect(() => {
+    return () => {
+      if (
+        reportingHistoryTransitionTimer.current
+      ) {
+        window.clearTimeout(
+          reportingHistoryTransitionTimer.current
+        );
+      }
+    };
+  }, []);
 
   /*
    * OperatorsTab passes the already-enriched report records for this operator
@@ -1924,10 +2044,9 @@ const OperatorDetail = ({
             report
           ) =>
             total +
-            toNumber(
-              report
-                ?.calculatedMetrics
-                ?.total_volume_sold
+            getReportProductVolume(
+              report,
+              reportingProduct
             ),
           0
         );
@@ -1939,10 +2058,9 @@ const OperatorDetail = ({
             report
           ) =>
             total +
-            toNumber(
-              report
-                ?.calculatedMetrics
-                ?.estimated_daily_revenue
+            getReportProductRevenue(
+              report,
+              reportingProduct
             ),
           0
         );
@@ -1982,6 +2100,14 @@ const OperatorDetail = ({
 
       const reportingHistory =
         [...filteredScopedReports]
+          .filter(
+            (report) =>
+              !reportingProduct ||
+              getReportProductVolume(
+                report,
+                reportingProduct
+              ) > 0
+          )
           .sort(
             (
               first,
@@ -2018,6 +2144,10 @@ const OperatorDetail = ({
                   getReportType(
                     report
                   ),
+                product:
+                  getProductLabel(
+                    reportingProduct
+                  ),
                 submittedBy:
                   report.submittedByName ||
                   report.submittedBy ||
@@ -2033,10 +2163,14 @@ const OperatorDetail = ({
                     submittedAt
                   ),
                 production:
-                  toNumber(
-                    report
-                      ?.calculatedMetrics
-                      ?.total_volume_sold
+                  getReportProductVolume(
+                    report,
+                    reportingProduct
+                  ),
+                estimatedRevenue:
+                  getReportProductRevenue(
+                    report,
+                    reportingProduct
                   ),
               };
             }
@@ -2191,10 +2325,9 @@ const OperatorDetail = ({
                     report
                   ) =>
                     total +
-                    toNumber(
-                      report
-                        ?.calculatedMetrics
-                        ?.total_volume_sold
+                    getReportProductVolume(
+                      report,
+                      reportingProduct
                     ),
                   0
                 );
@@ -2206,10 +2339,9 @@ const OperatorDetail = ({
                     report
                   ) =>
                     total +
-                    toNumber(
-                      report
-                        ?.calculatedMetrics
-                        ?.estimated_daily_revenue
+                    getReportProductRevenue(
+                      report,
+                      reportingProduct
                     ),
                   0
                 );
@@ -2449,7 +2581,8 @@ const OperatorDetail = ({
       const productionTrend =
         buildProductionTrend(
           submittedReports,
-          selectedPeriodRange
+          selectedPeriodRange,
+          reportingProduct
         );
 
       const latestActivityAt =
@@ -2488,7 +2621,8 @@ const OperatorDetail = ({
           productionTrend.title,
         monthlyTrend:
           buildMonthlyTrend(
-            submittedReports
+            submittedReports,
+            reportingProduct
           ),
         latestActivityAt,
       };
@@ -2496,6 +2630,7 @@ const OperatorDetail = ({
       filteredScopedReports,
       hierarchyOrganizations,
       operator,
+      reportingProduct,
       reportingRegion,
       scopedWorkforceRecords,
       selectedPeriodRange,
@@ -2551,6 +2686,121 @@ const OperatorDetail = ({
 
   const filteredReportingHistory =
     reportingHistory;
+
+  /*
+   * Keep long reporting histories readable by rendering five records at a time.
+   * All report filters are applied before this pagination step.
+   */
+  const reportingHistoryPageCount =
+    Math.max(
+      1,
+      Math.ceil(
+        filteredReportingHistory.length /
+          REPORTING_HISTORY_PAGE_SIZE
+      )
+    );
+
+  const resolvedReportingHistoryPage =
+    Math.min(
+      reportingHistoryPage,
+      reportingHistoryPageCount
+    );
+
+  const paginatedReportingHistory =
+    useMemo(() => {
+      const startIndex =
+        (resolvedReportingHistoryPage - 1) *
+        REPORTING_HISTORY_PAGE_SIZE;
+
+      return filteredReportingHistory.slice(
+        startIndex,
+        startIndex + REPORTING_HISTORY_PAGE_SIZE
+      );
+    }, [
+      filteredReportingHistory,
+      resolvedReportingHistoryPage,
+    ]);
+
+  useEffect(() => {
+    setReportingHistoryPage(1);
+    setReportingHistoryIsVisible(true);
+  }, [
+    customEndDate,
+    customStartDate,
+    reportingPeriod,
+    reportingProduct,
+    reportingRegion,
+    reportingSearch,
+    reportingStatus,
+    reportingType,
+  ]);
+
+  const changeReportingHistoryPage = (
+    nextPage
+  ) => {
+    const resolvedNextPage =
+      Math.min(
+        reportingHistoryPageCount,
+        Math.max(
+          1,
+          nextPage
+        )
+      );
+
+    if (
+      resolvedNextPage ===
+      resolvedReportingHistoryPage
+    ) {
+      return;
+    }
+
+    if (
+      reportingHistoryTransitionTimer.current
+    ) {
+      window.clearTimeout(
+        reportingHistoryTransitionTimer.current
+      );
+    }
+
+    setReportingHistoryIsVisible(
+      false
+    );
+
+    /*
+     * Swap the five-row slice only after the current page has faded out.
+     * Two animation frames then allow the incoming page to animate cleanly.
+     */
+    reportingHistoryTransitionTimer.current =
+      window.setTimeout(
+        () => {
+          setReportingHistoryPage(
+            resolvedNextPage
+          );
+
+          if (
+            typeof window ===
+            "undefined"
+          ) {
+            setReportingHistoryIsVisible(
+              true
+            );
+            return;
+          }
+
+          window.requestAnimationFrame(
+            () => {
+              window.requestAnimationFrame(
+                () =>
+                  setReportingHistoryIsVisible(
+                    true
+                  )
+              );
+            }
+          );
+        },
+        140
+      );
+  };
 
   const branchStatusOptions =
     useMemo(() => {
@@ -2645,6 +2895,7 @@ const OperatorDetail = ({
       customEndDate ||
       reportingRegion ||
       reportingType ||
+      reportingProduct ||
       reportingStatus
     );
 
@@ -2665,6 +2916,7 @@ const OperatorDetail = ({
       setCustomEndDate("");
       setReportingRegion("");
       setReportingType("");
+      setReportingProduct("");
       setReportingStatus("");
     };
 
@@ -2938,9 +3190,6 @@ const OperatorDetail = ({
             }
           />
 
-          <p className="-mt-4 text-xs text-slate-500">
-            Figures include this organization and every descendant below it. Direct children determine this organization&apos;s totals: branches roll up to their region, and regions roll up to the enterprise. Reporting filters recalculate production, compliance, history and child-organization results.
-          </p>
         </div>
       </div>
 
@@ -3080,6 +3329,37 @@ const OperatorDetail = ({
                   }
                 >
                   {reportType}
+                </option>
+              )
+            )}
+          </select>
+
+          <select
+            value={
+              reportingProduct
+            }
+            onChange={(
+              event
+            ) =>
+              setReportingProduct(
+                event.target.value
+              )
+            }
+            className={`${filterControlClassName} w-36`}
+            aria-label="Product type"
+          >
+            {PRODUCT_FILTER_OPTIONS.map(
+              (option) => (
+                <option
+                  key={
+                    option.value ||
+                    "all-products"
+                  }
+                  value={
+                    option.value
+                  }
+                >
+                  {option.label}
                 </option>
               )
             )}
@@ -3248,13 +3528,15 @@ const OperatorDetail = ({
         )}
 
         <p className="mt-2 pl-1 text-[11px] text-slate-400">
-          Report filters apply to reporting metrics. Region also filters the dedicated workforce records. Current period: {selectedPeriodLabel}.
+          Product filtering recalculates production, estimated revenue, charts, reporting history and child-organization product performance. Compliance remains report-level because the reporting obligation itself is not product-specific. Region also filters the dedicated workforce records. Current period: {selectedPeriodLabel}.
         </p>
       </div>
 
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <KpiCard
-          label="Production for Period"
+          label={`${getProductLabel(
+            reportingProduct
+          )} Production for Period`}
           value={
             productionToday >
             0
@@ -3264,17 +3546,29 @@ const OperatorDetail = ({
               : "—"
           }
           caption={
-            `${formatNumber(
-              petrolVolumeToday
-            )} L petrol · ${formatNumber(
-              dieselVolumeToday
-            )} L diesel · ${selectedPeriodLabel}`
+            reportingProduct ===
+            "petrol"
+              ? `${formatNumber(
+                  productionToday
+                )} L petrol · ${selectedPeriodLabel}`
+              : reportingProduct ===
+                  "diesel"
+                ? `${formatNumber(
+                    productionToday
+                  )} L diesel · ${selectedPeriodLabel}`
+                : `${formatNumber(
+                    petrolVolumeToday
+                  )} L petrol · ${formatNumber(
+                    dieselVolumeToday
+                  )} L diesel · ${selectedPeriodLabel}`
           }
           icon={Factory}
         />
 
         <KpiCard
-          label="Estimated Revenue for Period"
+          label={`${getProductLabel(
+            reportingProduct
+          )} Estimated Revenue for Period`}
           value={
             estimatedDailyRevenue >
             0
@@ -3284,7 +3578,9 @@ const OperatorDetail = ({
               : "—"
           }
           caption={
-            `Calculated from submitted volumes and linked company fuel prices · ${selectedPeriodLabel}`
+            `Calculated for ${getProductLabel(
+              reportingProduct
+            ).toLowerCase()} from submitted volumes and linked company fuel prices · ${selectedPeriodLabel}`
           }
           icon={Banknote}
         />
@@ -3401,7 +3697,9 @@ const OperatorDetail = ({
 
       <div className="mb-8">
         <SectionHeader>
-          {filteredSummary.productionTrendTitle}
+          {filteredSummary.productionTrendTitle} · {getProductLabel(
+            reportingProduct
+          )}
         </SectionHeader>
 
         <Card className="p-5">
@@ -3477,7 +3775,9 @@ const OperatorDetail = ({
                     `${formatNumber(
                       value
                     )} litres`,
-                    "Production",
+                    `${getProductLabel(
+                  reportingProduct
+                )} Production`,
                   ]}
                   contentStyle={{
                     fontSize: 13,
@@ -3512,7 +3812,9 @@ const OperatorDetail = ({
 
       <div className="mb-8">
         <SectionHeader>
-          Monthly Production Trend — {selectedPeriodLabel}
+          Monthly Production Trend — {selectedPeriodLabel} · {getProductLabel(
+            reportingProduct
+          )}
         </SectionHeader>
 
         <Card className="p-5">
@@ -3629,18 +3931,31 @@ const OperatorDetail = ({
         <Card className="overflow-hidden">
           {filteredReportingHistory.length >
           0 ? (
+            <div
+              className={`transform-gpu transition-all duration-200 ease-out ${
+                reportingHistoryIsVisible
+                  ? "translate-x-0 opacity-100"
+                  : "translate-x-2 opacity-0"
+              }`}
+            >
             <Table
               headers={[
                 "Region",
                 "Report Type",
+                "Product",
                 "Status",
                 "Submitted By",
                 "Date",
                 "Time",
-                "Production (L)",
+                `${getProductLabel(
+                  reportingProduct
+                )} Production (L)`,
+                `${getProductLabel(
+                  reportingProduct
+                )} Estimated Revenue`,
               ]}
               rows={
-                filteredReportingHistory
+                paginatedReportingHistory
               }
               accentKey="status"
               renderRow={(
@@ -3659,6 +3974,14 @@ const OperatorDetail = ({
                     <EmptyCell
                       value={
                         report.reportType
+                      }
+                    />
+                  </td>
+
+                  <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-700">
+                    <EmptyCell
+                      value={
+                        report.product
                       }
                     />
                   </td>
@@ -3709,11 +4032,85 @@ const OperatorDetail = ({
                       }
                     />
                   </td>
+
+                  <td className="whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-slate-800">
+                    <EmptyCell
+                      value={
+                        Number(
+                          report.estimatedRevenue
+                        ) >
+                        0
+                          ? formatCurrency(
+                              report.estimatedRevenue
+                            )
+                          : null
+                      }
+                    />
+                  </td>
                 </>
               )}
             />
+            </div>
           ) : (
             <EmptyState message="No reporting records match the selected filters" />
+          )}
+
+          {filteredReportingHistory.length >
+            0 && (
+            <div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs font-medium text-slate-500">
+                Showing {formatNumber(
+                  (resolvedReportingHistoryPage - 1) *
+                    REPORTING_HISTORY_PAGE_SIZE +
+                    1
+                )}–{formatNumber(
+                  Math.min(
+                    resolvedReportingHistoryPage *
+                      REPORTING_HISTORY_PAGE_SIZE,
+                    filteredReportingHistory.length
+                  )
+                )} of {formatNumber(
+                  filteredReportingHistory.length
+                )} records
+              </p>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={
+                    resolvedReportingHistoryPage <= 1
+                  }
+                  onClick={() =>
+                    changeReportingHistoryPage(
+                      resolvedReportingHistoryPage - 1
+                    )
+                  }
+                >
+                  Previous
+                </Button>
+
+                <span className="min-w-[92px] text-center text-xs font-semibold text-slate-600">
+                  Page {resolvedReportingHistoryPage} of {reportingHistoryPageCount}
+                </span>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={
+                    resolvedReportingHistoryPage >=
+                    reportingHistoryPageCount
+                  }
+                  onClick={() =>
+                    changeReportingHistoryPage(
+                      resolvedReportingHistoryPage + 1
+                    )
+                  }
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
           )}
         </Card>
       </div>

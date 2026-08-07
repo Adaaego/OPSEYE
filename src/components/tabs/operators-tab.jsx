@@ -2,9 +2,12 @@ import {
   Fragment,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
+
+import {
+  flushSync,
+} from "react-dom";
 
 import {
   AlertTriangle,
@@ -1154,32 +1157,6 @@ const OperatorsTab = ({
   ] = useState([]);
 
   /*
-   * The detail page is mounted at zero opacity and revealed on the next
-   * animation frame. Moving between the table, an enterprise, a region and a
-   * branch therefore feels like one connected hierarchy rather than an abrupt
-   * component replacement.
-   */
-  const [
-    detailIsVisible,
-    setDetailIsVisible,
-  ] = useState(false);
-
-  const detailTransitionTimer =
-    useRef(null);
-
-  useEffect(() => {
-    return () => {
-      if (
-        detailTransitionTimer.current
-      ) {
-        window.clearTimeout(
-          detailTransitionTimer.current
-        );
-      }
-    };
-  }, []);
-
-  /*
    * The Operators page loads the same Firestore collections used by
    * the Overview and Workforce pages.
    *
@@ -1630,6 +1607,24 @@ const OperatorsTab = ({
               report.operatorName ||
               enterprise.name ||
               organization.name,
+
+            /*
+             * Keep the reference prices used by the report calculation on this
+             * enriched in-memory record. OperatorDetail needs them to calculate
+             * Petrol-only or Diesel-only estimated revenue accurately.
+             */
+            referencePrices: {
+              petrolPrice:
+                toNumber(
+                  priceRecord.petrolPrice ??
+                    priceRecord.petrolPricePerLitre
+                ),
+              dieselPrice:
+                toNumber(
+                  priceRecord.dieselPrice ??
+                    priceRecord.dieselPricePerLitre
+                ),
+            },
 
             region:
               report.regionName ||
@@ -2981,62 +2976,62 @@ const OperatorsTab = ({
     );
   };
 
-  const revealDetailPage = () => {
+  /*
+   * Chrome and other modern browsers can animate one React view into another
+   * with the View Transition API. flushSync makes the selected-organization
+   * state update part of that transition snapshot. Older browsers simply run
+   * the same state update immediately, so navigation remains functional.
+   */
+  const runHierarchyTransition = (
+    updateState
+  ) => {
+    const performUpdate = () => {
+      flushSync(() => {
+        updateState();
+      });
+    };
+
     if (
-      typeof window ===
-      "undefined"
+      typeof document !==
+        "undefined" &&
+      typeof document.startViewTransition ===
+        "function"
     ) {
-      setDetailIsVisible(
-        true
+      document.startViewTransition(
+        performUpdate
       );
-      return;
+    } else {
+      performUpdate();
     }
 
-    window.requestAnimationFrame(
-      () => {
-        window.requestAnimationFrame(
-          () =>
-            setDetailIsVisible(
-              true
-            )
-        );
-      }
-    );
-
-    window.scrollTo({
-      top: 0,
-      behavior: "smooth",
-    });
+    if (
+      typeof window !==
+      "undefined"
+    ) {
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth",
+      });
+    }
   };
 
   const handleSelectOperator = (
     operator
   ) => {
-    if (
-      detailTransitionTimer.current
-    ) {
-      window.clearTimeout(
-        detailTransitionTimer.current
-      );
-    }
-
     /*
-     * Opening a detail page from the Operators table starts a fresh navigation
-     * path. Child-to-parent history is used only after entering that profile.
+     * Entering from the Operators table starts a new hierarchy path.
      */
-    setDetailHistory(
-      []
-    );
+    runHierarchyTransition(
+      () => {
+        setDetailHistory(
+          []
+        );
 
-    setDetailIsVisible(
-      false
+        setSelectedOperator(
+          operator
+        );
+      }
     );
-
-    setSelectedOperator(
-      operator
-    );
-
-    revealDetailPage();
 
     onSelectOperator?.(
       operator
@@ -3046,114 +3041,67 @@ const OperatorsTab = ({
   const handleSelectChildOrganization = (
     organization
   ) => {
-    if (
-      detailTransitionTimer.current
-    ) {
-      window.clearTimeout(
-        detailTransitionTimer.current
-      );
-    }
+    runHierarchyTransition(
+      () => {
+        if (
+          selectedOperator
+        ) {
+          setDetailHistory(
+            (
+              currentHistory
+            ) => [
+              ...currentHistory,
+              selectedOperator,
+            ]
+          );
+        }
 
-    setDetailIsVisible(
-      false
+        setSelectedOperator(
+          organization
+        );
+      }
     );
 
-    /*
-     * Allow the current profile to fade out before replacing it with the child
-     * profile. The parent is retained in history for one-level-at-a-time back
-     * navigation.
-     */
-    detailTransitionTimer.current =
-      window.setTimeout(
-        () => {
-          if (
-            selectedOperator
-          ) {
-            setDetailHistory(
-              (
-                currentHistory
-              ) => [
-                ...currentHistory,
-                selectedOperator,
-              ]
-            );
-          }
-
-          setSelectedOperator(
-            organization
-          );
-
-          revealDetailPage();
-
-          onSelectOperator?.(
-            organization
-          );
-        },
-        180
-      );
+    onSelectOperator?.(
+      organization
+    );
   };
 
   const handleDetailBack = () => {
-    if (
-      detailTransitionTimer.current
-    ) {
-      window.clearTimeout(
-        detailTransitionTimer.current
-      );
-    }
+    runHierarchyTransition(
+      () => {
+        if (
+          detailHistory.length >
+          0
+        ) {
+          const previousOrganization =
+            detailHistory[
+              detailHistory.length -
+                1
+            ];
 
-    setDetailIsVisible(
-      false
-    );
-
-    detailTransitionTimer.current =
-      window.setTimeout(
-        () => {
-          if (
-            detailHistory.length >
-            0
-          ) {
-            const previousOrganization =
-              detailHistory[
-                detailHistory.length -
-                  1
-              ];
-
-            setDetailHistory(
-              (
-                currentHistory
-              ) =>
-                currentHistory.slice(
-                  0,
-                  -1
-                )
-            );
-
-            setSelectedOperator(
-              previousOrganization
-            );
-
-            revealDetailPage();
-
-            return;
-          }
-
-          setSelectedOperator(
-            null
+          setDetailHistory(
+            (
+              currentHistory
+            ) =>
+              currentHistory.slice(
+                0,
+                -1
+              )
           );
 
-          if (
-            typeof window !==
-            "undefined"
-          ) {
-            window.scrollTo({
-              top: 0,
-              behavior: "smooth",
-            });
-          }
-        },
-        180
-      );
+          setSelectedOperator(
+            previousOrganization
+          );
+
+          return;
+        }
+
+        setSelectedOperator(
+          null
+        );
+      }
+    );
   };
 
   /*
@@ -3167,11 +3115,10 @@ const OperatorsTab = ({
   ) {
     return (
       <div
-        className={`transform-gpu transition-all duration-300 ease-out ${
-          detailIsVisible
-            ? "translate-x-0 opacity-100"
-            : "translate-x-2 opacity-0"
-        }`}
+        style={{
+          viewTransitionName:
+            "operators-content",
+        }}
       >
         <OperatorDetail
           key={
@@ -3213,7 +3160,12 @@ const OperatorsTab = ({
   }
 
   return (
-    <div>
+    <div
+      style={{
+        viewTransitionName:
+          "operators-content",
+      }}
+    >
       <PageHeader
         title="Operators"
         timestamp={formatUpdatedAt(
