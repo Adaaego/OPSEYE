@@ -1,3 +1,4 @@
+
 import {
   useEffect,
   useMemo,
@@ -682,6 +683,7 @@ const getWorkforceOrganizationId = (
   return (
     record?.organizationId ||
     record?.orgId ||
+    record?.branchId ||
     ""
   );
 };
@@ -1040,7 +1042,8 @@ const buildProductionTrend = (
     return {
       data: [],
       title:
-        `Production — ${range.label}`,
+        `Production Trend — ${range.label}`,
+      granularity: "day",
     };
   }
 
@@ -1089,9 +1092,77 @@ const buildProductionTrend = (
         1
     );
 
-  const groupByMonth =
-    dayCount >
-    31;
+  /*
+   * Do not keep adding one bar per calendar day forever.
+   *
+   * Short ranges remain daily because individual reporting days matter.
+   * Medium ranges roll up by week, and long ranges roll up by month. This
+   * keeps an all-time chart readable as years of reporting data accumulate.
+   */
+  const granularity =
+    dayCount <= 31
+      ? "day"
+      : dayCount <= 180
+        ? "week"
+        : "month";
+
+  const startOfWeek = (
+    value
+  ) => {
+    const date =
+      new Date(
+        value.getFullYear(),
+        value.getMonth(),
+        value.getDate()
+      );
+
+    const day =
+      date.getDay();
+
+    const daysSinceMonday =
+      day === 0
+        ? 6
+        : day - 1;
+
+    date.setDate(
+      date.getDate() -
+        daysSinceMonday
+    );
+
+    return date;
+  };
+
+  const formatKey = (
+    date
+  ) => {
+    const year =
+      date.getFullYear();
+
+    const month =
+      String(
+        date.getMonth() + 1
+      ).padStart(
+        2,
+        "0"
+      );
+
+    if (
+      granularity ===
+      "month"
+    ) {
+      return `${year}-${month}`;
+    }
+
+    const day =
+      String(
+        date.getDate()
+      ).padStart(
+        2,
+        "0"
+      );
+
+    return `${year}-${month}-${day}`;
+  };
 
   const grouped =
     new Map();
@@ -1101,34 +1172,37 @@ const buildProductionTrend = (
       report,
       date,
     }) => {
+      const bucketDate =
+        granularity ===
+        "week"
+          ? startOfWeek(
+              date
+            )
+          : granularity ===
+              "month"
+            ? new Date(
+                date.getFullYear(),
+                date.getMonth(),
+                1
+              )
+            : new Date(
+                date.getFullYear(),
+                date.getMonth(),
+                date.getDate()
+              );
+
       const key =
-        groupByMonth
-          ? `${date.getFullYear()}-${String(
-              date.getMonth() +
-                1
-            ).padStart(
-              2,
-              "0"
-            )}`
-          : `${date.getFullYear()}-${String(
-              date.getMonth() +
-                1
-            ).padStart(
-              2,
-              "0"
-            )}-${String(
-              date.getDate()
-            ).padStart(
-              2,
-              "0"
-            )}`;
+        formatKey(
+          bucketDate
+        );
 
       const current =
         grouped.get(
           key
         ) ||
         {
-          date,
+          date:
+            bucketDate,
           production: 0,
         };
 
@@ -1145,57 +1219,111 @@ const buildProductionTrend = (
     }
   );
 
-  return {
-    data:
-      Array.from(
-        grouped.entries()
+  const data =
+    Array.from(
+      grouped.entries()
+    )
+      .sort(
+        (
+          [firstKey],
+          [secondKey]
+        ) =>
+          firstKey.localeCompare(
+            secondKey
+          )
       )
-        .sort(
-          (
-            [firstKey],
-            [secondKey]
-          ) =>
-            firstKey.localeCompare(
-              secondKey
-            )
-        )
-        .map(
-          (
-            [
-              key,
-              record,
-            ]
-          ) => ({
+      .map(
+        (
+          [
+            key,
+            record,
+          ]
+        ) => {
+          let label;
+
+          if (
+            granularity ===
+            "month"
+          ) {
+            label =
+              record.date.toLocaleDateString(
+                "en-GB",
+                {
+                  month:
+                    "short",
+                  year:
+                    "2-digit",
+                }
+              );
+          } else if (
+            granularity ===
+            "week"
+          ) {
+            const weekEnd =
+              new Date(
+                record.date
+              );
+
+            weekEnd.setDate(
+              weekEnd.getDate() +
+                6
+            );
+
+            label =
+              `${record.date.toLocaleDateString(
+                "en-GB",
+                {
+                  day:
+                    "2-digit",
+                  month:
+                    "short",
+                }
+              )}–${weekEnd.toLocaleDateString(
+                "en-GB",
+                {
+                  day:
+                    "2-digit",
+                  month:
+                    "short",
+                }
+              )}`;
+          } else {
+            label =
+              record.date.toLocaleDateString(
+                "en-GB",
+                {
+                  day:
+                    "2-digit",
+                  month:
+                    "short",
+                }
+              );
+          }
+
+          return {
             key,
             day:
-              groupByMonth
-                ? record.date.toLocaleDateString(
-                    "en-GB",
-                    {
-                      month:
-                        "short",
-                      year:
-                        "2-digit",
-                    }
-                  )
-                : record.date.toLocaleDateString(
-                    "en-GB",
-                    {
-                      day:
-                        "2-digit",
-                      month:
-                        "short",
-                    }
-                  ),
+              label,
             production:
               record.production,
-          })
-        ),
+          };
+        }
+      );
 
+  const granularityLabel =
+    granularity ===
+    "month"
+      ? "Month"
+      : granularity ===
+          "week"
+        ? "Week"
+        : "Day";
+
+  return {
+    data,
     title:
-      groupByMonth
-        ? `Production by Month — ${range.label}`
-        : `Production by Day — ${range.label}`,
+      `Production by ${granularityLabel} — ${range.label}`,
+    granularity,
   };
 };
 
@@ -3805,7 +3933,7 @@ const OperatorDetail = ({
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <EmptyState message="Seven-day production data will appear here" />
+            <EmptyState message="Production trend data will appear here" />
           )}
         </Card>
       </div>
@@ -4116,7 +4244,7 @@ const OperatorDetail = ({
       </div>
 
       <div className="mb-8">
-        <SectionHeader description={`Direct child organizations and their rolled-up performance during ${selectedPeriodLabel.toLowerCase()}. Select a child to open its own profile.`}>
+        <SectionHeader>
           Child Organizations
         </SectionHeader>
 
@@ -4427,8 +4555,8 @@ const OperatorDetail = ({
         <SectionHeader
           description={
             reportingRegion
-              ? `Current role-level workforce records for ${reportingRegion}.`
-              : "Current role-level workforce records from the dedicated Workforce module."
+              ? `Workforce assigned within ${reportingRegion}, including descendants in that region.`
+              : "Direct workforce for this organization plus workforce from every descendant below it."
           }
         >
           Workforce

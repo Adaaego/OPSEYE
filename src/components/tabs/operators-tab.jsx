@@ -119,6 +119,22 @@ const normalizeStatus = (
   );
 };
 
+/*
+ * Region IDs are stored as controlled identifiers such as "western" or
+ * "greater-accra". Normalising separators keeps older underscore values
+ * compatible without relying on display names.
+ */
+const normalizeRegionId = (
+  value
+) => {
+  return normalizeValue(
+    value
+  ).replace(
+    /[\s_]+/g,
+    "-"
+  );
+};
+
 const toNumber = (
   value
 ) => {
@@ -736,6 +752,171 @@ const getWorkforceUpdatedAt = (
       record?.createdAt
     )
   );
+};
+
+/*
+ * Returns true when one workforce record contributes to the selected
+ * organization's workforce total.
+ *
+ * The hierarchy rules are deliberately explicit:
+ * - branch: own records only;
+ * - region: own records + every branch/descendant in that same region;
+ * - enterprise: own records + every descendant in the enterprise.
+ *
+ * New workforce records already snapshot ancestorIds, rootEnterpriseId and
+ * regionId when they are saved. Those record-level fields are therefore used
+ * alongside organization metadata. The regionId + rootEnterpriseId fallback is
+ * especially important for older branch records whose organization document
+ * does not yet contain a complete ancestorIds chain.
+ */
+const isWorkforceRecordInOrganizationScope = ({
+  record,
+  organization,
+  organizationMap,
+}) => {
+  const selectedOrganizationId =
+    getOrganizationId(
+      organization
+    );
+
+  if (!selectedOrganizationId) {
+    return false;
+  }
+
+  const selectedLevel =
+    getOrganizationLevel(
+      organization
+    );
+
+  const recordOrganizationId =
+    getWorkforceOrganizationId(
+      record
+    );
+
+  /*
+   * A record saved directly against the selected organization always counts.
+   * This is the part that must never disappear when children start entering
+   * their own workforce.
+   */
+  if (
+    recordOrganizationId ===
+      selectedOrganizationId
+  ) {
+    return true;
+  }
+
+  /*
+   * A branch is a leaf in the current hierarchy, so it must never absorb
+   * workforce from its parent or sibling branches.
+   */
+  if (
+    selectedLevel ===
+    "branch"
+  ) {
+    return false;
+  }
+
+  const recordOrganization =
+    recordOrganizationId
+      ? organizationMap.get(
+          recordOrganizationId
+        )
+      : null;
+
+  const recordAncestorIds =
+    Array.from(
+      new Set([
+        ...(Array.isArray(
+          record?.ancestorIds
+        )
+          ? record.ancestorIds
+          : []),
+        ...(Array.isArray(
+          recordOrganization
+            ?.ancestorIds
+        )
+          ? recordOrganization
+              .ancestorIds
+          : []),
+      ])
+    );
+
+  if (
+    recordOrganization?.parentId ===
+      selectedOrganizationId ||
+    recordAncestorIds.includes(
+      selectedOrganizationId
+    )
+  ) {
+    return true;
+  }
+
+  const selectedRootEnterpriseId =
+    organization.rootEnterpriseId ||
+    (selectedLevel ===
+    "enterprise"
+      ? selectedOrganizationId
+      : "");
+
+  const recordRootEnterpriseId =
+    record.rootEnterpriseId ||
+    record.enterpriseId ||
+    recordOrganization
+      ?.rootEnterpriseId ||
+    (getOrganizationLevel(
+      recordOrganization
+    ) === "enterprise"
+      ? getOrganizationId(
+          recordOrganization
+        )
+      : "");
+
+  if (
+    selectedLevel ===
+    "enterprise"
+  ) {
+    return (
+      recordRootEnterpriseId ===
+      selectedOrganizationId
+    );
+  }
+
+  if (
+    selectedLevel ===
+    "region"
+  ) {
+    const selectedRegionId =
+      normalizeRegionId(
+        organization.regionId
+      );
+
+    const recordRegionId =
+      normalizeRegionId(
+        record.regionId ||
+        recordOrganization
+          ?.regionId
+      );
+
+    /*
+     * A region fallback must stay within both the same enterprise and the same
+     * controlled region. We also exclude enterprise-level workforce so HQ
+     * employees are not accidentally pulled into a regional total merely
+     * because an old enterprise record happens to carry a regionId.
+     */
+    return Boolean(
+      selectedRegionId &&
+      selectedRootEnterpriseId &&
+      recordRegionId ===
+        selectedRegionId &&
+      recordRootEnterpriseId ===
+        selectedRootEnterpriseId &&
+      getOrganizationLevel(
+        recordOrganization
+      ) !== "enterprise"
+    );
+  }
+
+  return false;
 };
 
 const formatNumber = (
@@ -1747,26 +1928,21 @@ const OperatorsTab = ({
           ]);
 
     /*
-     * Workforce moves to child organizations independently from report forms,
-     * so it uses its own fallback decision. Parent workforce remains visible
-     * until at least one descendant has dedicated workforce records.
+     * Workforce is additive across the organization hierarchy.
+     *
+     * We deliberately keep the selected organization's direct records separate
+     * from descendant records before combining them. That prevents a region's
+     * own workforce from disappearing as soon as one of its branches receives
+     * workforce data.
+     *
+     * branch     = own workforce only
+     * region     = own workforce + every branch beneath the region
+     * enterprise = own workforce + every region + every branch
      */
-    const hasDescendantWorkforceRecords =
-      workforceRecords.some(
-        (record) =>
-          descendantOrganizationIds.has(
-            getWorkforceOrganizationId(
-              record
-            )
-          )
+    const organizationLevel =
+      getOrganizationLevel(
+        organization
       );
-
-    const workforceMetricScopeIds =
-      hasDescendantWorkforceRecords
-        ? descendantOrganizationIds
-        : new Set([
-            organizationId,
-          ]);
 
     const isEnterprise =
       isEnterpriseOperator(
@@ -1947,61 +2123,21 @@ const OperatorsTab = ({
       });
 
     /*
-     * Workforce totals now come from the dedicated workforce collection.
+     * Workforce is always additive across the hierarchy.
      *
-     * Each workforce document represents one role within one organisation.
-     * Summing the current role records therefore produces the operator's
-     * complete workforce without relying on report-form headcount fields.
+     * This filter deliberately does not choose between parent and child data.
+     * It includes every record that belongs to the selected organization's
+     * scope, which means a region keeps its own workforce and adds every branch
+     * beneath it. A branch remains own-only.
      */
     const scopedWorkforceRecords =
       workforceRecords.filter(
-        (record) => {
-          const recordOrganizationId =
-            getWorkforceOrganizationId(
-              record
-            );
-
-          if (
-            recordOrganizationId &&
-            workforceMetricScopeIds.has(
-              recordOrganizationId
-            )
-          ) {
-            return true;
-          }
-
-          /*
-           * Older workforce records may identify only their enterprise or
-           * company. These fallbacks are safe for enterprise operator rows
-           * because the row already represents the full enterprise hierarchy.
-           */
-          if (
-            isEnterprise &&
-            !hasDescendantWorkforceRecords &&
-            !recordOrganizationId &&
-            (
-              record.enterpriseId ===
-                organizationId ||
-              record.rootEnterpriseId ===
-                organizationId
-            )
-          ) {
-            return true;
-          }
-
-          return (
-            isEnterprise &&
-            !hasDescendantWorkforceRecords &&
-            !recordOrganizationId &&
-            Boolean(
-              organizationCompanyId
-            ) &&
-            normalizeValue(
-              record.companyId
-            ) ===
-              organizationCompanyId
-          );
-        }
+        (record) =>
+          isWorkforceRecordInOrganizationScope({
+            record,
+            organization,
+            organizationMap,
+          })
       );
 
     const workforce =
@@ -2901,38 +3037,6 @@ const OperatorsTab = ({
       organizationsLoadedAt,
     ]);
 
-  const scopeDescription =
-    useMemo(() => {
-      if (
-        !currentOrganization
-      ) {
-        return "";
-      }
-
-      if (
-        isMinistry(
-          currentOrganization
-        )
-      ) {
-        return "Showing every registered operator and its child organizations.";
-      }
-
-      if (
-        isCompany(
-          currentOrganization
-        )
-      ) {
-        return `Showing ${
-          currentOrganization.name ||
-          "your organization"
-        } and its child organizations only.`;
-      }
-
-      return "";
-    }, [
-      currentOrganization,
-    ]);
-
   const toggleSort = (
     key
   ) => {
@@ -3174,12 +3278,6 @@ const OperatorsTab = ({
         )}
       />
 
-      {scopeDescription && (
-        <p className="-mt-4 mb-5 text-sm text-slate-500">
-          {scopeDescription}
-        </p>
-      )}
-
       {loadError && (
         <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
           <p className="text-sm font-medium text-red-700">
@@ -3277,7 +3375,7 @@ const OperatorsTab = ({
 
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1160px]">
+          <table className="w-full min-w-[1060px]">
             <thead>
               <tr className="border-b border-slate-200">
                 <th
@@ -3298,10 +3396,6 @@ const OperatorsTab = ({
                     toggleSort
                   }
                 />
-
-                <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-slate-500">
-                  Children
-                </th>
 
                 <SortHeader
                   label="Latest Production"
@@ -3377,9 +3471,7 @@ const OperatorsTab = ({
               {loading ? (
                 <tr>
                   <td
-                    colSpan={
-                      10
-                    }
+                    colSpan={9}
                     className="px-4 py-14 text-center"
                   >
                     <span className="mx-auto block h-6 w-6 animate-spin rounded-full border-2 border-navy-200 border-t-navy-700" />
@@ -3509,16 +3601,6 @@ const OperatorsTab = ({
                                 )}
                               </div>
                             </div>
-                          </td>
-
-                          <td className="whitespace-nowrap px-4 py-3">
-                            {formatNumber(
-                              operator.branchCount
-                            )}{" "}
-                            {operator.branchCount ===
-                            1
-                              ? "child"
-                              : "children"}
                           </td>
 
                           <td className="whitespace-nowrap px-4 py-3 tabular-nums">
@@ -3660,22 +3742,10 @@ const OperatorsTab = ({
                         {isExpanded && (
                           <tr className="bg-slate-50/60">
                             <td
-                              colSpan={
-                                10
-                              }
+                              colSpan={9}
                               className="px-4 py-3"
                             >
                               <div className="ml-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
-                                <div className="border-b border-slate-200 px-4 py-3">
-                                  <p className="text-sm font-semibold text-navy-900">
-                                    Direct child organizations
-                                  </p>
-
-                                  <p className="mt-0.5 text-xs text-slate-500">
-                                    Each child includes its own records and the totals of every organization beneath it.
-                                  </p>
-                                </div>
-
                                 {operatorBranches.length >
                                 0 ? (
                                   <Table
@@ -3897,9 +3967,7 @@ const OperatorsTab = ({
               ) : (
                 <tr>
                   <td
-                    colSpan={
-                      10
-                    }
+                    colSpan={9}
                     className="px-4 py-14 text-center"
                   >
                     <Building2 className="mx-auto h-8 w-8 text-slate-300" />
