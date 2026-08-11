@@ -460,6 +460,7 @@ const resolveRecordOrganization = (
 ) => {
   const candidateIds = [
     record?.organizationId,
+    record?.orgId,
     record?.branchId,
     record?.enterpriseId,
     record?.rootEnterpriseId,
@@ -563,6 +564,133 @@ const toNumber = (
   )
     ? numericValue
     : 0;
+};
+
+
+/*
+ * Workforce records have existed in a few field shapes while the dedicated
+ * Workforce module has evolved. Normalise those shapes here so Overview uses
+ * the same headcount source as Operators and Operator Detail.
+ *
+ * A workforce record still belongs to exactly one organisation. The overview
+ * later rolls those direct organisation records up to the enterprise and
+ * ministry sector without replacing parent-level workforce with child data.
+ */
+const getWorkforceEmployeeBreakdown = (
+  record
+) => {
+  const totalValue =
+    record?.totalEmployees ??
+    record?.totalWorkforce ??
+    record?.headcount ??
+    record?.employeeCount ??
+    record?.total;
+
+  const localValue =
+    record?.localEmployees ??
+    record?.localWorkforce ??
+    record?.local;
+
+  const expatriateValue =
+    record?.expatriateEmployees ??
+    record?.expatEmployees ??
+    record?.expatWorkforce ??
+    record?.expat;
+
+  const hasTotal =
+    totalValue !== null &&
+    totalValue !== undefined &&
+    totalValue !== "";
+
+  const hasLocal =
+    localValue !== null &&
+    localValue !== undefined &&
+    localValue !== "";
+
+  const hasExpat =
+    expatriateValue !== null &&
+    expatriateValue !== undefined &&
+    expatriateValue !== "";
+
+  const savedTotal =
+    hasTotal
+      ? toNumber(
+          totalValue
+        )
+      : 0;
+
+  let local =
+    hasLocal
+      ? toNumber(
+          localValue
+        )
+      : 0;
+
+  let expat =
+    hasExpat
+      ? toNumber(
+          expatriateValue
+        )
+      : 0;
+
+  /*
+   * The Workforce form derives expatriates from total minus local. Rebuild the
+   * missing side for older records so valid historical workforce is not dropped
+   * from ministry totals merely because that derived field was not persisted.
+   */
+  if (
+    hasTotal &&
+    hasLocal &&
+    !hasExpat
+  ) {
+    expat =
+      Math.max(
+        savedTotal -
+          local,
+        0
+      );
+  }
+
+  if (
+    hasTotal &&
+    !hasLocal &&
+    hasExpat
+  ) {
+    local =
+      Math.max(
+        savedTotal -
+          expat,
+        0
+      );
+  }
+
+  /*
+   * Local + expatriate is the composition source of truth shown throughout the
+   * dashboard. savedTotal is retained only when it is larger, which protects
+   * older records that have a total but incomplete composition fields.
+   */
+  const total =
+    Math.max(
+      savedTotal,
+      local +
+        expat
+    );
+
+  return {
+    total,
+    local,
+    expat,
+  };
+};
+
+const getWorkforceVacancies = (
+  record
+) => {
+  return toNumber(
+    record?.vacancies ??
+      record?.currentVacancies ??
+      record?.openVacancies
+  );
 };
 
 const toDate = (
@@ -1798,18 +1926,77 @@ const Overviews = () => {
         isMinistryUser
       ) {
         /*
-         * Ministry users see every operator organization and all children.
+         * A Ministry aggregates operators in its own sector, not from the
+         * Ministry organisation itself. Every matching enterprise and all of
+         * its descendants remain visible so regional and branch workforce can
+         * roll into the sector totals.
          *
-         * Region and sector do not reduce the ministry's visibility.
+         * industrySegment is applied only when the Ministry/user profile
+         * actually defines one. This keeps the rule compatible with Ministries
+         * that oversee an entire sector.
          */
+        const ministrySector =
+          normalizeValue(
+            currentOrganization.sector ||
+            currentUserProfile.sector
+          );
+
+        const ministryIndustrySegment =
+          normalizeValue(
+            currentOrganization.industrySegment ||
+            currentUserProfile.industrySegment
+          );
+
         return organizations.filter(
-          (organization) =>
-            normalizeStatus(
-              organization
-                .organizationCategory ||
-              organization.category
-            ) !==
-            "ministry"
+          (organization) => {
+            if (
+              getOrganizationCategory(
+                organization
+              ) ===
+                "ministry"
+            ) {
+              return false;
+            }
+
+            const enterpriseId =
+              getEnterpriseIdForOrganization(
+                organization,
+                organizationMap
+              );
+
+            const enterprise =
+              organizationMap.get(
+                enterpriseId
+              ) ||
+              organization;
+
+            const organizationSector =
+              normalizeValue(
+                organization.sector ||
+                enterprise.sector
+              );
+
+            const organizationIndustrySegment =
+              normalizeValue(
+                organization.industrySegment ||
+                enterprise.industrySegment
+              );
+
+            const matchesSector =
+              !ministrySector ||
+              organizationSector ===
+                ministrySector;
+
+            const matchesIndustrySegment =
+              !ministryIndustrySegment ||
+              organizationIndustrySegment ===
+                ministryIndustrySegment;
+
+            return (
+              matchesSector &&
+              matchesIndustrySegment
+            );
+          }
         );
       }
 
@@ -1844,6 +2031,7 @@ const Overviews = () => {
       currentOrganization,
       currentUserProfile,
       isMinistryUser,
+      organizationMap,
       organizations,
     ]);
 
@@ -2550,30 +2738,19 @@ const Overviews = () => {
               ) ||
               organization;
 
-            const totalEmployees =
-              toNumber(
-                record.totalEmployees
+            const employeeBreakdown =
+              getWorkforceEmployeeBreakdown(
+                record
               );
+
+            const totalEmployees =
+              employeeBreakdown.total;
 
             const localEmployees =
-              Math.min(
-                toNumber(
-                  record.localEmployees
-                ),
-                totalEmployees
-              );
+              employeeBreakdown.local;
 
-            /*
-             * Expatriates are calculated in the Workforce form as total minus
-             * local. Repeating that rule here keeps every dashboard consistent
-             * even when an older record has a stale stored expatriate value.
-             */
             const expatriateEmployees =
-              Math.max(
-                totalEmployees -
-                  localEmployees,
-                0
-              );
+              employeeBreakdown.expat;
 
             return {
               ...record,
@@ -2595,13 +2772,15 @@ const Overviews = () => {
               normalizedName:
                 enterprise.normalizedName ||
                 organization.normalizedName,
+              total:
+                totalEmployees,
               local:
                 localEmployees,
               expat:
                 expatriateEmployees,
               vacancies:
-                toNumber(
-                  record.vacancies
+                getWorkforceVacancies(
+                  record
                 ),
               updatedAt:
                 toDate(
@@ -2644,10 +2823,22 @@ const Overviews = () => {
                 record.name,
               normalizedName:
                 record.normalizedName,
+              total: 0,
               local: 0,
               expat: 0,
               vacancies: 0,
+              organizationIds:
+                new Set(),
             };
+
+          /*
+           * Every record represents workforce directly assigned to one
+           * organisation. Summing all records under the same enterprise gives:
+           * enterprise direct workforce + regional direct workforce + branch
+           * workforce, without discarding any hierarchy level.
+           */
+          current.total +=
+            record.total;
 
           current.local +=
             record.local;
@@ -2657,6 +2848,14 @@ const Overviews = () => {
 
           current.vacancies +=
             record.vacancies;
+
+          if (
+            record.organizationId
+          ) {
+            current.organizationIds.add(
+              record.organizationId
+            );
+          }
 
           operatorTotals.set(
             operatorId,
@@ -2668,18 +2867,32 @@ const Overviews = () => {
       const operators =
         Array.from(
           operatorTotals.values()
-        ).sort(
-          (
-            first,
-            second
-          ) =>
-            second.local +
-            second.expat -
+        )
+          .map(
+            (operator) => ({
+              ...operator,
+              /*
+               * Composition totals are authoritative for dashboard display.
+               * The saved total is kept as a floor for older incomplete rows.
+               */
+              total:
+                Math.max(
+                  operator.total,
+                  operator.local +
+                    operator.expat
+                ),
+              organizationCount:
+                operator.organizationIds.size,
+            })
+          )
+          .sort(
             (
-              first.local +
-              first.expat
-            )
-        );
+              first,
+              second
+            ) =>
+              second.total -
+              first.total
+          );
 
       const sector =
         operators.reduce(
@@ -2687,6 +2900,9 @@ const Overviews = () => {
             totals,
             operator
           ) => ({
+            total:
+              totals.total +
+              operator.total,
             local:
               totals.local +
               operator.local,
@@ -2698,6 +2914,7 @@ const Overviews = () => {
               operator.vacancies,
           }),
           {
+            total: 0,
             local: 0,
             expat: 0,
             vacancies: 0,
@@ -2705,7 +2922,20 @@ const Overviews = () => {
         );
 
       return {
-        sector,
+        sector: {
+          ...sector,
+          /*
+           * local + expat remains the cleanest composition total. Keep the
+           * summed direct-record total as a floor for legacy rows whose
+           * composition was incomplete.
+           */
+          total:
+            Math.max(
+              sector.total,
+              sector.local +
+                sector.expat
+            ),
+        },
         operators,
       };
     }, [
@@ -3135,14 +3365,62 @@ const Overviews = () => {
                 0
               );
 
+            /*
+             * "Operators active" describes registered operator presence in the
+             * region, not only operators that have already submitted a report.
+             *
+             * Resolve every visible organisation assigned to this region back
+             * to its root enterprise. A Shell regional or branch organisation
+             * therefore causes "Shell" to appear under Western even before that
+             * child has submitted its first report.
+             */
             const operators =
               new Set(
-                submittedReports.map(
-                  (report) =>
-                    report.enterprise?.name ||
-                    report.operatorName ||
-                    report.organizationName
-                )
+                visibleOrganizations
+                  .filter(
+                    (organization) => {
+                      const status =
+                        normalizeStatus(
+                          organization.status
+                        );
+
+                      const organizationRegionId =
+                        getOrganizationRegionId(
+                          organization,
+                          organizationMap
+                        );
+
+                      return (
+                        organizationRegionId ===
+                          regionId &&
+                        status !==
+                          "archived" &&
+                        status !==
+                          "inactive"
+                      );
+                    }
+                  )
+                  .map(
+                    (organization) => {
+                      const enterpriseId =
+                        getEnterpriseIdForOrganization(
+                          organization,
+                          organizationMap
+                        );
+
+                      const enterprise =
+                        organizationMap.get(
+                          enterpriseId
+                        );
+
+                      return (
+                        enterprise?.name ||
+                        organization.name ||
+                        ""
+                      );
+                    }
+                  )
+                  .filter(Boolean)
               );
 
             return {
@@ -4253,7 +4531,7 @@ const Overviews = () => {
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Card className="p-5">
               <h3 className="mb-4 text-sm font-semibold text-slate-900">
-                Sector-wide Local vs Expat
+                Sector-wide Workforce
               </h3>
 
               {workforcePercentages.totalWorkforce >
@@ -4311,19 +4589,31 @@ const Overviews = () => {
 
                       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
                         <span className="text-3xl font-semibold text-slate-900">
-                          {formatPercentage(
-                            workforcePercentages.localWorkforcePercentage
+                          {formatNumber(
+                            workforce.sector.total
                           )}
                         </span>
 
                         <span className="mt-1 text-xs text-slate-500">
-                          Local
+                          total workers
                         </span>
                       </div>
                     </div>
                   </div>
 
-                  <div className="mt-4 grid grid-cols-2 gap-3">
+                  <div className="mt-4 grid grid-cols-3 gap-3">
+                    <div className="rounded-lg bg-slate-50 p-3 text-center">
+                      <p className="text-xs text-slate-500">
+                        Total Workforce
+                      </p>
+
+                      <p className="mt-1 text-lg font-semibold text-slate-900">
+                        {formatNumber(
+                          workforce.sector.total
+                        )}
+                      </p>
+                    </div>
+
                     <div className="rounded-lg bg-slate-50 p-3 text-center">
                       <p className="text-xs text-slate-500">
                         Local
@@ -4332,6 +4622,12 @@ const Overviews = () => {
                       <p className="mt-1 text-lg font-semibold text-slate-900">
                         {formatNumber(
                           workforce.sector.local
+                        )}
+                      </p>
+
+                      <p className="mt-0.5 text-[10px] text-slate-400">
+                        {formatPercentage(
+                          workforcePercentages.localWorkforcePercentage
                         )}
                       </p>
                     </div>
@@ -4344,6 +4640,12 @@ const Overviews = () => {
                       <p className="mt-1 text-lg font-semibold text-slate-900">
                         {formatNumber(
                           workforce.sector.expat
+                        )}
+                      </p>
+
+                      <p className="mt-0.5 text-[10px] text-slate-400">
+                        {formatPercentage(
+                          workforcePercentages.expatWorkforcePercentage
                         )}
                       </p>
                     </div>
@@ -4391,17 +4693,30 @@ const Overviews = () => {
                               </span>
                             </div>
 
-                            <span className="shrink-0 text-right text-xs tabular-nums text-slate-500">
-                              {formatPercentage(
-                                percentages.localWorkforcePercentage
-                              )}{" "}
-                              local
-                              {operator.vacancies > 0
-                                ? ` · ${formatNumber(
-                                    operator.vacancies
-                                  )} vacancies`
-                                : ""}
-                            </span>
+                            <div className="shrink-0 text-right">
+                              <p className="text-xs font-semibold tabular-nums text-slate-700">
+                                {formatNumber(
+                                  operator.total
+                                )}{" "}
+                                total
+                              </p>
+
+                              <p className="mt-0.5 text-[11px] tabular-nums text-slate-500">
+                                {formatNumber(
+                                  operator.local
+                                )}{" "}
+                                local ·{" "}
+                                {formatNumber(
+                                  operator.expat
+                                )}{" "}
+                                expat
+                                {operator.vacancies > 0
+                                  ? ` · ${formatNumber(
+                                      operator.vacancies
+                                    )} vacancies`
+                                  : ""}
+                              </p>
+                            </div>
                           </div>
 
                           <div className="flex h-7 overflow-hidden rounded-md bg-slate-100">
