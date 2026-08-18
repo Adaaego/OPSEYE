@@ -687,7 +687,12 @@ const SideBar = ({
             : "lg:ml-60"
         }`}
       >
-        <div className="mx-auto max-w-[1800px] px-4 py-6 sm:px-6 lg:px-10 lg:py-8">
+        {/*
+         * Pages own their horizontal gutters. Keeping the shell full-width
+         * prevents a second layer of padding and removes the large empty band
+         * that previously grew between the sidebar and page content.
+         */}
+        <div className="w-full py-6 lg:py-7">
           {/* Every page receives the signed-in user so it can
               load the correct organization-scoped information. */}
           {/*

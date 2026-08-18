@@ -2,6 +2,7 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -46,6 +47,12 @@ import {
   auth,
   db,
 } from "../../firebase/firebase";
+
+import ExportPdfButton from "../ui/ExportPdfButton";
+
+import {
+  buildPdfFilename,
+} from "../../lib/pdf-export";
 
 import {
   STATUS_STYLES,
@@ -1522,6 +1529,14 @@ const ProductionOperatorTick = ({
 };
 
 const Overviews = () => {
+  /*
+   * The PDF exporter captures this dashboard container exactly as it is
+   * currently rendered. That means the exported document reflects the
+   * signed-in user's scope and the live data visible on this page.
+   */
+  const overviewPdfRef =
+    useRef(null);
+
   const [
     currentUserProfile,
     setCurrentUserProfile,
@@ -3581,6 +3596,19 @@ const Overviews = () => {
         )?.name ||
         "Company view";
 
+  /*
+   * Keep exported filenames useful when they are shared by email or stored
+   * outside OPSEYE. The scope is included so Ministry and operator exports
+   * cannot be confused with each other.
+   */
+  const overviewPdfFilename =
+    buildPdfFilename({
+      pageName:
+        "Overview",
+      scopeName:
+        scopeLabel,
+    });
+
   if (loading) {
     return (
       <section className="flex min-h-[70vh] items-center justify-center bg-slate-50">
@@ -3593,9 +3621,21 @@ const Overviews = () => {
   }
 
   return (
-    <section className="min-h-full bg-slate-50 p-4 sm:p-6 lg:p-8 xl:p-10">
-      <div className="mx-auto max-w-[1800px]">
-        <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
+    <section
+      ref={
+        overviewPdfRef
+      }
+      className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6"
+    >
+      {/*
+       * The page itself owns the visible dashboard gutter. Capturing this
+       * outer section makes the PDF start and end exactly where the live
+       * Overview page does instead of trimming away its screen padding.
+       */}
+      <div className="w-full">
+        <header
+          className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end"
+        >
           <div>
             <div className="mb-2 flex flex-wrap items-center gap-3">
               <span
@@ -3625,15 +3665,29 @@ const Overviews = () => {
             </p>
           </div>
 
-          <p className="text-xs font-medium text-slate-400">
-            {formatUpdatedAt(
-              updatedAt
-            )}
-          </p>
+          <div className="flex flex-wrap items-center gap-3 sm:justify-end">
+            <p className="text-xs font-medium text-slate-400">
+              {formatUpdatedAt(
+                updatedAt
+              )}
+            </p>
+
+            <ExportPdfButton
+              targetRef={
+                overviewPdfRef
+              }
+              filename={
+                overviewPdfFilename
+              }
+            />
+          </div>
         </header>
 
         {loadError && (
-          <div className="mb-6 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div
+            data-pdf-ignore="true"
+            className="mb-6 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+          >
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
 
             <p>
@@ -3642,7 +3696,9 @@ const Overviews = () => {
           </div>
         )}
 
-        <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div
+          className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
+        >
           <KpiCard
             label="Total Daily Production"
             value={
@@ -3710,7 +3766,9 @@ const Overviews = () => {
           />
         </div>
 
-        <div className="mb-8">
+        <div
+          className="mb-8"
+        >
           <SectionHeader
             description={
               latestProductionDateLabel
@@ -3844,7 +3902,9 @@ const Overviews = () => {
           </Card>
         </div>
 
-        <div className="mb-8">
+        <div
+          className="mb-8"
+        >
           <SectionHeader
             description={
               latestProductionDateLabel
@@ -4202,7 +4262,9 @@ const Overviews = () => {
           </div>
         </div>
 
-        <div className="mb-8">
+        <div
+          className="mb-8"
+        >
           <SectionHeader description="Every expected report task scheduled for today appears here.">
             Today&apos;s Submission Status
           </SectionHeader>
@@ -4385,7 +4447,9 @@ const Overviews = () => {
           </Card>
         </div>
 
-        <div className="mb-8">
+        <div
+          className="mb-8"
+        >
           <SectionHeader description="Performance is grouped using each organization's Firestore regionId.">
             Regional Performance
           </SectionHeader>

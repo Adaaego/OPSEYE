@@ -1,18 +1,17 @@
-import html2canvas from "html2canvas";
+import html2canvas from "html2canvas-pro";
 import jsPDF from "jspdf";
 
 /*
- * Converts a dashboard page or section into a multi-page PDF.
+ * Export an OPSEYE page exactly as it is rendered in the dashboard.
  *
- * Each page passes the DOM element it wants exported. Elements marked with
- * `data-pdf-ignore="true"` are omitted from the capture.
+ * The page component itself is the capture target, so the sidebar is never
+ * included. We deliberately do NOT change the cloned browser width and we do
+ * NOT use scrollWidth to size the PDF. Both of those behaviours can cause
+ * responsive charts to reflow or make SVG labels extend the export canvas.
  */
 export const exportElementToPdf = async ({
   element,
   filename = "OPSEYE-report.pdf",
-  orientation = "portrait",
-  pageFormat = "a4",
-  margin = 24,
   backgroundColor = "#f8fafc",
 } = {}) => {
   if (!element) {
@@ -22,8 +21,8 @@ export const exportElementToPdf = async ({
   }
 
   /*
-   * Wait for two paint cycles so charts and recently-filtered UI finish
-   * rendering before the PDF capture begins.
+   * Give React/Recharts two paint cycles to finish drawing the current screen
+   * before html2canvas reads it.
    */
   await new Promise((resolve) => {
     window.requestAnimationFrame(() => {
@@ -31,153 +30,148 @@ export const exportElementToPdf = async ({
     });
   });
 
+  const liveRect =
+    element.getBoundingClientRect();
+
+  if (
+    !liveRect.width ||
+    !liveRect.height
+  ) {
+    throw new Error(
+      "The dashboard export area has no visible size."
+    );
+  }
+
+  const captureScale = 2;
+
   const canvas = await html2canvas(
     element,
     {
-      scale: 2,
+      scale: captureScale,
       useCORS: true,
       allowTaint: false,
-      backgroundColor,
       logging: false,
-
-      ignoreElements: (node) =>
-        node?.getAttribute?.(
-          "data-pdf-ignore"
-        ) === "true",
+      backgroundColor,
 
       /*
-       * Capture the full dashboard area rather than only the visible browser
-       * viewport so long pages can continue across several PDF pages.
+       * Preserve the real browser viewport. Do not substitute the element's
+       * scrollWidth as windowWidth: that can trigger different Tailwind
+       * breakpoints and distort ResponsiveContainer/Recharts output.
        */
       windowWidth:
-        element.scrollWidth,
+        window.innerWidth,
       windowHeight:
-        element.scrollHeight,
+        window.innerHeight,
+
+      scrollX:
+        -window.scrollX,
+      scrollY:
+        -window.scrollY,
+
+      /*
+       * Screen-only controls should disappear from the PDF without changing
+       * the surrounding layout. visibility:hidden preserves their occupied
+       * space, unlike removing the node completely.
+       */
+      onclone: (clonedDocument) => {
+        clonedDocument
+          .querySelectorAll(
+            '[data-pdf-ignore="true"]'
+          )
+          .forEach((node) => {
+            node.style.visibility =
+              "hidden";
+          });
+
+        /*
+         * Animations/transitions can leave a cloned dashboard between frames.
+         * Freeze them for a stable, screen-faithful capture.
+         */
+        const style =
+          clonedDocument.createElement(
+            "style"
+          );
+
+        style.textContent = `
+          *, *::before, *::after {
+            animation: none !important;
+            transition: none !important;
+            caret-color: transparent !important;
+          }
+        `;
+
+        clonedDocument.head.appendChild(
+          style
+        );
+      },
     }
   );
 
+  if (
+    !canvas.width ||
+    !canvas.height
+  ) {
+    throw new Error(
+      "The dashboard could not be rendered for PDF export."
+    );
+  }
+
+  /*
+   * Derive the PDF dimensions from the rendered canvas itself. Dividing by
+   * captureScale gives us the exact CSS-pixel proportions that were visible
+   * in the browser, without picking up overflow from chart ticks or SVG text.
+   */
+  const renderedCssWidth =
+    canvas.width /
+    captureScale;
+
+  const renderedCssHeight =
+    canvas.height /
+    captureScale;
+
+  const CSS_PIXEL_TO_POINT =
+    72 / 96;
+
+  const pdfWidth =
+    renderedCssWidth *
+    CSS_PIXEL_TO_POINT;
+
+  const pdfHeight =
+    renderedCssHeight *
+    CSS_PIXEL_TO_POINT;
+
+  /*
+   * One continuous custom-sized PDF page gives the same visual result as the
+   * dashboard screen: no A4 slicing, no broken charts and no artificial gaps.
+   */
   const pdf = new jsPDF({
-    orientation,
+    orientation:
+      pdfWidth > pdfHeight
+        ? "landscape"
+        : "portrait",
     unit: "pt",
-    format: pageFormat,
+    format: [
+      pdfWidth,
+      pdfHeight,
+    ],
     compress: true,
   });
 
-  const pageWidth =
-    pdf.internal.pageSize.getWidth();
-
-  const pageHeight =
-    pdf.internal.pageSize.getHeight();
-
-  const usableWidth =
-    pageWidth -
-    margin * 2;
-
-  const usableHeight =
-    pageHeight -
-    margin * 2;
-
-  const renderedWidth =
-    usableWidth;
-
-  /*
-   * Convert the printable PDF height into source-canvas pixels. The captured
-   * dashboard can then be sliced into readable A4-sized pages.
-   */
-  const sourcePageHeight =
-    (
-      usableHeight *
-      canvas.width
-    ) /
-    renderedWidth;
-
-  let sourceY = 0;
-  let pageIndex = 0;
-
-  while (
-    sourceY <
-    canvas.height
-  ) {
-    const sliceHeight =
-      Math.min(
-        sourcePageHeight,
-        canvas.height -
-          sourceY
-      );
-
-    const pageCanvas =
-      document.createElement(
-        "canvas"
-      );
-
-    pageCanvas.width =
-      canvas.width;
-
-    pageCanvas.height =
-      Math.ceil(
-        sliceHeight
-      );
-
-    const context =
-      pageCanvas.getContext(
-        "2d"
-      );
-
-    if (!context) {
-      throw new Error(
-        "The browser could not prepare the PDF canvas."
-      );
-    }
-
-    context.drawImage(
-      canvas,
-      0,
-      sourceY,
-      canvas.width,
-      sliceHeight,
-      0,
-      0,
-      canvas.width,
-      sliceHeight
+  const imageData =
+    canvas.toDataURL(
+      "image/png"
     );
 
-    const imageData =
-      pageCanvas.toDataURL(
-        "image/jpeg",
-        0.95
-      );
-
-    const sliceRenderedHeight =
-      (
-        sliceHeight *
-        renderedWidth
-      ) /
-      canvas.width;
-
-    if (
-      pageIndex >
-      0
-    ) {
-      pdf.addPage();
-    }
-
-    pdf.addImage(
-      imageData,
-      "JPEG",
-      margin,
-      margin,
-      renderedWidth,
-      sliceRenderedHeight,
-      undefined,
-      "FAST"
-    );
-
-    sourceY +=
-      sliceHeight;
-
-    pageIndex +=
-      1;
-  }
+  pdf.addImage(
+    imageData,
+    "PNG",
+    0,
+    0,
+    pdfWidth,
+    pdfHeight,
+    undefined,
+    "FAST"
+  );
 
   const resolvedFilename =
     filename
@@ -195,7 +189,7 @@ export const exportElementToPdf = async ({
  * Produces consistent filenames across OPSEYE.
  *
  * Example:
- * OPSEYE_Shell_Western_Region_Operators_2026-08-17.pdf
+ * OPSEYE_Energy_ministry_view_Overview_2026-08-18.pdf
  */
 export const buildPdfFilename = ({
   pageName = "Report",
@@ -238,8 +232,12 @@ export const buildPdfFilename = ({
 
   return [
     "OPSEYE",
-    cleanPart(scopeName),
-    cleanPart(pageName),
+    cleanPart(
+      scopeName
+    ),
+    cleanPart(
+      pageName
+    ),
     dateLabel,
   ]
     .filter(Boolean)
