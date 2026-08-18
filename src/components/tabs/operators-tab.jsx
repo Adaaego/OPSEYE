@@ -1,3 +1,4 @@
+
 import {
   Fragment,
   useEffect,
@@ -31,7 +32,6 @@ import {
 
 import {
   Card,
-  PageHeader,
   StatusBadge,
   Table,
   EmptyCell,
@@ -71,6 +71,13 @@ const COMPANY_FUEL_PRICES_COLLECTION =
 
 const WORKFORCE_COLLECTION =
   "workforce";
+
+/*
+ * Match the Overview heading treatment so all top-level Ministry pages use
+ * one visual language.
+ */
+const NAVY = "#0F172A";
+const ICON_BLUE = "#C8D5E8";
 
 /*
  * These statuses mean a scheduled report has been submitted.
@@ -3037,6 +3044,20 @@ const OperatorsTab = ({
       organizationsLoadedAt,
     ]);
 
+
+  /*
+   * Use the same scope-pill logic as Overview. Ministry accounts show the
+   * sector Ministry view; operator accounts show the organization currently
+   * controlling the dashboard scope.
+   */
+  const scopeLabel =
+    isMinistry(
+      currentOrganization
+    )
+      ? `${currentOrganization?.sector || currentUser?.profile?.sector || "Sector"} ministry view`
+      : currentOrganization?.name ||
+        "Company view";
+
   const toggleSort = (
     key
   ) => {
@@ -3219,6 +3240,7 @@ const OperatorsTab = ({
   ) {
     return (
       <div
+        className="w-full"
         style={{
           viewTransitionName:
             "operators-content",
@@ -3264,19 +3286,57 @@ const OperatorsTab = ({
   }
 
   return (
-    <div
+    <section
+      className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6"
       style={{
         viewTransitionName:
           "operators-content",
       }}
     >
-      <PageHeader
-        title="Operators"
-        timestamp={formatUpdatedAt(
-          updatedAt ||
-            dataUpdatedAt
-        )}
-      />
+      {/*
+       * Match Overview exactly: accent bar + title + scope pill + description,
+       * with the data timestamp aligned on the right.
+       */}
+      <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
+        <div>
+          <div className="mb-2 flex flex-wrap items-center gap-3">
+            <span
+              className="h-6 w-1.5 rounded-full"
+              style={{
+                backgroundColor:
+                  NAVY,
+              }}
+            />
+
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+              Operators
+            </h1>
+
+            <span
+              className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
+              style={{
+                backgroundColor:
+                  ICON_BLUE,
+                color:
+                  NAVY,
+              }}
+            >
+              {scopeLabel}
+            </span>
+          </div>
+
+          <p className="text-sm text-slate-500">
+            Monitor operator production, estimated revenue, reporting compliance and workforce performance.
+          </p>
+        </div>
+
+        <p className="text-xs font-medium text-slate-400">
+          {formatUpdatedAt(
+            updatedAt ||
+              dataUpdatedAt
+          )}
+        </p>
+      </header>
 
       {loadError && (
         <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
@@ -3995,7 +4055,7 @@ const OperatorsTab = ({
           } operators
         </div>
       </Card>
-    </div>
+    </section>
   );
 };
 

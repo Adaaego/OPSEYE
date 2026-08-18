@@ -1,4 +1,3 @@
-
 import {
   useEffect,
   useMemo,
@@ -22,7 +21,6 @@ import {
   Banknote,
   Building2,
   ClipboardList,
-  Download,
   Eye,
   Factory,
   Filter,
@@ -40,7 +38,6 @@ import {
 } from "../../lib/calculation-metrics";
 
 import {
-  PageHeader,
   StatusBadge,
   Table,
   EmptyCell,
@@ -50,6 +47,12 @@ import {
 import {
   Button,
 } from "../ui/Button";
+
+import ExportPdfButton from "../ui/ExportPdfButton";
+
+import {
+  buildPdfFilename,
+} from "../../lib/pdf-export";
 
 /*
  * Card, SectionHeader and KpiCard are defined locally so the page can
@@ -1509,8 +1512,15 @@ const OperatorDetail = ({
   backLabel = "Back to Operators",
   onBack = () => {},
   onSelectOrganization = null,
-  onExport = null,
 }) => {
+  /*
+   * Every enterprise, region and branch detail page uses this same component.
+   * Capturing the outer page container therefore gives every hierarchy level
+   * the same screen-faithful PDF export without duplicating export logic.
+   */
+  const detailPdfRef =
+    useRef(null);
+
   const [
     reportingSearch,
     setReportingSearch,
@@ -3109,6 +3119,19 @@ const OperatorDetail = ({
       operator
     );
 
+  /*
+   * Include both the organization name and hierarchy profile in the exported
+   * filename so a Ministry can distinguish enterprise, regional and branch
+   * PDFs after they have been downloaded or emailed.
+   */
+  const detailPdfFilename =
+    buildPdfFilename({
+      pageName:
+        profileLabel,
+      scopeName:
+        operatorName,
+    });
+
   const localWorkforce =
     Number(
       workforce.local
@@ -3256,17 +3279,21 @@ const OperatorDetail = ({
       ? CHART_COLORS.expat
       : "#B7791F";
 
-  const handleExport =
-    () => {
-      onExport?.(
-        operator
-      );
-    };
 
   return (
-    <div>
+    <section
+      ref={
+        detailPdfRef
+      }
+      className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6"
+    >
+      {/*
+       * Navigation is useful in the live dashboard but does not belong in the
+       * shared/exported operator profile.
+       */}
       <button
         type="button"
+        data-pdf-ignore="true"
         onClick={
           onBack
         }
@@ -3276,52 +3303,95 @@ const OperatorDetail = ({
         {backLabel}
       </button>
 
-      <p
-        className="mb-2 text-xs font-semibold uppercase tracking-widest"
-        style={{
-          color: NAVY,
-        }}
-      >
-        {profileLabel}
-      </p>
-
-      <div className="mb-6 flex items-start gap-4 border-b border-slate-200 pb-6">
-        <OperatorAvatar
-          name={
-            operatorName
-          }
-          logoUrl={
-            operator.logoUrl
-          }
-        />
-
-        <div className="min-w-0 flex-1">
-          <PageHeader
-            title={
+      {/*
+       * Match the Overview page heading treatment: dark vertical accent,
+       * strong page title, scope pill, short description and timestamp/action
+       * aligned on the right.
+       */}
+      <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
+        <div className="flex min-w-0 items-start gap-4">
+          <OperatorAvatar
+            name={
               operatorName
             }
-            timestamp={formatUpdatedAt(
-              detailUpdatedAt
-            )}
-            action={
-              onExport ? (
-                <Button
-                  variant="secondary"
-                  onClick={
-                    handleExport
-                  }
-                >
-                  <Download className="h-4 w-4" />
-                  Export
-                </Button>
-              ) : null
+            logoUrl={
+              operator.logoUrl
             }
           />
 
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap items-center gap-3">
+              <span
+                className="h-6 w-1.5 shrink-0 rounded-full"
+                style={{
+                  backgroundColor:
+                    NAVY,
+                }}
+              />
+
+              <h1 className="text-2xl font-semibold leading-tight tracking-tight text-slate-900">
+                {operatorName}
+              </h1>
+
+              <span
+                className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
+                style={{
+                  backgroundColor:
+                    ICON_BLUE,
+                  color:
+                    NAVY,
+                }}
+              >
+                {profileLabel}
+              </span>
+            </div>
+
+            <p className="text-sm text-slate-500">
+              Monitor production, estimated revenue, reporting compliance and workforce performance for this organization.
+            </p>
+          </div>
         </div>
+
+        <div className="flex flex-wrap items-center gap-3 sm:justify-end">
+          <p className="text-xs font-medium text-slate-400">
+            {formatUpdatedAt(
+              detailUpdatedAt
+            )}
+          </p>
+
+          <ExportPdfButton
+            targetRef={
+              detailPdfRef
+            }
+            filename={
+              detailPdfFilename
+            }
+          />
+        </div>
+      </header>
+
+      {/*
+       * The interactive filter bar is intentionally removed from exported PDFs.
+       * Instead, the PDF gets one concise context line showing the period that
+       * was used to calculate the figures currently visible on the page.
+       */}
+      <div
+        data-pdf-only="true"
+        className="mb-6 hidden rounded-lg border border-slate-200 bg-white px-4 py-3"
+      >
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Reporting period
+        </p>
+
+        <p className="mt-1 text-sm font-semibold text-slate-900">
+          {selectedPeriodLabel}
+        </p>
       </div>
 
-      <div className="mb-6 rounded-xl border border-slate-200/80 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      <div
+        data-pdf-remove="true"
+        className="mb-6 rounded-xl border border-slate-200/80 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]"
+      >
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex h-9 items-center gap-2 px-1 pr-2">
             <Filter className="h-4 w-4 text-slate-500" />
@@ -4202,7 +4272,10 @@ const OperatorDetail = ({
                 )} records
               </p>
 
-              <div className="flex items-center gap-2">
+              <div
+                data-pdf-remove="true"
+                className="flex items-center gap-2"
+              >
                 <Button
                   variant="outline"
                   size="sm"
@@ -4248,7 +4321,10 @@ const OperatorDetail = ({
           Child Organizations
         </SectionHeader>
 
-        <div className="mb-4 rounded-xl border border-slate-200/80 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        <div
+          data-pdf-remove="true"
+          className="mb-4 rounded-xl border border-slate-200/80 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]"
+        >
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex h-9 items-center gap-2 px-1 pr-2">
               <Filter className="h-4 w-4 text-slate-500" />
@@ -4773,7 +4849,7 @@ const OperatorDetail = ({
           )}
         </Card>
       </div>
-    </div>
+    </section>
   );
 };
 

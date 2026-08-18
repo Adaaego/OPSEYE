@@ -74,6 +74,11 @@ export const exportElementToPdf = async ({
        * space, unlike removing the node completely.
        */
       onclone: (clonedDocument) => {
+        /*
+         * `data-pdf-ignore` keeps the element's space but hides the element.
+         * This is useful for the Export button in a header because removing it
+         * could change the surrounding layout.
+         */
         clonedDocument
           .querySelectorAll(
             '[data-pdf-ignore="true"]'
@@ -81,6 +86,32 @@ export const exportElementToPdf = async ({
           .forEach((node) => {
             node.style.visibility =
               "hidden";
+          });
+
+        /*
+         * Filters and other interactive-only controls should not leave blank
+         * gaps in the exported report, so these elements are removed entirely.
+         */
+        clonedDocument
+          .querySelectorAll(
+            '[data-pdf-remove="true"]'
+          )
+          .forEach((node) => {
+            node.style.display =
+              "none";
+          });
+
+        /*
+         * Some information is useful only in the exported report. These nodes
+         * stay hidden on the live dashboard and are revealed in the PDF clone.
+         */
+        clonedDocument
+          .querySelectorAll(
+            '[data-pdf-only="true"]'
+          )
+          .forEach((node) => {
+            node.style.display =
+              "block";
           });
 
         /*
