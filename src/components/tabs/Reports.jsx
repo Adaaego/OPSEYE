@@ -68,7 +68,6 @@ import {
 
 import {
   Card,
-  PageHeader,
   SectionHeader,
   StatusBadge,
   EmptyCell,
@@ -100,6 +99,9 @@ const COMPANY_FUEL_PRICES_COLLECTION =
  */
 const NAVY =
   "#0F172A";
+
+const ICON_BLUE =
+  "#C8D5E8";
 
 const GOLD =
   "#B7791F";
@@ -4897,6 +4899,17 @@ const Reports = ({
       isMinistryUser,
     ]);
 
+
+  /*
+   * Use the same page-scope treatment as Overview and Operators so the
+   * dashboard has one consistent heading hierarchy across every tab.
+   */
+  const scopeLabel =
+    isMinistryUser
+      ? `${currentOrganization?.sector || currentUserProfile?.sector || "Sector"} ministry view`
+      : currentOrganization?.name ||
+        "Company view";
+
   const hasActiveFilters =
     Boolean(
       search ||
@@ -5107,15 +5120,56 @@ const Reports = ({
   }
 
   return (
-    <div>
-      <PageHeader
-        title="Reports"
-        timestamp={formatUpdatedAt(
-          updatedAt
-        )}
-        action={
-          filteredReports.length >
-          0 ? (
+    <section className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6">
+      {/*
+       * Match the Overview page exactly: one page-owned gutter, a dark vertical
+       * accent bar, scope pill, descriptive copy and actions aligned to the
+       * right. The global dashboard shell stays full-width, so this is the only
+       * horizontal spacing between the sidebar and the Reports content.
+       */}
+      <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
+        <div>
+          <div className="mb-2 flex flex-wrap items-center gap-3">
+            <span
+              className="h-6 w-1.5 rounded-full"
+              style={{
+                backgroundColor:
+                  NAVY,
+              }}
+            />
+
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+              Reports
+            </h1>
+
+            <span
+              className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
+              style={{
+                backgroundColor:
+                  ICON_BLUE,
+                color:
+                  NAVY,
+              }}
+            >
+              {scopeLabel}
+            </span>
+          </div>
+
+          <p className="text-sm text-slate-500">
+            {scopeDescription ||
+              "Monitor submitted reports, reporting compliance and workflow activity across your current organization scope."}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 sm:justify-end">
+          <p className="text-xs font-medium text-slate-400">
+            {formatUpdatedAt(
+              updatedAt
+            )}
+          </p>
+
+          {filteredReports.length >
+            0 && (
             <Button
               variant="secondary"
               onClick={
@@ -5127,15 +5181,9 @@ const Reports = ({
                 Export CSV
               </span>
             </Button>
-          ) : null
-        }
-      />
-
-      {scopeDescription && (
-        <p className="-mt-4 mb-5 text-sm text-slate-500">
-          {scopeDescription}
-        </p>
-      )}
+          )}
+        </div>
+      </header>
 
       {loadError && (
         <div className="mb-5 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -5972,7 +6020,7 @@ const Reports = ({
           }
         />
       )}
-    </div>
+    </section>
   );
 };
 
