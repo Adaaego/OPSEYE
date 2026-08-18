@@ -36,7 +36,6 @@ import {
 
 import {
   Card,
-  PageHeader,
   SearchInput,
   Select,
   StatusBadge,
@@ -76,6 +75,13 @@ const STATUS_OPTIONS = [
   "draft",
   "archived",
 ];
+
+/*
+ * Match the Overview page heading treatment so Forms follows the same
+ * dashboard-wide visual hierarchy.
+ */
+const NAVY = "#0F172A";
+const ICON_BLUE = "#C8D5E8";
 
 const FIELD_TYPE_ICONS = {
   text: Type,
@@ -818,15 +824,44 @@ const Forms = ({
 
   return (
     <>
-      <div className="min-h-full">
-        <PageHeader title="Forms" />
+      <section className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6">
+        {/*
+         * Match Overview: the page owns one consistent gutter beside the
+         * sidebar, with the dark accent bar and page context in the header.
+         */}
+        <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
+          <div>
+            <div className="mb-2 flex flex-wrap items-center gap-3">
+              <span
+                className="h-6 w-1.5 rounded-full"
+                style={{
+                  backgroundColor:
+                    NAVY,
+                }}
+              />
 
-        <p className="-mt-4 mb-6 max-w-2xl text-sm text-slate-700">
-          Create and schedule reporting forms,
-          monitor open reporting windows and track
-          forms waiting for their next release.
-        </p>
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+                Forms
+              </h1>
 
+              <span
+                className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
+                style={{
+                  backgroundColor:
+                    ICON_BLUE,
+                  color:
+                    NAVY,
+                }}
+              >
+                Form Management
+              </span>
+            </div>
+
+            <p className="max-w-2xl text-sm text-slate-500">
+              Create and schedule reporting forms, monitor open reporting windows and track forms waiting for their next release.
+            </p>
+          </div>
+        </header>
 
         <div className="space-y-6">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -1164,7 +1199,7 @@ const Forms = ({
             </div>
           </Card>
         </div>
-      </div>
+      </section>
 
       {builderOpen &&
         typeof document !== "undefined" &&
