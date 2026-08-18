@@ -51,6 +51,12 @@ import {
   db,
 } from "../../firebase/firebase";
 
+import ExportPdfButton from "../ui/ExportPdfButton";
+
+import {
+  buildPdfFilename,
+} from "../../lib/pdf-export";
+
 import {
   CHART_COLORS,
 } from "../../lib/util";
@@ -1433,6 +1439,7 @@ const DashboardHeader = ({
   scopeLabel = "",
   description = "",
   updatedAt = null,
+  action = null,
 }) => {
   return (
     <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-5 sm:flex-row sm:items-end">
@@ -1469,11 +1476,15 @@ const DashboardHeader = ({
         )}
       </div>
 
-      <p className="shrink-0 text-xs font-medium text-slate-400">
-        {formatUpdatedAt(
-          updatedAt
-        )}
-      </p>
+      <div className="flex shrink-0 flex-wrap items-center gap-3 sm:justify-end">
+        <p className="text-xs font-medium text-slate-400">
+          {formatUpdatedAt(
+            updatedAt
+          )}
+        </p>
+
+        {action}
+      </div>
     </header>
   );
 };
@@ -2653,6 +2664,7 @@ const RegionalPerformanceMap = ({
 
           {hoveredRegionId && (
             <div
+              data-pdf-remove="true"
               className="pointer-events-none absolute z-20 w-[250px] rounded-lg border border-slate-200 bg-white p-3 shadow-xl"
               style={{
                 left:
@@ -3652,6 +3664,13 @@ const EmptyState = ({
 const Regions = ({
   onSelectRegion = () => {},
 }) => {
+  /*
+   * The Regions list exports only this page content. The dashboard sidebar
+   * lives outside this ref, so it is never included in the PDF.
+   */
+  const regionsPdfRef =
+    useRef(null);
+
   const [
     currentUserProfile,
     setCurrentUserProfile,
@@ -5928,6 +5947,18 @@ const Regions = ({
         ? `Monitor regional performance for ${currentOrganization.name} and every child organization below it.`
         : "Monitor regional performance within your organization scope.";
 
+
+  const regionsPdfFilename =
+    buildPdfFilename({
+      pageName:
+        "Regions",
+      scopeName:
+        isMinistryUser
+          ? `${currentOrganization?.sector || currentUserProfile?.sector || "Sector"} ministry view`
+          : currentOrganization?.name ||
+            "Operator view",
+    });
+
   const hasActiveFilters =
     Boolean(
       regionFilter ||
@@ -6048,7 +6079,12 @@ const Regions = ({
         transitionDirection
       }
     >
-      <section className="min-h-full bg-slate-50 px-3 py-4 sm:px-4 sm:py-6 lg:px-5 lg:py-8 xl:px-6">
+      <section
+        ref={
+          regionsPdfRef
+        }
+        className="min-h-full w-full bg-slate-50 px-3 py-4 sm:px-4 sm:py-6 lg:px-5 lg:py-8 xl:px-6"
+      >
       <div className="w-full max-w-none">
         <DashboardHeader
           title="Regions"
@@ -6061,7 +6097,54 @@ const Regions = ({
           updatedAt={
             updatedAt
           }
+          action={
+            <ExportPdfButton
+              targetRef={
+                regionsPdfRef
+              }
+              filename={
+                regionsPdfFilename
+              }
+            />
+          }
         />
+
+        {/*
+         * Filters remain interactive on screen, but exported PDFs show one
+         * concise context line instead of dropdown controls.
+         */}
+        <div
+          data-pdf-only="true"
+          className="mb-6 hidden rounded-lg border border-slate-200 bg-white px-4 py-3"
+        >
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Report context
+          </p>
+
+          <p className="mt-1 text-sm font-semibold text-slate-900">
+            {selectedPeriodLabel} · {getProductLabel(
+              productFilter
+            )}
+            {regionFilter
+              ? ` · ${getRegionName(
+                  regionFilter
+                )}`
+              : ""}
+            {operatorFilter
+              ? ` · ${
+                  operatorOptions.find(
+                    (operator) =>
+                      operator.id ===
+                      operatorFilter
+                  )?.name ||
+                  "Selected operator"
+                }`
+              : ""}
+            {complianceStatusFilter
+              ? ` · ${complianceStatusFilter}`
+              : ""}
+          </p>
+        </div>
 
         {loadError && (
           <div className="mb-6 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -6090,7 +6173,10 @@ const Regions = ({
             </div>
           )}
 
-        <div className="mb-6 flex flex-wrap items-end gap-2 rounded-xl border border-slate-200/80 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        <div
+          data-pdf-remove="true"
+          className="mb-6 flex flex-wrap items-end gap-2 rounded-xl border border-slate-200/80 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]"
+        >
           <div className="flex h-9 items-center gap-2 px-1 pr-3">
             <Filter className="h-4 w-4 text-slate-500" />
 
@@ -6604,6 +6690,13 @@ export const RegionDetail = ({
   onCustomEndDateChange = () => {},
   onBack = () => {},
 }) => {
+  /*
+   * RegionDetail is reused for every region. One shared ref therefore gives
+   * every detailed regional profile the same PDF export behaviour.
+   */
+  const regionDetailPdfRef =
+    useRef(null);
+
   const [
     operatorFilter,
     setOperatorFilter,
@@ -7498,6 +7591,19 @@ export const RegionDetail = ({
     region?.periodLabel ||
     "Selected period";
 
+
+  const regionDetailPdfFilename =
+    buildPdfFilename({
+      pageName:
+        "Region Performance",
+      scopeName:
+        region?.name ||
+        getRegionName(
+          region?.regionId
+        ) ||
+        "Region",
+    });
+
   const hasActiveFilters =
     Boolean(
       productFilter !==
@@ -7583,10 +7689,16 @@ export const RegionDetail = ({
   }
 
   return (
-    <section className="min-h-full bg-slate-50 px-3 py-4 sm:px-4 sm:py-6 lg:px-5 lg:py-8 xl:px-6">
+    <section
+      ref={
+        regionDetailPdfRef
+      }
+      className="min-h-full w-full bg-slate-50 px-3 py-4 sm:px-4 sm:py-6 lg:px-5 lg:py-8 xl:px-6"
+    >
       <div className="w-full max-w-none">
         <button
           type="button"
+          data-pdf-remove="true"
           onClick={
             onBack
           }
@@ -7610,9 +7722,52 @@ export const RegionDetail = ({
             updatedAt ||
             region.updatedAt
           }
+          action={
+            <ExportPdfButton
+              targetRef={
+                regionDetailPdfRef
+              }
+              filename={
+                regionDetailPdfFilename
+              }
+            />
+          }
         />
 
-        <div className="mb-6 rounded-xl border border-slate-200/80 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        {/*
+         * Keep exported region reports clean: show the reporting context as
+         * plain text and remove all interactive filter controls.
+         */}
+        <div
+          data-pdf-only="true"
+          className="mb-6 hidden rounded-lg border border-slate-200 bg-white px-4 py-3"
+        >
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Report context
+          </p>
+
+          <p className="mt-1 text-sm font-semibold text-slate-900">
+            {selectedPeriodLabel} · {productLabel}
+            {operatorFilter
+              ? ` · ${
+                  allOperatorSummaries.find(
+                    (operator) =>
+                      operator.id ===
+                      operatorFilter
+                  )?.name ||
+                  "Selected operator"
+                }`
+              : ""}
+            {healthFilter
+              ? ` · ${healthFilter}`
+              : ""}
+          </p>
+        </div>
+
+        <div
+          data-pdf-remove="true"
+          className="mb-6 rounded-xl border border-slate-200/80 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]"
+        >
           <div className="flex flex-wrap items-end gap-2">
             <div className="flex h-9 items-center gap-2 px-1 pr-3">
               <Filter className="h-4 w-4 text-slate-500" />
