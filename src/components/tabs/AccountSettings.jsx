@@ -62,7 +62,6 @@ import {
 import {
   Card,
   EmptyCell,
-  PageHeader,
   SectionHeader,
   Table,
 } from "../ui/interface";
@@ -1881,18 +1880,58 @@ const AccountSettings = ({ roles = [] }) => {
   }
 
   return (
-    <div>
-      <div className="mb-2 flex items-center gap-2 text-sm text-slate-500">
-        <span className="font-medium text-slate-600">Settings</span>
+    <section className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6">
+      {/*
+       * Match the dashboard-wide heading standard used by Overview and the
+       * other main pages. The page owns its horizontal gutter so it stays the
+       * same distance from the sidebar at every viewport width.
+       */}
+      <div className="mb-3 flex items-center gap-2 text-sm text-slate-500">
+        <span className="font-medium text-slate-600">
+          Settings
+        </span>
+
         <ChevronRight className="h-3.5 w-3.5" />
-        <span className="capitalize">{activeTab}</span>
+
+        <span className="capitalize">
+          {activeTab}
+        </span>
       </div>
 
-      <PageHeader title="Account Settings" />
+      <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
+        <div>
+          <div className="mb-2 flex flex-wrap items-center gap-3">
+            <span
+              className="h-6 w-1.5 rounded-full"
+              style={{
+                backgroundColor:
+                  NAVY,
+              }}
+            />
 
-      <p className="-mt-4 mb-8 text-sm text-slate-500">
-        Manage your profile, shared team access and organization hierarchy.
-      </p>
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+              Account Settings
+            </h1>
+
+            <span
+              className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
+              style={{
+                backgroundColor:
+                  PALE_BLUE,
+                color:
+                  NAVY,
+              }}
+            >
+              {organization?.name ||
+                "Organization Settings"}
+            </span>
+          </div>
+
+          <p className="text-sm text-slate-500">
+            Manage your profile, shared team access and organization hierarchy.
+          </p>
+        </div>
+      </header>
 
       {pageError && (
         <div className="mb-5 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -2791,7 +2830,7 @@ const AccountSettings = ({ roles = [] }) => {
           handleCreateChildOrganization
         }
       />
-    </div>
+    </section>
   );
 };
 

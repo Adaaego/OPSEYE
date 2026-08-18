@@ -84,7 +84,6 @@ import {
 
 import {
   Card,
-  PageHeader,
   SectionHeader,
 } from "../ui/interface";
 
@@ -5567,6 +5566,16 @@ const Workforce = () => {
         ? `Manage workforce roles for ${currentOrganization.name} and the organisations below it.`
         : "View workforce data within your organisation scope.";
 
+
+  /*
+   * Keep the page heading consistent with the rest of the dashboard.
+   */
+  const scopeLabel =
+    isMinistryUser
+      ? `${currentOrganization?.sector || currentUserProfile?.sector || "Sector"} Ministry View`
+      : currentOrganization?.name ||
+        "Organisation View";
+
   const changeTab = (
     nextTab
   ) => {
@@ -5894,20 +5903,60 @@ const Workforce = () => {
   }
 
   return (
-    <div>
-      <PageHeader
-        title="Workforce"
-        timestamp={
-          formatUpdatedAt(
-            updatedAt
-          )
-        }
-        action={
-          renderedTab ===
+    <section className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6">
+      {/*
+       * Match Overview: dark vertical accent, page title, scope pill,
+       * description, timestamp and contextual action in one header.
+       * The page owns the horizontal gutter so spacing beside the sidebar
+       * remains consistent across every dashboard tab.
+       */}
+      <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
+        <div>
+          <div className="mb-2 flex flex-wrap items-center gap-3">
+            <span
+              className="h-6 w-1.5 rounded-full"
+              style={{
+                backgroundColor:
+                  NAVY,
+              }}
+            />
+
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+              Workforce
+            </h1>
+
+            <span
+              className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
+              style={{
+                backgroundColor:
+                  PALE_BLUE,
+                color:
+                  NAVY,
+              }}
+            >
+              {scopeLabel}
+            </span>
+          </div>
+
+          <p className="text-sm text-slate-500">
+            {scopeDescription}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 sm:justify-end">
+          <p className="text-xs font-medium text-slate-400">
+            {formatUpdatedAt(
+              updatedAt
+            )}
+          </p>
+
+          {renderedTab ===
             "roles" &&
-          !isMinistryUser ? (
+            !isMinistryUser && (
             <Button
-              onClick={openAddRole}
+              onClick={
+                openAddRole
+              }
               className="text-white hover:opacity-90"
               style={{
                 backgroundColor:
@@ -5919,13 +5968,9 @@ const Workforce = () => {
                 Add Role
               </span>
             </Button>
-          ) : null
-        }
-      />
-
-      <p className="-mt-4 mb-5 text-sm text-slate-500">
-        {scopeDescription}
-      </p>
+          )}
+        </div>
+      </header>
 
       {loadError && (
         <div className="mb-5 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -7230,7 +7275,7 @@ const Workforce = () => {
         }}
         onSave={handleSaveRole}
       />
-    </div>
+    </section>
   );
 };
 
