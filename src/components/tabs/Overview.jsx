@@ -1,4 +1,3 @@
-
 import {
   useEffect,
   useMemo,
@@ -36,7 +35,10 @@ import {
 import {
   collection,
   doc,
+  getDoc,
   onSnapshot,
+  query,
+  where,
 } from "firebase/firestore";
 
 import {
@@ -1528,6 +1530,319 @@ const ProductionOperatorTick = ({
   );
 };
 
+/*
+ * Firestore queries must be scoped before data reaches the browser.
+ * Security Rules are not filters, so loading an entire collection and hiding
+ * unauthorized records in React would fail once production rules are enabled.
+ */
+const FIRESTORE_IN_QUERY_LIMIT = 30;
+
+const chunkValues = (
+  values,
+  size = FIRESTORE_IN_QUERY_LIMIT
+) => {
+  const chunks = [];
+
+  for (
+    let index = 0;
+    index < values.length;
+    index += size
+  ) {
+    chunks.push(
+      values.slice(
+        index,
+        index + size
+      )
+    );
+  }
+
+  return chunks;
+};
+
+const mergeDocumentLists = (
+  documentLists
+) => {
+  const merged = new Map();
+
+  documentLists
+    .flat()
+    .forEach((record) => {
+      if (record?.id) {
+        merged.set(
+          record.id,
+          record
+        );
+      }
+    });
+
+  return Array.from(
+    merged.values()
+  );
+};
+
+const snapshotToDocuments = (
+  snapshot
+) => {
+  if (
+    Array.isArray(
+      snapshot?.docs
+    )
+  ) {
+    return snapshot.docs.map(
+      (documentSnapshot) => ({
+        id:
+          documentSnapshot.id,
+        ...documentSnapshot.data(),
+      })
+    );
+  }
+
+  if (
+    snapshot?.exists?.()
+  ) {
+    return [
+      {
+        id: snapshot.id,
+        ...snapshot.data(),
+      },
+    ];
+  }
+
+  return [];
+};
+
+/*
+ * Subscribes to one or more already-scoped Firestore references and merges
+ * their snapshots by document ID. Region scope needs two references: the
+ * region document itself plus descendants whose ancestorIds contain it.
+ */
+const subscribeToScopedReferences = ({
+  references,
+  onData,
+  onError,
+}) => {
+  if (!references.length) {
+    onData([]);
+    return () => {};
+  }
+
+  const sourceDocuments =
+    new Map();
+
+  const initializedSources =
+    new Set();
+
+  const unsubscribers =
+    references.map(
+      (reference, index) =>
+        onSnapshot(
+          reference,
+          (snapshot) => {
+            sourceDocuments.set(
+              index,
+              snapshotToDocuments(
+                snapshot
+              )
+            );
+
+            initializedSources.add(
+              index
+            );
+
+            if (
+              initializedSources.size ===
+              references.length
+            ) {
+              onData(
+                mergeDocumentLists(
+                  Array.from(
+                    sourceDocuments.values()
+                  )
+                )
+              );
+            }
+          },
+          onError
+        )
+    );
+
+  return () => {
+    unsubscribers.forEach(
+      (unsubscribe) =>
+        unsubscribe()
+    );
+  };
+};
+
+const getScopedOrganizationReferences = ({
+  organization,
+}) => {
+  const organizationId =
+    getOrganizationId(
+      organization
+    );
+
+  const organizationLevel =
+    getOrganizationLevel(
+      organization
+    );
+
+  const organizationCategory =
+    getOrganizationCategory(
+      organization
+    );
+
+  if (
+    organizationCategory ===
+      "ministry" ||
+    organizationLevel ===
+      "ministry"
+  ) {
+    const sector =
+      String(
+        organization.sector ||
+          ""
+      ).trim();
+
+    if (!sector) {
+      throw new Error(
+        "The Ministry organization is missing its sector."
+      );
+    }
+
+    return [
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "sector",
+          "==",
+          sector
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "enterprise"
+  ) {
+    return [
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "rootEnterpriseId",
+          "==",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "region"
+  ) {
+    return [
+      doc(
+        db,
+        ORGANIZATIONS_COLLECTION,
+        organizationId
+      ),
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "ancestorIds",
+          "array-contains",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  return [
+    doc(
+      db,
+      ORGANIZATIONS_COLLECTION,
+      organizationId
+    ),
+  ];
+};
+
+const buildOrganizationScopedQueries = ({
+  collectionName,
+  organizationIds,
+}) => {
+  return chunkValues(
+    Array.from(
+      new Set(
+        organizationIds.filter(
+          Boolean
+        )
+      )
+    )
+  ).map((organizationIdChunk) =>
+    query(
+      collection(
+        db,
+        collectionName
+      ),
+      where(
+        "organizationId",
+        "in",
+        organizationIdChunk
+      )
+    )
+  );
+};
+
+const getFuelPriceReferences = (
+  organizations
+) => {
+  const enterpriseIds =
+    Array.from(
+      new Set(
+        organizations
+          .map((organization) => {
+            const organizationId =
+              getOrganizationId(
+                organization
+              );
+
+            return (
+              organization.rootEnterpriseId ||
+              (
+                getOrganizationLevel(
+                  organization
+                ) ===
+                "enterprise"
+                  ? organizationId
+                  : ""
+              )
+            );
+          })
+          .filter(Boolean)
+      )
+    );
+
+  return enterpriseIds.map(
+    (enterpriseId) =>
+      doc(
+        db,
+        COMPANY_FUEL_PRICES_COLLECTION,
+        enterpriseId
+      )
+  );
+};
+
 const Overviews = () => {
   /*
    * The PDF exporter captures this dashboard container exactly as it is
@@ -1650,168 +1965,253 @@ const Overviews = () => {
   }, []);
 
   /*
-   * The overview subscribes to the collections needed for production,
-   * compliance, pricing and the dedicated workforce source of truth.
-   *
-   * The visible records are filtered below using the signed-in user's
-   * sector or organization hierarchy. Firestore security rules must
-   * enforce the same access rules; UI filtering alone is not security.
+   * Load only the organization hierarchy the signed-in user is allowed to see.
+   * The current organization is fetched directly first because it defines the
+   * scope used by every later query.
    */
   useEffect(() => {
-    const unsubscribers = [
-      onSnapshot(
-        collection(
-          db,
-          ORGANIZATIONS_COLLECTION
-        ),
-        (snapshot) => {
-          setOrganizations(
-            snapshot.docs.map(
-              (
-                organizationDocument
-              ) => ({
-                id:
-                  organizationDocument.id,
-                ...organizationDocument.data(),
-              })
-            )
+    let cancelled = false;
+    let unsubscribeOrganizations =
+      () => {};
+
+    const subscribeToOrganizations =
+      async () => {
+        const organizationId =
+          getUserOrganizationId(
+            currentUserProfile
           );
-          setLoadError("");
-        },
-        (error) => {
+
+        if (!organizationId) {
+          setOrganizations([]);
+          return;
+        }
+
+        try {
+          setLoading(true);
+
+          const currentOrganizationSnapshot =
+            await getDoc(
+              doc(
+                db,
+                ORGANIZATIONS_COLLECTION,
+                organizationId
+              )
+            );
+
+          if (cancelled) {
+            return;
+          }
+
+          if (
+            !currentOrganizationSnapshot.exists()
+          ) {
+            throw new Error(
+              "The current organization could not be found."
+            );
+          }
+
+          const currentOrganization = {
+            id:
+              currentOrganizationSnapshot.id,
+            ...currentOrganizationSnapshot.data(),
+          };
+
+          const references =
+            getScopedOrganizationReferences({
+              organization:
+                currentOrganization,
+            });
+
+          unsubscribeOrganizations =
+            subscribeToScopedReferences({
+              references,
+              onData: (
+                scopedOrganizations
+              ) => {
+                if (cancelled) {
+                  return;
+                }
+
+                /*
+                 * Keep the current organization in memory even if an older
+                 * record is missing one of the query metadata fields.
+                 */
+                setOrganizations(
+                  mergeDocumentLists([
+                    scopedOrganizations,
+                    [
+                      currentOrganization,
+                    ],
+                  ])
+                );
+
+                setLoadError("");
+              },
+              onError: (error) => {
+                console.error(
+                  "Unable to load scoped organizations:",
+                  error
+                );
+
+                setLoadError(
+                  error.message ||
+                    "Organizations could not be loaded."
+                );
+
+                setLoading(false);
+              },
+            });
+        } catch (error) {
+          if (cancelled) {
+            return;
+          }
+
           console.error(
-            "Unable to load organizations:",
+            "Unable to establish organization scope:",
             error
           );
+
+          setOrganizations([]);
           setLoadError(
             error.message ||
-              "Organizations could not be loaded."
-          );
-        }
-      ),
-
-      onSnapshot(
-        collection(
-          db,
-          USERS_COLLECTION
-        ),
-        (snapshot) => {
-          setUsers(
-            snapshot.docs.map(
-              (
-                userDocument
-              ) => ({
-                id:
-                  userDocument.id,
-                ...userDocument.data(),
-              })
-            )
-          );
-        },
-        (error) => {
-          console.error(
-            "Unable to load users:",
-            error
-          );
-        }
-      ),
-
-      onSnapshot(
-        collection(
-          db,
-          REPORT_SUBMISSIONS_COLLECTION
-        ),
-        (snapshot) => {
-          setReportSubmissions(
-            snapshot.docs.map(
-              (
-                reportDocument
-              ) => ({
-                id:
-                  reportDocument.id,
-                ...reportDocument.data(),
-              })
-            )
+              "Organization access could not be loaded."
           );
           setLoading(false);
-          setLoadError("");
-        },
-        (error) => {
+        }
+      };
+
+    subscribeToOrganizations();
+
+    return () => {
+      cancelled = true;
+      unsubscribeOrganizations();
+    };
+  }, [
+    currentUserProfile,
+  ]);
+
+  /*
+   * Subscribe to reports, users and workforce only for organizations already
+   * proven to be inside the current user's hierarchy/sector. Fuel prices are
+   * read only for the relevant root enterprise documents.
+   */
+  useEffect(() => {
+    if (
+      !currentUserProfile ||
+      organizations.length === 0
+    ) {
+      return undefined;
+    }
+
+    const dataOrganizations =
+      organizations.filter(
+        (organization) =>
+          getOrganizationCategory(
+            organization
+          ) !== "ministry" &&
+          getOrganizationLevel(
+            organization
+          ) !== "ministry"
+      );
+
+    const organizationIds =
+      dataOrganizations
+        .map(
+          getOrganizationId
+        )
+        .filter(Boolean);
+
+    const unsubscribers = [];
+
+    const subscribeCollection = ({
+      collectionName,
+      onData,
+      onError,
+    }) => {
+      const references =
+        buildOrganizationScopedQueries({
+          collectionName,
+          organizationIds,
+        });
+
+      unsubscribers.push(
+        subscribeToScopedReferences({
+          references,
+          onData,
+          onError,
+        })
+      );
+    };
+
+    subscribeCollection({
+      collectionName:
+        USERS_COLLECTION,
+      onData: setUsers,
+      onError: (error) => {
+        console.error(
+          "Unable to load scoped users:",
+          error
+        );
+      },
+    });
+
+    subscribeCollection({
+      collectionName:
+        REPORT_SUBMISSIONS_COLLECTION,
+      onData: (records) => {
+        setReportSubmissions(
+          records
+        );
+        setLoading(false);
+        setLoadError("");
+      },
+      onError: (error) => {
+        console.error(
+          "Unable to load scoped report submissions:",
+          error
+        );
+        setLoadError(
+          error.message ||
+            "Report submissions could not be loaded."
+        );
+        setLoading(false);
+      },
+    });
+
+    subscribeCollection({
+      collectionName:
+        WORKFORCE_COLLECTION,
+      onData:
+        setWorkforceRecords,
+      onError: (error) => {
+        console.error(
+          "Unable to load scoped workforce records:",
+          error
+        );
+
+        setLoadError(
+          error.message ||
+            "Workforce records could not be loaded."
+        );
+      },
+    });
+
+    unsubscribers.push(
+      subscribeToScopedReferences({
+        references:
+          getFuelPriceReferences(
+            dataOrganizations
+          ),
+        onData:
+          setCompanyFuelPrices,
+        onError: (error) => {
           console.error(
-            "Unable to load report submissions:",
+            "Unable to load scoped company fuel prices:",
             error
           );
-          setLoadError(
-            error.message ||
-              "Report submissions could not be loaded."
-          );
-          setLoading(false);
-        }
-      ),
-
-      onSnapshot(
-        collection(
-          db,
-          COMPANY_FUEL_PRICES_COLLECTION
-        ),
-        (snapshot) => {
-          setCompanyFuelPrices(
-            snapshot.docs.map(
-              (
-                priceDocument
-              ) => ({
-                id:
-                  priceDocument.id,
-                ...priceDocument.data(),
-              })
-            )
-          );
         },
-        (error) => {
-          console.error(
-            "Unable to load company fuel prices:",
-            error
-          );
-        }
-      ),
-
-      /*
-       * Workforce headcount is no longer read from reporting forms.
-       *
-       * The dedicated workforce collection is the single source of truth for
-       * local, expatriate and vacancy totals across the dashboard.
-       */
-      onSnapshot(
-        collection(
-          db,
-          WORKFORCE_COLLECTION
-        ),
-        (snapshot) => {
-          setWorkforceRecords(
-            snapshot.docs.map(
-              (
-                workforceDocument
-              ) => ({
-                id:
-                  workforceDocument.id,
-                ...workforceDocument.data(),
-              })
-            )
-          );
-        },
-        (error) => {
-          console.error(
-            "Unable to load workforce records:",
-            error
-          );
-
-          setLoadError(
-            error.message ||
-              "Workforce records could not be loaded."
-          );
-        }
-      ),
-    ];
+      })
+    );
 
     return () => {
       unsubscribers.forEach(
@@ -1819,7 +2219,10 @@ const Overviews = () => {
           unsubscribe()
       );
     };
-  }, []);
+  }, [
+    currentUserProfile,
+    organizations,
+  ]);
 
   const organizationMap =
     useMemo(() => {

@@ -1,4 +1,3 @@
-
 import {
   Fragment,
   useEffect,
@@ -24,6 +23,8 @@ import {
   doc,
   getDoc,
   getDocs,
+  query,
+  where,
 } from "firebase/firestore";
 
 import {
@@ -1233,6 +1234,307 @@ const SortHeader = ({
   );
 };
 
+/*
+ * Firestore Rules are not filters. Every collection request below is scoped
+ * before it reaches Firestore so the browser never asks for another operator's
+ * records and then relies on React to hide them.
+ */
+const FIRESTORE_IN_QUERY_LIMIT = 30;
+
+const chunkValues = (
+  values,
+  size = FIRESTORE_IN_QUERY_LIMIT
+) => {
+  const chunks = [];
+
+  for (
+    let index = 0;
+    index < values.length;
+    index += size
+  ) {
+    chunks.push(
+      values.slice(
+        index,
+        index + size
+      )
+    );
+  }
+
+  return chunks;
+};
+
+const mergeDocumentLists = (
+  documentLists
+) => {
+  const merged = new Map();
+
+  documentLists
+    .flat()
+    .forEach((record) => {
+      if (record?.id) {
+        merged.set(
+          record.id,
+          record
+        );
+      }
+    });
+
+  return Array.from(
+    merged.values()
+  );
+};
+
+const snapshotDocuments = (
+  snapshot
+) => {
+  return snapshot.docs.map(
+    (documentSnapshot) => ({
+      id:
+        documentSnapshot.id,
+      ...documentSnapshot.data(),
+    })
+  );
+};
+
+const loadScopedOrganizations =
+  async (organizationId) => {
+    const currentOrganizationSnapshot =
+      await getDoc(
+        doc(
+          db,
+          ORGANIZATIONS_COLLECTION,
+          organizationId
+        )
+      );
+
+    if (
+      !currentOrganizationSnapshot.exists()
+    ) {
+      throw new Error(
+        "The user's organization could not be found."
+      );
+    }
+
+    const currentOrganization = {
+      id:
+        currentOrganizationSnapshot.id,
+      ...currentOrganizationSnapshot.data(),
+    };
+
+    const organizationLevel =
+      getOrganizationLevel(
+        currentOrganization
+      );
+
+    const organizationCategory =
+      getOrganizationCategory(
+        currentOrganization
+      );
+
+    let scopedOrganizations = [];
+
+    if (
+      organizationCategory ===
+        "ministry" ||
+      organizationLevel ===
+        "ministry"
+    ) {
+      const sector =
+        String(
+          currentOrganization.sector ||
+            ""
+        ).trim();
+
+      if (!sector) {
+        throw new Error(
+          "The Ministry organization is missing its sector."
+        );
+      }
+
+      const snapshot =
+        await getDocs(
+          query(
+            collection(
+              db,
+              ORGANIZATIONS_COLLECTION
+            ),
+            where(
+              "sector",
+              "==",
+              sector
+            )
+          )
+        );
+
+      scopedOrganizations =
+        snapshotDocuments(
+          snapshot
+        );
+    } else if (
+      organizationLevel ===
+      "enterprise"
+    ) {
+      const snapshot =
+        await getDocs(
+          query(
+            collection(
+              db,
+              ORGANIZATIONS_COLLECTION
+            ),
+            where(
+              "rootEnterpriseId",
+              "==",
+              organizationId
+            )
+          )
+        );
+
+      scopedOrganizations =
+        snapshotDocuments(
+          snapshot
+        );
+    } else if (
+      organizationLevel ===
+      "region"
+    ) {
+      const descendantsSnapshot =
+        await getDocs(
+          query(
+            collection(
+              db,
+              ORGANIZATIONS_COLLECTION
+            ),
+            where(
+              "ancestorIds",
+              "array-contains",
+              organizationId
+            )
+          )
+        );
+
+      scopedOrganizations =
+        snapshotDocuments(
+          descendantsSnapshot
+        );
+    }
+
+    return {
+      currentOrganization,
+      organizations:
+        mergeDocumentLists([
+          scopedOrganizations,
+          [
+            currentOrganization,
+          ],
+        ]),
+    };
+  };
+
+const loadDocumentsForOrganizationIds =
+  async ({
+    collectionName,
+    organizationIds,
+  }) => {
+    const uniqueOrganizationIds =
+      Array.from(
+        new Set(
+          organizationIds.filter(
+            Boolean
+          )
+        )
+      );
+
+    if (
+      uniqueOrganizationIds.length ===
+      0
+    ) {
+      return [];
+    }
+
+    const snapshots =
+      await Promise.all(
+        chunkValues(
+          uniqueOrganizationIds
+        ).map(
+          (organizationIdChunk) =>
+            getDocs(
+              query(
+                collection(
+                  db,
+                  collectionName
+                ),
+                where(
+                  "organizationId",
+                  "in",
+                  organizationIdChunk
+                )
+              )
+            )
+        )
+      );
+
+    return mergeDocumentLists(
+      snapshots.map(
+        snapshotDocuments
+      )
+    );
+  };
+
+const loadFuelPricesForOrganizations =
+  async (organizations) => {
+    const enterpriseIds =
+      Array.from(
+        new Set(
+          organizations
+            .map(
+              (organization) => {
+                const organizationId =
+                  getOrganizationId(
+                    organization
+                  );
+
+                return (
+                  organization.rootEnterpriseId ||
+                  (
+                    getOrganizationLevel(
+                      organization
+                    ) ===
+                    "enterprise"
+                      ? organizationId
+                      : ""
+                  )
+                );
+              }
+            )
+            .filter(Boolean)
+        )
+      );
+
+    const snapshots =
+      await Promise.all(
+        enterpriseIds.map(
+          (enterpriseId) =>
+            getDoc(
+              doc(
+                db,
+                COMPANY_FUEL_PRICES_COLLECTION,
+                enterpriseId
+              )
+            )
+        )
+      );
+
+    return snapshots
+      .filter(
+        (snapshot) =>
+          snapshot.exists()
+      )
+      .map((snapshot) => ({
+        id: snapshot.id,
+        ...snapshot.data(),
+      }));
+  };
+
 const OperatorsTab = ({
   currentUser = null,
 
@@ -1345,12 +1647,9 @@ const OperatorsTab = ({
   ] = useState([]);
 
   /*
-   * The Operators page loads the same Firestore collections used by
-   * the Overview and Workforce pages.
-   *
-   * All operator totals are calculated here once and the completed
-   * selected operator object is passed directly to OperatorDetail.
-   * OperatorDetail therefore does not need another Firestore hook.
+   * Resolve the signed-in organization first, then load only that user's
+   * permitted Ministry sector or company hierarchy. Every dependent collection
+   * is queried by those organization IDs instead of loading the whole database.
    */
   useEffect(() => {
     let requestIsActive =
@@ -1408,124 +1707,55 @@ const OperatorsTab = ({
             );
           }
 
-          /*
-           * These collections are read together so organizations,
-           * scheduled reports, submitters, price references and workforce
-           * role records belong to one consistent page load.
-           */
-          const [
-            organizationsSnapshot,
-            reportsSnapshot,
-            usersSnapshot,
-            pricesSnapshot,
-            workforceSnapshot,
-          ] =
-            await Promise.all([
-              getDocs(
-                collection(
-                  db,
-                  ORGANIZATIONS_COLLECTION
-                )
-              ),
-              getDocs(
-                collection(
-                  db,
-                  REPORT_SUBMISSIONS_COLLECTION
-                )
-              ),
-              getDocs(
-                collection(
-                  db,
-                  USERS_COLLECTION
-                )
-              ),
-              getDocs(
-                collection(
-                  db,
-                  COMPANY_FUEL_PRICES_COLLECTION
-                )
-              ),
-              getDocs(
-                collection(
-                  db,
-                  WORKFORCE_COLLECTION
-                )
-              ),
-            ]);
-
-          const organizations =
-            organizationsSnapshot.docs.map(
-              (
-                organizationDocument
-              ) => ({
-                id:
-                  organizationDocument.id,
-                ...organizationDocument.data(),
-              })
+          const {
+            currentOrganization:
+              signedInOrganization,
+            organizations,
+          } =
+            await loadScopedOrganizations(
+              organizationId
             );
 
-          const reports =
-            reportsSnapshot.docs.map(
-              (
-                reportDocument
-              ) => ({
-                id:
-                  reportDocument.id,
-                ...reportDocument.data(),
-              })
-            );
-
-          const users =
-            usersSnapshot.docs.map(
-              (
-                userDocument
-              ) => ({
-                id:
-                  userDocument.id,
-                ...userDocument.data(),
-              })
-            );
-
-          const prices =
-            pricesSnapshot.docs.map(
-              (
-                priceDocument
-              ) => ({
-                id:
-                  priceDocument.id,
-                ...priceDocument.data(),
-              })
-            );
-
-          const workforce =
-            workforceSnapshot.docs.map(
-              (
-                workforceDocument
-              ) => ({
-                id:
-                  workforceDocument.id,
-                ...workforceDocument.data(),
-              })
-            );
-
-          const signedInOrganization =
-            organizations.find(
-              (
-                organization
-              ) =>
-                getOrganizationId(
+          const dataOrganizations =
+            organizations.filter(
+              (organization) =>
+                !isMinistry(
                   organization
-                ) ===
-                organizationId
+                )
             );
 
-          if (
-            !signedInOrganization
-          ) {
-            throw new Error(
-              "The user's organization could not be found."
-            );
-          }
+          const organizationIds =
+            dataOrganizations
+              .map(
+                getOrganizationId
+              )
+              .filter(Boolean);
+
+          const [
+            reports,
+            users,
+            prices,
+            workforce,
+          ] = await Promise.all([
+            loadDocumentsForOrganizationIds({
+              collectionName:
+                REPORT_SUBMISSIONS_COLLECTION,
+              organizationIds,
+            }),
+            loadDocumentsForOrganizationIds({
+              collectionName:
+                USERS_COLLECTION,
+              organizationIds,
+            }),
+            loadFuelPricesForOrganizations(
+              dataOrganizations
+            ),
+            loadDocumentsForOrganizationIds({
+              collectionName:
+                WORKFORCE_COLLECTION,
+              organizationIds,
+            }),
+          ]);
 
           let matchingCompanies =
             [];
@@ -1536,10 +1766,9 @@ const OperatorsTab = ({
             )
           ) {
             /*
-             * Ministry users see every enterprise operator.
-             *
-             * The full child hierarchy is attached to each enterprise
-             * so its report data can be included in totals and details.
+             * The Ministry query above is already constrained to its sector.
+             * Only enterprise records become top-level operator rows; their
+             * scoped descendants remain available for roll-up calculations.
              */
             matchingCompanies =
               organizations.filter(
@@ -1550,12 +1779,6 @@ const OperatorsTab = ({
               signedInOrganization
             )
           ) {
-            /*
-             * Operator users see only their own organization and the
-             * descendants below it.
-             *
-             * They never receive another enterprise in this list.
-             */
             matchingCompanies = [
               signedInOrganization,
             ];
