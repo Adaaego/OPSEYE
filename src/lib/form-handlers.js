@@ -25,6 +25,9 @@ const FORM_TEMPLATES_COLLECTION =
 const REPORT_SUBMISSIONS_COLLECTION =
   "reportSubmissions";
 
+const ORGANIZATIONS_COLLECTION =
+  "organizations";
+
 export const FORM_TEMPLATE_STATUSES = {
   draft: "draft",
   scheduled: "scheduled",
@@ -1745,6 +1748,55 @@ const submitReportHandler = async ({
     );
   }
 
+  /*
+   * Resolve the organization from Firestore before writing the submission.
+   *
+   * The report object comes from the UI, so hierarchy/security metadata should
+   * not be trusted from that object alone. Reading the stored organization here
+   * gives every submission a consistent organizationId, parent/root hierarchy,
+   * sector and company context for later scoped queries and Firestore rules.
+   */
+  const submissionOrganizationId =
+    report?.organizationId ||
+    userProfile?.organizationId ||
+    "";
+
+  if (!submissionOrganizationId) {
+    throw new Error(
+      "The report is not linked to an organization."
+    );
+  }
+
+  const organizationSnapshot =
+    await getDoc(
+      doc(
+        db,
+        ORGANIZATIONS_COLLECTION,
+        submissionOrganizationId
+      )
+    );
+
+  if (!organizationSnapshot.exists()) {
+    throw new Error(
+      "The report organization could not be found."
+    );
+  }
+
+  const submissionOrganization = {
+    id: organizationSnapshot.id,
+    ...organizationSnapshot.data(),
+  };
+
+  if (
+    normalizeStatusValue(
+      submissionOrganization.status
+    ) === "archived"
+  ) {
+    throw new Error(
+      "Reports cannot be submitted for an archived organization."
+    );
+  }
+
   const workflowStages =
     Array.isArray(
       report?.workflowStages
@@ -1973,6 +2025,19 @@ const submitReportHandler = async ({
           )
         );
 
+  const storedAncestorIds =
+    Array.isArray(
+      submissionOrganization.ancestorIds
+    )
+      ? submissionOrganization.ancestorIds
+      : [];
+
+  const storedOrganizationType =
+    normalizeStatusValue(
+      submissionOrganization.type ||
+        submissionOrganization.organizationType
+    );
+
   const sharedSubmissionData = {
     formTemplateId,
 
@@ -1995,10 +2060,53 @@ const submitReportHandler = async ({
     fieldValues:
       cleanedResponses,
 
+    /*
+     * Hierarchy metadata is copied from the stored organization, not from
+     * editable UI state. This makes Ministry/Enterprise/Region/Branch reads
+     * queryable and gives the future security rules stable fields to verify.
+     */
     organizationId:
-      report?.organizationId ||
-      userProfile
-        ?.organizationId ||
+      submissionOrganizationId,
+
+    parentOrganizationId:
+      submissionOrganization.parentId ||
+      "",
+
+    rootEnterpriseId:
+      submissionOrganization.rootEnterpriseId ||
+      (
+        storedOrganizationType ===
+        "enterprise"
+          ? submissionOrganizationId
+          : ""
+      ),
+
+    ancestorIds:
+      storedAncestorIds,
+
+    companyId:
+      submissionOrganization.companyId ||
+      "",
+
+    regionId:
+      submissionOrganization.regionId ||
+      "",
+
+    sector:
+      submissionOrganization.sector ||
+      report?.sector ||
+      userProfile?.sector ||
+      "",
+
+    industrySegment:
+      submissionOrganization.industrySegment ||
+      report?.industrySegment ||
+      userProfile?.industrySegment ||
+      "",
+
+    organizationType:
+      submissionOrganization.type ||
+      submissionOrganization.organizationType ||
       "",
 
     operatorName:

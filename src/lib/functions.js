@@ -10,7 +10,7 @@ import {
   where,
   writeBatch,
 } from "firebase/firestore";
-import { db } from "../firebase/firebase";
+import { auth, db } from "../firebase/firebase";
 import {
   COUNTRY_CODES,
   ORGANIZATION_LEVEL_CODES,
@@ -208,8 +208,14 @@ export const updateUserDocument = async (
 
 export const markUserEmailVerified = async (uid) => {
   await updateUserDocument(uid, {
-    emailVerified: true,
-    emailVerifiedAt: serverTimestamp(),
+    /*
+     * Mirror the verified Firebase Auth state instead of marking the Firestore
+     * profile verified solely because the onboarding screen was submitted.
+     */
+    emailVerified:
+      currentAuthUser.emailVerified,
+    emailVerifiedAt:
+      serverTimestamp(),
   });
 };
 
@@ -363,8 +369,61 @@ export const submitOnboarding = async (
     );
   }
 
+  /*
+   * Do not trust a UID supplied by the page on its own. The Firebase Auth
+   * session must belong to the same user and the email must actually be
+   * verified before organization/admin metadata is written.
+   *
+   * Firestore rules will enforce this again later; this check keeps the
+   * application flow consistent before the final rules are deployed.
+   */
+  const currentAuthUser =
+    auth.currentUser;
+
+  if (
+    !currentAuthUser ||
+    currentAuthUser.uid !== uid
+  ) {
+    throw new Error(
+      "The signed-in account does not match the onboarding user."
+    );
+  }
+
+  if (!currentAuthUser.emailVerified) {
+    throw new Error(
+      "Please verify your email address before completing onboarding."
+    );
+  }
+
   // Stop the submission immediately if any required field is missing.
   validateOnboardingData(onboardingData);
+
+  const authEmail =
+    String(
+      currentAuthUser.email ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+  const onboardingEmail =
+    String(
+      onboardingData?.userProfile
+        ?.workEmail ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+  if (
+    authEmail &&
+    onboardingEmail &&
+    authEmail !== onboardingEmail
+  ) {
+    throw new Error(
+      "The onboarding email must match the verified signed-in account."
+    );
+  }
 
   const {
     organizationType,
