@@ -3,6 +3,15 @@ const {
 } = require("firebase-functions/v2/scheduler");
 
 const {
+  onCall,
+  HttpsError,
+} = require("firebase-functions/v2/https");
+
+const {
+  createHash,
+} = require("crypto");
+
+const {
   logger,
 } = require("firebase-functions");
 
@@ -32,6 +41,9 @@ const ORGANIZATIONS_COLLECTION =
 const USERS_COLLECTION =
   "users";
 
+const INVITATIONS_COLLECTION =
+  "organizationInvitations";
+
 const DEFAULT_TIMEZONE =
   "Africa/Accra";
 
@@ -54,6 +66,192 @@ const normalizeStatus = (value) => {
   return normalizeValue(value)
     .replace(/[\s-]+/g, "_");
 };
+
+const hashInvitationToken = (
+  token
+) => {
+  return createHash("sha256")
+    .update(
+      String(token || "").trim(),
+      "utf8"
+    )
+    .digest("hex");
+};
+
+/*
+ * Public invitation validation endpoint.
+ *
+ * Invitation signup must work before the invited person has a Firebase Auth
+ * session, but unauthenticated clients should never receive direct Firestore
+ * access. Possession of the cryptographically random invitation token is the
+ * capability used to look up the matching hashed invitation document.
+ *
+ * Only the minimum fields required by the invitation UI are returned.
+ */
+exports.validatePublicInvitation =
+  onCall(
+    {
+      region:
+        "europe-west1",
+
+      timeoutSeconds:
+        30,
+    },
+    async (request) => {
+      const token =
+        String(
+          request.data?.token ||
+          ""
+        ).trim();
+
+      if (
+        token.length < 16 ||
+        token.length > 512
+      ) {
+        throw new HttpsError(
+          "invalid-argument",
+          "A valid invitation token is required."
+        );
+      }
+
+      const invitationId =
+        hashInvitationToken(
+          token
+        );
+
+      const invitationSnapshot =
+        await db
+          .collection(
+            INVITATIONS_COLLECTION
+          )
+          .doc(
+            invitationId
+          )
+          .get();
+
+      if (
+        !invitationSnapshot.exists
+      ) {
+        return {
+          valid: false,
+          reason: "not_found",
+          message:
+            "This invitation could not be found.",
+          invitation: null,
+        };
+      }
+
+      const invitation =
+        invitationSnapshot.data();
+
+      const status =
+        normalizeStatus(
+          invitation?.status
+        );
+
+      if (
+        status !== "pending"
+      ) {
+        return {
+          valid: false,
+          reason:
+            status ||
+            "unavailable",
+          message:
+            "This invitation is no longer available.",
+          invitation: null,
+        };
+      }
+
+      const expiresAt =
+        invitation?.expiresAt;
+
+      const expiryDate =
+        typeof expiresAt?.toDate ===
+        "function"
+          ? expiresAt.toDate()
+          : expiresAt
+            ? new Date(
+                expiresAt
+              )
+            : null;
+
+      if (
+        !expiryDate ||
+        Number.isNaN(
+          expiryDate.getTime()
+        ) ||
+        expiryDate.getTime() <=
+          Date.now()
+      ) {
+        return {
+          valid: false,
+          reason: "expired",
+          message:
+            "This invitation has expired.",
+          invitation: null,
+        };
+      }
+
+      const safeInvitation = {
+        email:
+          invitation.emailLower ||
+          invitation.email ||
+          "",
+
+        emailLower:
+          invitation.emailLower ||
+          invitation.email ||
+          "",
+
+        organizationId:
+          invitation.organizationId ||
+          "",
+
+        organizationName:
+          invitation.organizationName ||
+          "",
+
+        invitationType:
+          invitation.invitationType ||
+          "",
+
+        role:
+          invitation.role ||
+          "",
+
+        teamId:
+          invitation.teamId ||
+          "",
+
+        teamName:
+          invitation?.metadata
+            ?.teamName ||
+          "",
+
+        expiresAt:
+          expiryDate.toISOString(),
+
+        status:
+          "pending",
+
+        metadata: {
+          teamName:
+            invitation?.metadata
+              ?.teamName ||
+            "",
+        },
+      };
+
+      return {
+        valid: true,
+        reason: "",
+        message: "",
+        invitation:
+          safeInvitation,
+      };
+    }
+  );
 
 const parseTime = (
   value,
@@ -443,6 +641,32 @@ const organizationMatchesTemplate = (
   organization,
   template
 ) => {
+  const organizationStatus =
+    normalizeStatus(
+      organization?.status
+    );
+
+  const organizationType =
+    normalizeStatus(
+      organization?.type ||
+      organization?.organizationType
+    );
+
+  /*
+   * Scheduled report tasks are created only for active operator
+   * organizations. Ministries are the recipient of submitted data, not a
+   * reporting operator target.
+   *
+   * Older records without a status remain usable during migration.
+   */
+  if (
+    organizationStatus === "archived" ||
+    organizationStatus === "inactive" ||
+    organizationType === "ministry"
+  ) {
+    return false;
+  }
+
   const targetAudience =
     template?.targetAudience ||
     {};
@@ -567,11 +791,23 @@ const getSubmitterUsers = async ({
           user.userRole
         );
 
+      const userStatus =
+        normalizeStatus(
+          user.status
+        );
+
+      const userIsActive =
+        !userStatus ||
+        userStatus === "active";
+
       return (
         userRole ===
-        normalizeValue(
-          submitterRole
-        )
+          normalizeValue(
+            submitterRole
+          ) &&
+        userIsActive &&
+        user.onboardingCompleted !==
+          false
       );
     });
 };
@@ -623,11 +859,18 @@ const buildReportTask = ({
 
     fieldValues: {},
 
+    /*
+     * Security and hierarchy metadata comes from the stored organization.
+     * These fields make Ministry, Enterprise, Region and Branch report queries
+     * deterministic and allow the final Firestore rules to validate scope.
+     */
     sector:
+      organization.sector ||
       template.sector ||
       "",
 
     industrySegment:
+      organization.industrySegment ||
       template.industrySegment ||
       "",
 
@@ -664,7 +907,45 @@ const buildReportTask = ({
       DEFAULT_TIMEZONE,
 
     organizationId:
+      organization.organizationId ||
       organization.id,
+
+    parentOrganizationId:
+      organization.parentId ||
+      "",
+
+    rootEnterpriseId:
+      organization.rootEnterpriseId ||
+      (
+        normalizeStatus(
+          organization.type
+        ) === "enterprise"
+          ? (
+              organization.organizationId ||
+              organization.id
+            )
+          : ""
+      ),
+
+    ancestorIds:
+      Array.isArray(
+        organization.ancestorIds
+      )
+        ? organization.ancestorIds
+        : [],
+
+    companyId:
+      organization.companyId ||
+      "",
+
+    regionId:
+      organization.regionId ||
+      "",
+
+    organizationType:
+      organization.type ||
+      organization.organizationType ||
+      "",
 
     operatorName:
       organization.name ||
