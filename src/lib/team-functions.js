@@ -13,11 +13,16 @@ import {
   where,
 } from "firebase/firestore";
 
-import { db } from "../firebase/firebase";
+import { auth, db } from "../firebase/firebase";
 
 const TEAMS_COLLECTION = "teams";
 const USERS_COLLECTION = "users";
 const ORGANIZATIONS_COLLECTION = "organizations";
+
+const ADMIN_TRANSFER_ROLES = new Set([
+  "region_admin",
+  "branch_admin",
+]);
 
 const normalizeText = (value) => {
   return String(value ?? "")
@@ -46,6 +51,43 @@ const requireValue = (value, message) => {
   if (!String(value ?? "").trim()) {
     throw new Error(message);
   }
+};
+
+/*
+ * Mutating helpers receive createdBy/updatedBy for audit fields, but those
+ * values must describe the Firebase user who is actually signed in.
+ *
+ * Firestore Security Rules will enforce the same boundary later. Keeping this
+ * check here also prevents the application from accidentally writing another
+ * user's UID into audit or administrator-assignment fields.
+ */
+const requireAuthenticatedActor = (
+  actorId,
+  actionLabel = "perform this action"
+) => {
+  requireValue(
+    actorId,
+    "A signed-in administrator is required."
+  );
+
+  const currentUser = auth.currentUser;
+
+  if (
+    !currentUser ||
+    currentUser.uid !== actorId
+  ) {
+    throw new Error(
+      `The signed-in account is not allowed to ${actionLabel}.`
+    );
+  }
+
+  if (!currentUser.emailVerified) {
+    throw new Error(
+      "Verify your email address before making organization or team changes."
+    );
+  }
+
+  return currentUser;
 };
 
 /*
@@ -100,6 +142,27 @@ export const createTeam = async ({
   requireValue(organizationId, "An organization ID is required.");
   requireValue(createdBy, "The user creating the team is required.");
 
+  requireAuthenticatedActor(
+    createdBy,
+    "create this team"
+  );
+
+  const normalizedStatus =
+    normalizeIdentifier(status) ||
+    "active";
+
+  if (
+    !new Set([
+      "active",
+      "inactive",
+      "archived",
+    ]).has(normalizedStatus)
+  ) {
+    throw new Error(
+      "Team status must be active, inactive or archived."
+    );
+  }
+
   const trimmedName = String(name).trim();
   const normalizedName = normalizeText(trimmedName);
   const existingTeams = await getOrganizationTeams(organizationId, {
@@ -137,7 +200,7 @@ export const createTeam = async ({
     organizationId,
     teamType: normalizeIdentifier(teamType) || "general",
     isDefault: Boolean(isDefault),
-    status: normalizeIdentifier(status) || "active",
+    status: normalizedStatus,
     createdBy,
     createdAt: serverTimestamp(),
     updatedBy: createdBy,
@@ -236,6 +299,11 @@ export const addUserToTeam = async ({
   requireValue(teamId, "A team ID is required.");
   requireValue(updatedBy, "The user assigning the team member is required.");
 
+  requireAuthenticatedActor(
+    updatedBy,
+    "add this user to the team"
+  );
+
   const userReference = doc(db, USERS_COLLECTION, userId);
   const teamReference = doc(db, TEAMS_COLLECTION, teamId);
 
@@ -260,8 +328,8 @@ export const addUserToTeam = async ({
   }
 
   if (
-    user.organizationId &&
-    team.organizationId &&
+    !user.organizationId ||
+    !team.organizationId ||
     user.organizationId !== team.organizationId
   ) {
     throw new Error(
@@ -293,11 +361,39 @@ export const removeUserFromTeam = async ({
   requireValue(teamId, "A team ID is required.");
   requireValue(updatedBy, "The user removing the team member is required.");
 
+  requireAuthenticatedActor(
+    updatedBy,
+    "remove this user from the team"
+  );
+
   const userReference = doc(db, USERS_COLLECTION, userId);
-  const userSnapshot = await getDoc(userReference);
+  const teamReference = doc(db, TEAMS_COLLECTION, teamId);
+
+  const [userSnapshot, teamSnapshot] =
+    await Promise.all([
+      getDoc(userReference),
+      getDoc(teamReference),
+    ]);
 
   if (!userSnapshot.exists()) {
     throw new Error("The selected user could not be found.");
+  }
+
+  if (!teamSnapshot.exists()) {
+    throw new Error("The selected team could not be found.");
+  }
+
+  const user = userSnapshot.data();
+  const team = teamSnapshot.data();
+
+  if (
+    !user.organizationId ||
+    !team.organizationId ||
+    user.organizationId !== team.organizationId
+  ) {
+    throw new Error(
+      "The user and team must belong to the same organization."
+    );
   }
 
   await updateDoc(userReference, {
@@ -357,6 +453,24 @@ export const transferUserToOrganizationTeam = async ({
     updatedBy,
     "The administrator making the assignment is required."
   );
+
+  requireAuthenticatedActor(
+    updatedBy,
+    "transfer this user to the child organization"
+  );
+
+  const normalizedRole =
+    normalizeIdentifier(role);
+
+  if (
+    !ADMIN_TRANSFER_ROLES.has(
+      normalizedRole
+    )
+  ) {
+    throw new Error(
+      "Existing-member transfers may only assign a Region Admin or Branch Admin role."
+    );
+  }
 
   const targetOrganizationId =
     targetOrganization?.organizationId ||
@@ -517,6 +631,41 @@ export const transferUserToOrganizationTeam = async ({
         );
       }
 
+      /*
+       * A promotion may only move the user one level down the hierarchy.
+       * This blocks direct calls from transferring a user into an unrelated
+       * organization even if a valid destination team ID is known.
+       */
+      if (
+        storedOrganization.parentId !==
+        sourceOrganizationId
+      ) {
+        throw new Error(
+          "The destination organization must be a direct child of the user's current organization."
+        );
+      }
+
+      const storedOrganizationType =
+        normalizeIdentifier(
+          storedOrganization.type ||
+          storedOrganization.organizationType
+        );
+
+      const expectedOrganizationType =
+        normalizedRole ===
+        "region_admin"
+          ? "region"
+          : "branch";
+
+      if (
+        storedOrganizationType !==
+        expectedOrganizationType
+      ) {
+        throw new Error(
+          `The ${normalizedRole} role cannot be assigned to this organization type.`
+        );
+      }
+
       const currentAdminIds =
         Array.isArray(
           storedOrganization.adminIds
@@ -590,7 +739,7 @@ export const transferUserToOrganizationTeam = async ({
             null,
 
           role:
-            normalizeIdentifier(role),
+            normalizedRole,
 
           teamIds: [
             targetTeamId,
@@ -613,7 +762,7 @@ export const transferUserToOrganizationTeam = async ({
               "",
 
             role:
-              normalizeIdentifier(role),
+              normalizedRole,
 
             assignedBy:
               updatedBy,
@@ -726,6 +875,11 @@ export const updateTeam = async ({
 }) => {
   requireValue(teamId, "A team ID is required.");
   requireValue(updatedBy, "The user updating the team is required.");
+
+  requireAuthenticatedActor(
+    updatedBy,
+    "update this team"
+  );
 
   const teamReference = doc(db, TEAMS_COLLECTION, teamId);
   const teamSnapshot = await getDoc(teamReference);
