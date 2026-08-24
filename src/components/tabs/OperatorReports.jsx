@@ -15,7 +15,6 @@ import {
 import {
   Card,
   EmptyCell,
-  PageHeader,
   SearchInput,
   Select,
   StatusBadge,
@@ -58,6 +57,12 @@ const STATUS_OPTIONS = [
   "Rejected",
   "Overdue",
 ];
+
+/*
+ * Keep Operator Reports visually aligned with the rest of the dashboard.
+ */
+const NAVY = "#0F172A";
+const PALE_BLUE = "#C8D5E8";
 
 const normalizeValue = (value) => {
   return String(value ?? "")
@@ -1234,14 +1239,44 @@ const OperatorsReports = ({
 
   return (
     <>
-      <div>
-        <PageHeader title="Reports" />
+      <section className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6">
+        {/*
+         * Match the Overview heading hierarchy and page spacing so the
+         * operator-facing Reports tab feels like part of the same dashboard.
+         */}
+        <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
+          <div>
+            <div className="mb-2 flex flex-wrap items-center gap-3">
+              <span
+                className="h-6 w-1.5 rounded-full"
+                style={{
+                  backgroundColor:
+                    NAVY,
+                }}
+              />
 
-        <p className="-mt-4 mb-6 max-w-2xl text-sm font-medium text-slate-700">
-          View reporting tasks assigned by the
-          ministry and track submitted reports
-          through their approval workflow.
-        </p>
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+                Reports
+              </h1>
+
+              <span
+                className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
+                style={{
+                  backgroundColor:
+                    PALE_BLUE,
+                  color:
+                    NAVY,
+                }}
+              >
+                Operator Reporting
+              </span>
+            </div>
+
+            <p className="max-w-2xl text-sm text-slate-500">
+              View reporting tasks assigned by the ministry and track submitted reports through their approval workflow.
+            </p>
+          </div>
+        </header>
 
         <div className="space-y-6">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -1573,7 +1608,7 @@ const OperatorsReports = ({
             </div>
           </Card>
         </div>
-      </div>
+      </section>
 
       {openReport && (
         <ReportViewer
