@@ -28,7 +28,7 @@ import {
   setDoc,
 } from "firebase/firestore";
 
-import { db } from "../firebase/firebase";
+import { auth, db } from "../firebase/firebase";
 
 import { getInvitationById,
 hashInvitationToken,
@@ -56,6 +56,13 @@ export const INVITED_USER_NEXT_STEPS = Object.freeze({
  * directly to the personal-profile stage.
  */
 const INVITED_PROFILE_ONBOARDING_STEP = 4;
+
+const HIERARCHY_ADMIN_ROLES = new Set([
+  "ministry_admin",
+  "enterprise_admin",
+  "region_admin",
+  "branch_admin",
+]);
 
 const normalizeText = (value) => {
   return String(value ?? "").trim();
@@ -176,6 +183,121 @@ const validateAuthenticatedUser = (user) => {
     email,
     emailVerified: Boolean(user.emailVerified),
   };
+};
+
+/*
+ * The caller can pass a Firebase user object for convenience, but privilege-
+ * changing invitation flows must also match the real active Auth session.
+ */
+const validateCurrentAuthSession = (
+  authenticatedUser,
+  {
+    requireVerifiedEmail = false,
+  } = {}
+) => {
+  const currentUser =
+    auth.currentUser;
+
+  if (!currentUser?.uid) {
+    throw new Error(
+      "A signed-in Firebase user is required."
+    );
+  }
+
+  const currentEmail =
+    normalizeEmail(
+      currentUser.email
+    );
+
+  if (
+    currentUser.uid !==
+      authenticatedUser.uid ||
+    currentEmail !==
+      authenticatedUser.email
+  ) {
+    throw new Error(
+      "The signed-in Firebase account does not match this invitation user."
+    );
+  }
+
+  if (
+    requireVerifiedEmail &&
+    !currentUser.emailVerified
+  ) {
+    throw new Error(
+      "Verify your email address before completing this invitation."
+    );
+  }
+
+  return {
+    uid:
+      currentUser.uid,
+    email:
+      currentEmail,
+    emailVerified:
+      Boolean(
+        currentUser.emailVerified
+      ),
+  };
+};
+
+/*
+ * Administrator roles must come through their dedicated invitation type.
+ * A normal team-member invitation is not allowed to grant hierarchy-admin
+ * privileges even if an old or malformed invitation document contains them.
+ */
+const validateInvitationRoleAssignment = (
+  invitation
+) => {
+  const invitationType =
+    normalizeStatus(
+      invitation?.invitationType
+    );
+
+  const role =
+    normalizeStatus(
+      invitation?.role
+    );
+
+  if (!role) {
+    throw new Error(
+      "The invitation does not contain a valid role."
+    );
+  }
+
+  if (
+    invitationType ===
+      "region_admin" &&
+    role !== "region_admin"
+  ) {
+    throw new Error(
+      "The Regional Administrator invitation has an invalid role."
+    );
+  }
+
+  if (
+    invitationType ===
+      "branch_admin" &&
+    role !== "branch_admin"
+  ) {
+    throw new Error(
+      "The Branch Administrator invitation has an invalid role."
+    );
+  }
+
+  if (
+    invitationType ===
+      "team_member" &&
+    HIERARCHY_ADMIN_ROLES.has(
+      role
+    )
+  ) {
+    throw new Error(
+      "A team-member invitation cannot grant a hierarchy administrator role."
+    );
+  }
+
+  return role;
 };
 
 const validateInvitationEmail = ({
@@ -464,6 +586,11 @@ export const linkInvitationToAuthenticatedUser =
     const authenticatedUser =
       validateAuthenticatedUser(user);
 
+
+    const currentAuthUser =
+      validateCurrentAuthSession(
+        authenticatedUser
+      );
     const validation =
       await validateInvitation({
         token,
@@ -481,6 +608,10 @@ export const linkInvitationToAuthenticatedUser =
     const invitation =
       validation.invitation;
 
+
+    validateInvitationRoleAssignment(
+      invitation
+    );
     const {
       organization,
       team,
@@ -506,65 +637,31 @@ export const linkInvitationToAuthenticatedUser =
         authenticatedUser.email,
     });
 
-    const teamIds = mergeTeamIds(
-      existingUser?.teamIds,
-      invitation.teamId
-    );
-
     const onboardingWasAlreadyCompleted =
       Boolean(
         existingUser?.onboardingCompleted
       );
 
+    /*
+     * IMPORTANT SECURITY BOUNDARY
+     * ---------------------------
+     * Merely opening an invitation link must not grant organization, role or
+     * team access. Before email verification/profile completion we store only
+     * the invitation linkage and onboarding state.
+     *
+     * The actual organizationId, role, hierarchy metadata and teamIds are
+     * assigned later by completeInvitedUserProfile(), after the verified user,
+     * invitation, organization and team are all checked together.
+     */
     const userData = {
-      uid: authenticatedUser.uid,
+      uid:
+        currentAuthUser.uid,
 
-      email: authenticatedUser.email,
+      email:
+        currentAuthUser.email,
+
       emailLower:
-        authenticatedUser.email,
-
-      /*
-       * The organization and role come from the stored invitation, never from
-       * editable signup or profile fields.
-       */
-      organizationId:
-        invitation.organizationId,
-
-      organizationName:
-        organization.name ||
-        invitation.organizationName ||
-        "",
-
-      companyId:
-        organization.companyId || null,
-
-      organizationType:
-        organization.type || null,
-
-      parentOrganizationId:
-        organization.parentId || null,
-
-      rootEnterpriseId:
-        organization.rootEnterpriseId || null,
-
-      ancestorIds:
-        Array.isArray(
-          organization.ancestorIds
-        )
-          ? organization.ancestorIds
-          : [],
-
-      regionId:
-        organization.regionId || null,
-
-      sector:
-        organization.sector || null,
-
-      industrySegment:
-        organization.industrySegment || null,
-
-      role: invitation.role,
-      teamIds,
+        currentAuthUser.email,
 
       invitationId:
         invitation.invitationId ||
@@ -576,10 +673,6 @@ export const linkInvitationToAuthenticatedUser =
       invitedBy:
         invitation.invitedBy,
 
-      /*
-       * Existing active users may later receive a team invitation. Their
-       * completed onboarding status should not be reset.
-       */
       onboardingType:
         onboardingWasAlreadyCompleted
           ? existingUser.onboardingType ||
@@ -596,21 +689,18 @@ export const linkInvitationToAuthenticatedUser =
 
       status:
         onboardingWasAlreadyCompleted
-          ? existingUser.status || "active"
+          ? existingUser.status ||
+            "active"
           : "profile_pending",
 
       emailVerified:
-        authenticatedUser.emailVerified ||
+        currentAuthUser.emailVerified ||
         Boolean(
           existingUser?.emailVerified
         ),
 
-      country:
-        existingUser?.country ??
-        organization.country ??
-        null,
-
-      updatedAt: serverTimestamp(),
+      updatedAt:
+        serverTimestamp(),
     };
 
     /*
@@ -623,7 +713,7 @@ export const linkInvitationToAuthenticatedUser =
     }
 
     if (
-      authenticatedUser.emailVerified &&
+      currentAuthUser.emailVerified &&
       !existingUser?.emailVerified
     ) {
       userData.emailVerifiedAt =
@@ -639,7 +729,7 @@ export const linkInvitationToAuthenticatedUser =
     );
 
     return {
-      id: authenticatedUser.uid,
+      id: currentAuthUser.uid,
       ...existingUser,
       ...userData,
 
@@ -1055,7 +1145,16 @@ export const completeInvitedUserProfile =
     const authenticatedUser =
       validateAuthenticatedUser(user);
 
-    if (!authenticatedUser.emailVerified) {
+
+    const currentAuthUser =
+      validateCurrentAuthSession(
+        authenticatedUser,
+        {
+          requireVerifiedEmail:
+            true,
+        }
+      );
+    if (!currentAuthUser.emailVerified) {
       throw new Error(
         "Verify your email address before completing your profile."
       );
@@ -1110,6 +1209,11 @@ export const completeInvitedUserProfile =
           );
         }
 
+
+        const invitationRole =
+          validateInvitationRoleAssignment(
+            invitation
+          );
         const invitationStatus =
           normalizeStatus(
             invitation.status
@@ -1124,7 +1228,7 @@ export const completeInvitedUserProfile =
           invitationStatus ===
             "accepted" &&
           invitation.acceptedBy !==
-            authenticatedUser.uid
+            currentAuthUser.uid
         ) {
           throw new Error(
             "This invitation has already been accepted by another user."
@@ -1161,12 +1265,12 @@ export const completeInvitedUserProfile =
         validateInvitationEmail({
           invitation,
           authenticatedEmail:
-            authenticatedUser.email,
+            currentAuthUser.email,
         });
 
         const userReference =
           getUserReference(
-            authenticatedUser.uid
+            currentAuthUser.uid
           );
 
         const organizationReference =
@@ -1224,7 +1328,7 @@ export const completeInvitedUserProfile =
           existingUser,
           invitation,
           authenticatedEmail:
-            authenticatedUser.email,
+            currentAuthUser.email,
         });
 
         validateOrganization({
@@ -1248,13 +1352,13 @@ export const completeInvitedUserProfile =
 
         const completedUserData = {
           uid:
-            authenticatedUser.uid,
+            currentAuthUser.uid,
 
           email:
-            authenticatedUser.email,
+            currentAuthUser.email,
 
           emailLower:
-            authenticatedUser.email,
+            currentAuthUser.email,
 
           fullName:
             normalizedFullName,
@@ -1316,7 +1420,7 @@ export const completeInvitedUserProfile =
             null,
 
           role:
-            invitation.role,
+            invitationRole,
 
           teamIds,
 
@@ -1386,7 +1490,7 @@ export const completeInvitedUserProfile =
               null,
 
             role:
-              invitation.role,
+              invitationRole,
 
             assignedBy:
               invitation.invitedBy,
@@ -1422,10 +1526,10 @@ export const completeInvitedUserProfile =
               status: "accepted",
 
               acceptedBy:
-                authenticatedUser.uid,
+                currentAuthUser.uid,
 
               acceptedEmail:
-                authenticatedUser.email,
+                currentAuthUser.email,
 
               acceptedAt:
                 serverTimestamp(),
@@ -1458,7 +1562,7 @@ export const completeInvitedUserProfile =
             Array.from(
               new Set([
                 ...existingAdminIds,
-                authenticatedUser.uid,
+                currentAuthUser.uid,
               ])
             );
 
@@ -1496,7 +1600,7 @@ export const completeInvitedUserProfile =
             !organization.primaryAdminUserId
           ) {
             organizationUpdates.primaryAdminUserId =
-              authenticatedUser.uid;
+              currentAuthUser.uid;
           }
 
           transaction.update(
@@ -1507,10 +1611,10 @@ export const completeInvitedUserProfile =
 
         return {
           userId:
-            authenticatedUser.uid,
+            currentAuthUser.uid,
 
           email:
-            authenticatedUser.email,
+            currentAuthUser.email,
 
           organizationId:
             invitation.organizationId,
@@ -1525,7 +1629,7 @@ export const completeInvitedUserProfile =
             null,
 
           role:
-            invitation.role,
+            invitationRole,
 
           teamIds,
 
