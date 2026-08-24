@@ -45,6 +45,8 @@ import {
   collection,
   doc,
   onSnapshot,
+  query,
+  where,
 } from "firebase/firestore";
 
 import {
@@ -1599,9 +1601,15 @@ const getWorkflowEventUserName = (
 };
 
 const buildReportTimeline = (
-  report,
-  userMap
+  report
 ) => {
+  /*
+   * Workflow entries already snapshot actor names, roles and emails. Avoid a
+   * secondary users-collection lookup so audit history does not require access
+   * to unrelated user profiles.
+   */
+  const userMap =
+    new Map();
   const rawEvents =
     getWorkflowHistory(
       report
@@ -3380,6 +3388,407 @@ const SubmissionViewer = ({
   );
 };
 
+/*
+ * Firestore rules are not filters. Reports therefore subscribes only to the
+ * hierarchy already permitted for the signed-in organization.
+ *
+ * Scope:
+ * - Ministry: records in the Ministry sector
+ * - Enterprise: enterprise + descendants
+ * - Region: region + descendants
+ * - Branch: branch only
+ */
+const snapshotToDocuments = (
+  snapshot
+) => {
+  if (
+    Array.isArray(
+      snapshot?.docs
+    )
+  ) {
+    return snapshot.docs.map(
+      (documentSnapshot) => ({
+        id:
+          documentSnapshot.id,
+        ...documentSnapshot.data(),
+      })
+    );
+  }
+
+  if (
+    snapshot?.exists?.()
+  ) {
+    return [
+      {
+        id: snapshot.id,
+        ...snapshot.data(),
+      },
+    ];
+  }
+
+  return [];
+};
+
+const mergeDocumentLists = (
+  documentLists
+) => {
+  const merged =
+    new Map();
+
+  documentLists
+    .flat()
+    .forEach(
+      (record) => {
+        if (record?.id) {
+          merged.set(
+            record.id,
+            record
+          );
+        }
+      }
+    );
+
+  return Array.from(
+    merged.values()
+  );
+};
+
+const subscribeToScopedReferences = ({
+  references,
+  onData,
+  onError,
+}) => {
+  if (!references.length) {
+    onData([]);
+    return () => {};
+  }
+
+  const sourceDocuments =
+    new Map();
+
+  const initializedSources =
+    new Set();
+
+  const unsubscribers =
+    references.map(
+      (
+        reference,
+        index
+      ) =>
+        onSnapshot(
+          reference,
+          (snapshot) => {
+            sourceDocuments.set(
+              index,
+              snapshotToDocuments(
+                snapshot
+              )
+            );
+
+            initializedSources.add(
+              index
+            );
+
+            if (
+              initializedSources.size ===
+              references.length
+            ) {
+              onData(
+                mergeDocumentLists(
+                  Array.from(
+                    sourceDocuments.values()
+                  )
+                )
+              );
+            }
+          },
+          onError
+        )
+    );
+
+  return () => {
+    unsubscribers.forEach(
+      (unsubscribe) =>
+        unsubscribe()
+    );
+  };
+};
+
+const getScopedOrganizationReferences = (
+  organization
+) => {
+  const organizationId =
+    getOrganizationId(
+      organization
+    );
+
+  const organizationLevel =
+    getOrganizationLevel(
+      organization
+    );
+
+  const organizationCategory =
+    getOrganizationCategory(
+      organization
+    );
+
+  if (
+    organizationCategory ===
+      "ministry" ||
+    organizationLevel ===
+      "ministry"
+  ) {
+    const sector =
+      String(
+        organization.sector ||
+          ""
+      ).trim();
+
+    if (!sector) {
+      throw new Error(
+        "The Ministry organization is missing its sector."
+      );
+    }
+
+    return [
+      doc(
+        db,
+        ORGANIZATIONS_COLLECTION,
+        organizationId
+      ),
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "sector",
+          "==",
+          sector
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "enterprise"
+  ) {
+    return [
+      doc(
+        db,
+        ORGANIZATIONS_COLLECTION,
+        organizationId
+      ),
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "rootEnterpriseId",
+          "==",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "region"
+  ) {
+    return [
+      doc(
+        db,
+        ORGANIZATIONS_COLLECTION,
+        organizationId
+      ),
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "ancestorIds",
+          "array-contains",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  return [
+    doc(
+      db,
+      ORGANIZATIONS_COLLECTION,
+      organizationId
+    ),
+  ];
+};
+
+const getScopedReportReferences = (
+  organization
+) => {
+  const organizationId =
+    getOrganizationId(
+      organization
+    );
+
+  const organizationLevel =
+    getOrganizationLevel(
+      organization
+    );
+
+  const organizationCategory =
+    getOrganizationCategory(
+      organization
+    );
+
+  if (
+    organizationCategory ===
+      "ministry" ||
+    organizationLevel ===
+      "ministry"
+  ) {
+    const sector =
+      String(
+        organization.sector ||
+          ""
+      ).trim();
+
+    if (!sector) {
+      throw new Error(
+        "The Ministry organization is missing its sector."
+      );
+    }
+
+    return [
+      query(
+        collection(
+          db,
+          REPORT_SUBMISSIONS_COLLECTION
+        ),
+        where(
+          "sector",
+          "==",
+          sector
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "enterprise"
+  ) {
+    return [
+      query(
+        collection(
+          db,
+          REPORT_SUBMISSIONS_COLLECTION
+        ),
+        where(
+          "rootEnterpriseId",
+          "==",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "region"
+  ) {
+    return [
+      query(
+        collection(
+          db,
+          REPORT_SUBMISSIONS_COLLECTION
+        ),
+        where(
+          "organizationId",
+          "==",
+          organizationId
+        )
+      ),
+      query(
+        collection(
+          db,
+          REPORT_SUBMISSIONS_COLLECTION
+        ),
+        where(
+          "ancestorIds",
+          "array-contains",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  return [
+    query(
+      collection(
+        db,
+        REPORT_SUBMISSIONS_COLLECTION
+      ),
+      where(
+        "organizationId",
+        "==",
+        organizationId
+      )
+    ),
+  ];
+};
+
+/*
+ * Fuel prices are enterprise-level records keyed by enterprise organization ID.
+ * Reading exact documents avoids exposing the complete price collection.
+ */
+const getFuelPriceReferences = (
+  organizations
+) => {
+  const enterpriseIds =
+    Array.from(
+      new Set(
+        organizations
+          .map(
+            (organization) => {
+              const organizationId =
+                getOrganizationId(
+                  organization
+                );
+
+              if (
+                getOrganizationLevel(
+                  organization
+                ) ===
+                "enterprise"
+              ) {
+                return organizationId;
+              }
+
+              return (
+                organization.rootEnterpriseId ||
+                ""
+              );
+            }
+          )
+          .filter(Boolean)
+      )
+    );
+
+  return enterpriseIds.map(
+    (enterpriseId) =>
+      doc(
+        db,
+        COMPANY_FUEL_PRICES_COLLECTION,
+        enterpriseId
+      )
+  );
+};
+
 const Reports = ({
   pageSize =
     DEFAULT_PAGE_SIZE,
@@ -3393,11 +3802,6 @@ const Reports = ({
   const [
     organizations,
     setOrganizations,
-  ] = useState([]);
-
-  const [
-    users,
-    setUsers,
   ] = useState([]);
 
   const [
@@ -3421,7 +3825,6 @@ const Reports = ({
   ] = useState({
     user: false,
     organizations: false,
-    users: false,
     reports: false,
     prices: false,
   });
@@ -3600,177 +4003,375 @@ const Reports = ({
   }, []);
 
   /*
-   * Live collection subscriptions keep the submitted-report list, operator
-   * hierarchy and submitter names current without requiring a page refresh.
+   * Resolve the signed-in organization first, then subscribe only to the
+   * permitted organization/report hierarchy.
+   *
+   * The Reports page deliberately does not subscribe to the users collection.
+   * Report and workflow records already snapshot the names/roles needed for the
+   * audit UI, which avoids exposing unrelated user profiles.
    */
   useEffect(() => {
-    const unsubscribers = [
-      onSnapshot(
-        collection(
-          db,
-          ORGANIZATIONS_COLLECTION
-        ),
-        (snapshot) => {
-          setOrganizations(
-            snapshot.docs.map(
-              (organizationDocument) => ({
-                id: organizationDocument.id,
-                ...organizationDocument.data(),
-              })
-            )
-          );
+    let scopedUnsubscribers =
+      [];
 
-          setLoadedSources(
-            (current) => ({
-              ...current,
-              organizations: true,
-            })
-          );
+    const clearScopedSubscriptions =
+      () => {
+        scopedUnsubscribers.forEach(
+          (unsubscribe) =>
+            unsubscribe()
+        );
+
+        scopedUnsubscribers =
+          [];
+      };
+
+    if (!currentUserProfile) {
+      setOrganizations([]);
+      setReportSubmissions([]);
+      setCompanyFuelPrices([]);
+
+      setLoadedSources(
+        (current) => ({
+          ...current,
+          organizations:
+            false,
+          reports:
+            false,
+          prices:
+            false,
+        })
+      );
+
+      return clearScopedSubscriptions;
+    }
+
+    const userOrganizationId =
+      getUserOrganizationId(
+        currentUserProfile
+      );
+
+    if (!userOrganizationId) {
+      setOrganizations([]);
+      setReportSubmissions([]);
+      setCompanyFuelPrices([]);
+
+      setLoadedSources(
+        (current) => ({
+          ...current,
+          organizations:
+            true,
+          reports:
+            true,
+          prices:
+            true,
+        })
+      );
+
+      setLoadError(
+        "This account is not linked to an organization."
+      );
+
+      return clearScopedSubscriptions;
+    }
+
+    setLoadedSources(
+      (current) => ({
+        ...current,
+        organizations:
+          false,
+        reports:
+          false,
+        prices:
+          false,
+      })
+    );
+
+    const currentOrganizationReference =
+      doc(
+        db,
+        ORGANIZATIONS_COLLECTION,
+        userOrganizationId
+      );
+
+    const unsubscribeCurrentOrganization =
+      onSnapshot(
+        currentOrganizationReference,
+        (
+          organizationSnapshot
+        ) => {
+          clearScopedSubscriptions();
+
+          if (
+            !organizationSnapshot.exists()
+          ) {
+            setOrganizations([]);
+            setReportSubmissions([]);
+            setCompanyFuelPrices([]);
+
+            setLoadedSources(
+              (current) => ({
+                ...current,
+                organizations:
+                  true,
+                reports:
+                  true,
+                prices:
+                  true,
+              })
+            );
+
+            setLoadError(
+              "The current organization could not be found."
+            );
+
+            return;
+          }
+
+          const signedInOrganization = {
+            id:
+              organizationSnapshot.id,
+            ...organizationSnapshot.data(),
+          };
+
+          let organizationReferences;
+          let reportReferences;
+
+          try {
+            organizationReferences =
+              getScopedOrganizationReferences(
+                signedInOrganization
+              );
+
+            reportReferences =
+              getScopedReportReferences(
+                signedInOrganization
+              );
+          } catch (error) {
+            setOrganizations([]);
+            setReportSubmissions([]);
+            setCompanyFuelPrices([]);
+
+            setLoadedSources(
+              (current) => ({
+                ...current,
+                organizations:
+                  true,
+                reports:
+                  true,
+                prices:
+                  true,
+              })
+            );
+
+            setLoadError(
+              error.message ||
+                "The report access scope could not be resolved."
+            );
+
+            return;
+          }
+
+          let unsubscribePrices =
+            () => {};
+
+          const unsubscribeOrganizations =
+            subscribeToScopedReferences({
+              references:
+                organizationReferences,
+
+              onData:
+                (
+                  scopedOrganizations
+                ) => {
+                  setOrganizations(
+                    scopedOrganizations
+                  );
+
+                  setLoadedSources(
+                    (current) => ({
+                      ...current,
+                      organizations:
+                        true,
+                    })
+                  );
+
+                  unsubscribePrices();
+
+                  unsubscribePrices =
+                    subscribeToScopedReferences({
+                      references:
+                        getFuelPriceReferences(
+                          scopedOrganizations
+                        ),
+
+                      onData:
+                        (
+                          scopedPrices
+                        ) => {
+                          setCompanyFuelPrices(
+                            scopedPrices
+                          );
+
+                          setLoadedSources(
+                            (current) => ({
+                              ...current,
+                              prices:
+                                true,
+                            })
+                          );
+                        },
+
+                      onError:
+                        (
+                          error
+                        ) => {
+                          console.error(
+                            "Unable to load company fuel prices:",
+                            error
+                          );
+
+                          setCompanyFuelPrices(
+                            []
+                          );
+
+                          setLoadedSources(
+                            (current) => ({
+                              ...current,
+                              prices:
+                                true,
+                            })
+                          );
+                        },
+                    });
+                },
+
+              onError:
+                (
+                  error
+                ) => {
+                  console.error(
+                    "Unable to load organizations:",
+                    error
+                  );
+
+                  setOrganizations(
+                    []
+                  );
+
+                  setLoadedSources(
+                    (current) => ({
+                      ...current,
+                      organizations:
+                        true,
+                    })
+                  );
+
+                  setLoadError(
+                    error.message ||
+                      "Organizations could not be loaded."
+                  );
+                },
+            });
+
+          const unsubscribeReports =
+            subscribeToScopedReferences({
+              references:
+                reportReferences,
+
+              onData:
+                (
+                  scopedReports
+                ) => {
+                  setReportSubmissions(
+                    scopedReports
+                  );
+
+                  setLoadedSources(
+                    (current) => ({
+                      ...current,
+                      reports:
+                        true,
+                    })
+                  );
+
+                  setLoadError(
+                    ""
+                  );
+                },
+
+              onError:
+                (
+                  error
+                ) => {
+                  console.error(
+                    "Unable to load report submissions:",
+                    error
+                  );
+
+                  setReportSubmissions(
+                    []
+                  );
+
+                  setLoadedSources(
+                    (current) => ({
+                      ...current,
+                      reports:
+                        true,
+                    })
+                  );
+
+                  setLoadError(
+                    error.message ||
+                      "Report submissions could not be loaded."
+                  );
+                },
+            });
+
+          scopedUnsubscribers = [
+            unsubscribeOrganizations,
+            unsubscribeReports,
+            () =>
+              unsubscribePrices(),
+          ];
         },
         (error) => {
           console.error(
-            "Unable to load organizations:",
+            "Unable to load the current organization:",
             error
           );
+
+          clearScopedSubscriptions();
+
+          setOrganizations([]);
+          setReportSubmissions([]);
+          setCompanyFuelPrices([]);
 
           setLoadedSources(
             (current) => ({
               ...current,
-              organizations: true,
+              organizations:
+                true,
+              reports:
+                true,
+              prices:
+                true,
             })
           );
 
           setLoadError(
-            error?.message ||
-              "Organizations could not be loaded."
+            error.message ||
+              "The current organization could not be loaded."
           );
         }
-      ),
-
-      onSnapshot(
-        collection(
-          db,
-          USERS_COLLECTION
-        ),
-        (snapshot) => {
-          setUsers(
-            snapshot.docs.map(
-              (userDocument) => ({
-                id: userDocument.id,
-                ...userDocument.data(),
-              })
-            )
-          );
-
-          setLoadedSources(
-            (current) => ({
-              ...current,
-              users: true,
-            })
-          );
-        },
-        (error) => {
-          console.error(
-            "Unable to load users:",
-            error
-          );
-
-          setLoadedSources(
-            (current) => ({
-              ...current,
-              users: true,
-            })
-          );
-        }
-      ),
-
-      onSnapshot(
-        collection(
-          db,
-          REPORT_SUBMISSIONS_COLLECTION
-        ),
-        (snapshot) => {
-          setReportSubmissions(
-            snapshot.docs.map(
-              (reportDocument) => ({
-                id: reportDocument.id,
-                ...reportDocument.data(),
-              })
-            )
-          );
-
-          setLoadedSources(
-            (current) => ({
-              ...current,
-              reports: true,
-            })
-          );
-        },
-        (error) => {
-          console.error(
-            "Unable to load report submissions:",
-            error
-          );
-
-          setLoadedSources(
-            (current) => ({
-              ...current,
-              reports: true,
-            })
-          );
-
-          setLoadError(
-            error?.message ||
-              "Report submissions could not be loaded."
-          );
-        }
-      ),
-
-      onSnapshot(
-        collection(
-          db,
-          COMPANY_FUEL_PRICES_COLLECTION
-        ),
-        (snapshot) => {
-          setCompanyFuelPrices(
-            snapshot.docs.map(
-              (priceDocument) => ({
-                id: priceDocument.id,
-                ...priceDocument.data(),
-              })
-            )
-          );
-
-          setLoadedSources(
-            (current) => ({
-              ...current,
-              prices: true,
-            })
-          );
-        },
-        (error) => {
-          console.error(
-            "Unable to load company fuel prices:",
-            error
-          );
-
-          setLoadedSources(
-            (current) => ({
-              ...current,
-              prices: true,
-            })
-          );
-        }
-      ),
-    ];
+      );
 
     return () => {
-      unsubscribers.forEach(
-        (unsubscribe) =>
-          unsubscribe()
-      );
+      unsubscribeCurrentOrganization();
+      clearScopedSubscriptions();
     };
-  }, []);
+  }, [
+    currentUserProfile,
+  ]);
 
   const loading =
     Object.values(
@@ -3921,19 +4522,6 @@ const Reports = ({
       );
     }, [visibleOrganizations]);
 
-  const userMap =
-    useMemo(() => {
-      return new Map(
-        users.map(
-          (user) => [
-            user.uid ||
-              user.id,
-            user,
-          ]
-        )
-      );
-    }, [users]);
-
   const priceMap =
     useMemo(() => {
       const map =
@@ -4006,12 +4594,6 @@ const Reports = ({
                 organizationMap
               );
 
-            const submittedByUser =
-              userMap.get(
-                report.submittedBy ||
-                  report.submittedById
-              );
-
             const reportDate =
               getReportDate(
                 report
@@ -4076,15 +4658,13 @@ const Reports = ({
 
             const submittedByName =
               report.submittedByName ||
-              submittedByUser?.fullName ||
-              submittedByUser?.name ||
+              report.submittedByUserName ||
               "";
 
             const submittedByRole =
               report.submittedByRole ||
-              getUserRole(
-                submittedByUser
-              );
+              report.submitterRole ||
+              "";
 
             const enrichedReport = {
               ...report,
@@ -4145,7 +4725,6 @@ const Reports = ({
 
               submittedByEmail:
                 report.submittedByEmail ||
-                submittedByUser?.email ||
                 "",
 
               currentStageRole:
@@ -4190,8 +4769,7 @@ const Reports = ({
 
             const timeline =
               buildReportTimeline(
-                enrichedReport,
-                userMap
+                enrichedReport
               );
 
             return {
@@ -4209,7 +4787,6 @@ const Reports = ({
       organizationMap,
       priceMap,
       reportSubmissions,
-      userMap,
       visibleOrganizationIds,
     ]);
 
