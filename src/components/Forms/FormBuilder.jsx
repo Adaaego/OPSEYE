@@ -32,6 +32,8 @@ import {
 import {
   collection,
   onSnapshot,
+  query,
+  where,
 } from "firebase/firestore";
 
 import {
@@ -203,49 +205,94 @@ const FormBuilder = ({
     });
 
   /*
-   * Load organizations directly from Firestore so the target
-   * audience list does not depend on a parent component prop.
+   * Firestore rules are not filters. The builder must not download the entire
+   * organizations collection and then decide in React which operators belong
+   * to the selected Ministry sector.
+   *
+   * A sector is therefore required before the target-audience list is loaded.
+   * Final Firestore rules will additionally require a Ministry user and verify
+   * that this sector matches the signed-in Ministry organization.
    */
   useEffect(() => {
-    const unsubscribe = onSnapshot(
-      collection(
-        db,
-        "organizations"
-      ),
-      (snapshot) => {
-        const organizationRecords =
-          snapshot.docs.map(
-            (organizationDocument) => ({
-              id:
-                organizationDocument.id,
-              ...organizationDocument.data(),
-            })
+    const selectedSector =
+      String(
+        formData.sector ||
+          ""
+      ).trim();
+
+    if (!selectedSector) {
+      setBackendOrganizations([]);
+      setOrganizationsLoading(false);
+      setOrganizationsError("");
+      return undefined;
+    }
+
+    setOrganizationsLoading(true);
+    setOrganizationsError("");
+
+    const organizationsQuery =
+      query(
+        collection(
+          db,
+          "organizations"
+        ),
+        where(
+          "sector",
+          "==",
+          selectedSector
+        )
+      );
+
+    const unsubscribe =
+      onSnapshot(
+        organizationsQuery,
+        (snapshot) => {
+          const organizationRecords =
+            snapshot.docs.map(
+              (
+                organizationDocument
+              ) => ({
+                id:
+                  organizationDocument.id,
+                ...organizationDocument.data(),
+              })
+            );
+
+          setBackendOrganizations(
+            organizationRecords
+          );
+          setOrganizationsLoading(
+            false
+          );
+          setOrganizationsError(
+            ""
+          );
+        },
+        (loadError) => {
+          console.error(
+            "Unable to load organizations:",
+            loadError
           );
 
-        setBackendOrganizations(
-          organizationRecords
-        );
-        setOrganizationsLoading(false);
-        setOrganizationsError("");
-      },
-      (loadError) => {
-        console.error(
-          "Unable to load organizations:",
-          loadError
-        );
-
-        setOrganizationsLoading(false);
-        setOrganizationsError(
-          loadError.message ||
-            "Organizations could not be loaded."
-        );
-      }
-    );
+          setBackendOrganizations(
+            []
+          );
+          setOrganizationsLoading(
+            false
+          );
+          setOrganizationsError(
+            loadError.message ||
+              "Organizations could not be loaded."
+          );
+        }
+      );
 
     return () => {
       unsubscribe();
     };
-  }, []);
+  }, [
+    formData.sector,
+  ]);
 
   /*
    * Specific-audience forms can be sent to company-level
@@ -257,13 +304,12 @@ const FormBuilder = ({
   const targetOrganizations =
     useMemo(() => {
       /*
-       * Prefer Firestore records. The prop remains a fallback
-       * while the backend subscription is loading.
+       * The sector-scoped Firestore query is authoritative for the target
+       * audience selector. Do not fall back to a potentially broader parent
+       * collection while the secure query is loading or empty.
        */
       const availableOrganizations =
-        backendOrganizations.length
-          ? backendOrganizations
-          : organizations;
+        backendOrganizations;
 
       const selectedSector =
         normalizeValue(
