@@ -55,9 +55,11 @@ import {
   collection,
   doc,
   onSnapshot,
+  query,
   serverTimestamp,
   setDoc,
   Timestamp,
+  where,
 } from "firebase/firestore";
 
 import {
@@ -4179,6 +4181,412 @@ const WorkforceRoleModal = ({
   );
 };
 
+/*
+ * Firestore rules are not filters. Workforce therefore subscribes only to the
+ * organization hierarchy that the signed-in account is allowed to see.
+ *
+ * Scope:
+ * - Ministry: organizations in the Ministry sector
+ * - Enterprise: enterprise + descendants
+ * - Region: region + descendants
+ * - Branch: branch only
+ */
+const snapshotToDocuments = (
+  snapshot
+) => {
+  if (
+    Array.isArray(
+      snapshot?.docs
+    )
+  ) {
+    return snapshot.docs.map(
+      (documentSnapshot) => ({
+        id:
+          documentSnapshot.id,
+        ...documentSnapshot.data(),
+      })
+    );
+  }
+
+  if (
+    snapshot?.exists?.()
+  ) {
+    return [
+      {
+        id: snapshot.id,
+        ...snapshot.data(),
+      },
+    ];
+  }
+
+  return [];
+};
+
+const mergeDocumentLists = (
+  documentLists
+) => {
+  const merged =
+    new Map();
+
+  documentLists
+    .flat()
+    .forEach(
+      (record) => {
+        if (record?.id) {
+          merged.set(
+            record.id,
+            record
+          );
+        }
+      }
+    );
+
+  return Array.from(
+    merged.values()
+  );
+};
+
+const subscribeToScopedReferences = ({
+  references,
+  onData,
+  onError,
+}) => {
+  if (!references.length) {
+    onData([]);
+    return () => {};
+  }
+
+  const sourceDocuments =
+    new Map();
+
+  const initializedSources =
+    new Set();
+
+  const unsubscribers =
+    references.map(
+      (
+        reference,
+        index
+      ) =>
+        onSnapshot(
+          reference,
+          (snapshot) => {
+            sourceDocuments.set(
+              index,
+              snapshotToDocuments(
+                snapshot
+              )
+            );
+
+            initializedSources.add(
+              index
+            );
+
+            if (
+              initializedSources.size ===
+              references.length
+            ) {
+              onData(
+                mergeDocumentLists(
+                  Array.from(
+                    sourceDocuments.values()
+                  )
+                )
+              );
+            }
+          },
+          onError
+        )
+    );
+
+  return () => {
+    unsubscribers.forEach(
+      (unsubscribe) =>
+        unsubscribe()
+    );
+  };
+};
+
+const chunkValues = (
+  values,
+  size = 30
+) => {
+  const uniqueValues =
+    Array.from(
+      new Set(
+        values.filter(Boolean)
+      )
+    );
+
+  const chunks = [];
+
+  for (
+    let index = 0;
+    index <
+    uniqueValues.length;
+    index += size
+  ) {
+    chunks.push(
+      uniqueValues.slice(
+        index,
+        index + size
+      )
+    );
+  }
+
+  return chunks;
+};
+
+const getScopedOrganizationReferences = (
+  organization
+) => {
+  const organizationId =
+    getOrganizationId(
+      organization
+    );
+
+  const organizationLevel =
+    getOrganizationLevel(
+      organization
+    );
+
+  const organizationCategory =
+    getOrganizationCategory(
+      organization
+    );
+
+  if (
+    organizationCategory ===
+      "ministry" ||
+    organizationLevel ===
+      "ministry"
+  ) {
+    const sector =
+      String(
+        organization.sector ||
+          ""
+      ).trim();
+
+    if (!sector) {
+      throw new Error(
+        "The Ministry organization is missing its sector."
+      );
+    }
+
+    return [
+      doc(
+        db,
+        ORGANIZATIONS_COLLECTION,
+        organizationId
+      ),
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "sector",
+          "==",
+          sector
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "enterprise"
+  ) {
+    return [
+      doc(
+        db,
+        ORGANIZATIONS_COLLECTION,
+        organizationId
+      ),
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "rootEnterpriseId",
+          "==",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "region"
+  ) {
+    return [
+      doc(
+        db,
+        ORGANIZATIONS_COLLECTION,
+        organizationId
+      ),
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "ancestorIds",
+          "array-contains",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  return [
+    doc(
+      db,
+      ORGANIZATIONS_COLLECTION,
+      organizationId
+    ),
+  ];
+};
+
+const getScopedWorkforceReferences = (
+  organization,
+  scopedOrganizations
+) => {
+  const organizationId =
+    getOrganizationId(
+      organization
+    );
+
+  const organizationLevel =
+    getOrganizationLevel(
+      organization
+    );
+
+  const organizationCategory =
+    getOrganizationCategory(
+      organization
+    );
+
+  /*
+   * Workforce records do not need to expose a broad sector-level query.
+   * Ministry access is resolved from the operator organizations already proven
+   * to be in the Ministry's sector, then split into Firestore's supported
+   * `in` query chunks.
+   */
+  if (
+    organizationCategory ===
+      "ministry" ||
+    organizationLevel ===
+      "ministry"
+  ) {
+    const organizationIds =
+      scopedOrganizations
+        .filter(
+          (item) =>
+            !isMinistryOrganization(
+              item
+            )
+        )
+        .map(
+          getOrganizationId
+        )
+        .filter(Boolean);
+
+    return chunkValues(
+      organizationIds
+    ).map(
+      (organizationIdsChunk) =>
+        query(
+          collection(
+            db,
+            WORKFORCE_COLLECTION
+          ),
+          where(
+            "organizationId",
+            "in",
+            organizationIdsChunk
+          )
+        )
+    );
+  }
+
+  if (
+    organizationLevel ===
+    "enterprise"
+  ) {
+    return [
+      query(
+        collection(
+          db,
+          WORKFORCE_COLLECTION
+        ),
+        where(
+          "rootEnterpriseId",
+          "==",
+          organizationId
+        )
+      ),
+      query(
+        collection(
+          db,
+          WORKFORCE_COLLECTION
+        ),
+        where(
+          "organizationId",
+          "==",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "region"
+  ) {
+    return [
+      query(
+        collection(
+          db,
+          WORKFORCE_COLLECTION
+        ),
+        where(
+          "organizationId",
+          "==",
+          organizationId
+        )
+      ),
+      query(
+        collection(
+          db,
+          WORKFORCE_COLLECTION
+        ),
+        where(
+          "ancestorIds",
+          "array-contains",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  return [
+    query(
+      collection(
+        db,
+        WORKFORCE_COLLECTION
+      ),
+      where(
+        "organizationId",
+        "==",
+        organizationId
+      )
+    ),
+  ];
+};
+
 const Workforce = () => {
   const [
     currentUserProfile,
@@ -4420,102 +4828,344 @@ const Workforce = () => {
     };
   }, []);
 
+  /*
+   * Resolve the signed-in organization first, then subscribe only to the
+   * permitted hierarchy and workforce records.
+   *
+   * This prevents a Ministry, Enterprise or Region dashboard from downloading
+   * the complete organizations/workforce collections and filtering them only
+   * after the data reaches the browser.
+   */
   useEffect(() => {
-    const unsubscribers = [
-      onSnapshot(
-        collection(
-          db,
-          ORGANIZATIONS_COLLECTION
-        ),
-        (snapshot) => {
-          setOrganizations(
-            snapshot.docs.map(
-              (organizationDocument) => ({
-                id:
-                  organizationDocument.id,
-                ...organizationDocument.data(),
-              })
-            )
-          );
+    let scopedUnsubscribers =
+      [];
 
-          setLoadedSources(
-            (current) => ({
-              ...current,
-              organizations: true,
-            })
-          );
+    const clearScopedSubscriptions =
+      () => {
+        scopedUnsubscribers.forEach(
+          (unsubscribe) =>
+            unsubscribe()
+        );
+
+        scopedUnsubscribers =
+          [];
+      };
+
+    if (!currentUserProfile) {
+      setOrganizations([]);
+      setWorkforceRecords([]);
+
+      setLoadedSources(
+        (current) => ({
+          ...current,
+          organizations:
+            true,
+          workforce:
+            true,
+        })
+      );
+
+      return clearScopedSubscriptions;
+    }
+
+    const userOrganizationId =
+      getUserOrganizationId(
+        currentUserProfile
+      );
+
+    if (!userOrganizationId) {
+      setOrganizations([]);
+      setWorkforceRecords([]);
+
+      setLoadedSources(
+        (current) => ({
+          ...current,
+          organizations:
+            true,
+          workforce:
+            true,
+        })
+      );
+
+      setLoadError(
+        "This account is not linked to an organization."
+      );
+
+      return clearScopedSubscriptions;
+    }
+
+    setLoadedSources(
+      (current) => ({
+        ...current,
+        organizations:
+          false,
+        workforce:
+          false,
+      })
+    );
+
+    const currentOrganizationReference =
+      doc(
+        db,
+        ORGANIZATIONS_COLLECTION,
+        userOrganizationId
+      );
+
+    const unsubscribeCurrentOrganization =
+      onSnapshot(
+        currentOrganizationReference,
+        (
+          organizationSnapshot
+        ) => {
+          clearScopedSubscriptions();
+
+          if (
+            !organizationSnapshot.exists()
+          ) {
+            setOrganizations([]);
+            setWorkforceRecords([]);
+
+            setLoadedSources(
+              (current) => ({
+                ...current,
+                organizations:
+                  true,
+                workforce:
+                  true,
+              })
+            );
+
+            setLoadError(
+              "The current organization could not be found."
+            );
+
+            return;
+          }
+
+          const signedInOrganization = {
+            id:
+              organizationSnapshot.id,
+            ...organizationSnapshot.data(),
+          };
+
+          let organizationReferences;
+
+          try {
+            organizationReferences =
+              getScopedOrganizationReferences(
+                signedInOrganization
+              );
+          } catch (error) {
+            setOrganizations([]);
+            setWorkforceRecords([]);
+
+            setLoadedSources(
+              (current) => ({
+                ...current,
+                organizations:
+                  true,
+                workforce:
+                  true,
+              })
+            );
+
+            setLoadError(
+              error.message ||
+                "The workforce access scope could not be resolved."
+            );
+
+            return;
+          }
+
+          let unsubscribeWorkforce =
+            () => {};
+
+          const unsubscribeOrganizations =
+            subscribeToScopedReferences({
+              references:
+                organizationReferences,
+
+              onData:
+                (
+                  scopedOrganizations
+                ) => {
+                  setOrganizations(
+                    scopedOrganizations
+                  );
+
+                  setLoadedSources(
+                    (current) => ({
+                      ...current,
+                      organizations:
+                        true,
+                    })
+                  );
+
+                  /*
+                   * Ministry workforce queries depend on the sector-scoped
+                   * organization IDs. Other hierarchy levels use their stored
+                   * rootEnterpriseId / ancestorIds metadata directly.
+                   */
+                  unsubscribeWorkforce();
+
+                  let workforceReferences;
+
+                  try {
+                    workforceReferences =
+                      getScopedWorkforceReferences(
+                        signedInOrganization,
+                        scopedOrganizations
+                      );
+                  } catch (error) {
+                    setWorkforceRecords(
+                      []
+                    );
+
+                    setLoadedSources(
+                      (current) => ({
+                        ...current,
+                        workforce:
+                          true,
+                      })
+                    );
+
+                    setLoadError(
+                      error.message ||
+                        "The workforce records could not be scoped."
+                    );
+
+                    return;
+                  }
+
+                  unsubscribeWorkforce =
+                    subscribeToScopedReferences({
+                      references:
+                        workforceReferences,
+
+                      onData:
+                        (
+                          scopedWorkforce
+                        ) => {
+                          setWorkforceRecords(
+                            scopedWorkforce
+                          );
+
+                          setLoadedSources(
+                            (current) => ({
+                              ...current,
+                              workforce:
+                                true,
+                            })
+                          );
+
+                          setLoadError(
+                            ""
+                          );
+                        },
+
+                      onError:
+                        (
+                          error
+                        ) => {
+                          console.error(
+                            "Unable to load workforce records:",
+                            error
+                          );
+
+                          setWorkforceRecords(
+                            []
+                          );
+
+                          setLoadedSources(
+                            (current) => ({
+                              ...current,
+                              workforce:
+                                true,
+                            })
+                          );
+
+                          setLoadError(
+                            error?.message ||
+                              "Workforce records could not be loaded."
+                          );
+                        },
+                    });
+                },
+
+              onError:
+                (
+                  error
+                ) => {
+                  console.error(
+                    "Unable to load organizations:",
+                    error
+                  );
+
+                  setOrganizations(
+                    []
+                  );
+                  setWorkforceRecords(
+                    []
+                  );
+
+                  setLoadedSources(
+                    (current) => ({
+                      ...current,
+                      organizations:
+                        true,
+                      workforce:
+                        true,
+                    })
+                  );
+
+                  setLoadError(
+                    error?.message ||
+                      "Organizations could not be loaded."
+                  );
+                },
+            });
+
+          scopedUnsubscribers = [
+            unsubscribeOrganizations,
+            () =>
+              unsubscribeWorkforce(),
+          ];
         },
         (error) => {
           console.error(
-            "Unable to load organizations:",
+            "Unable to load the current organization:",
             error
           );
+
+          clearScopedSubscriptions();
+
+          setOrganizations([]);
+          setWorkforceRecords([]);
 
           setLoadedSources(
             (current) => ({
               ...current,
-              organizations: true,
+              organizations:
+                true,
+              workforce:
+                true,
             })
           );
 
           setLoadError(
             error?.message ||
-              "Organizations could not be loaded."
+              "The current organization could not be loaded."
           );
         }
-      ),
-
-      onSnapshot(
-        collection(
-          db,
-          WORKFORCE_COLLECTION
-        ),
-        (snapshot) => {
-          setWorkforceRecords(
-            snapshot.docs.map(
-              (workforceDocument) => ({
-                id:
-                  workforceDocument.id,
-                ...workforceDocument.data(),
-              })
-            )
-          );
-
-          setLoadedSources(
-            (current) => ({
-              ...current,
-              workforce: true,
-            })
-          );
-        },
-        (error) => {
-          console.error(
-            "Unable to load workforce records:",
-            error
-          );
-
-          setLoadedSources(
-            (current) => ({
-              ...current,
-              workforce: true,
-            })
-          );
-
-          setLoadError(
-            error?.message ||
-              "Workforce records could not be loaded."
-          );
-        }
-      ),
-    ];
+      );
 
     return () => {
-      unsubscribers.forEach(
-        (unsubscribe) =>
-          unsubscribe()
-      );
+      unsubscribeCurrentOrganization();
+      clearScopedSubscriptions();
     };
-  }, []);
+  }, [
+    currentUserProfile,
+  ]);
 
   const loading =
     Object.values(
@@ -4572,6 +5222,29 @@ const Workforce = () => {
       currentOrganization,
       currentUserProfile,
     ]);
+
+  const currentOrganizationId =
+    getOrganizationId(
+      currentOrganization
+    );
+
+  const currentUserRole =
+    normalizeStatus(
+      currentUserProfile?.role
+    );
+
+  /*
+   * Viewer is explicitly read-only. Other non-Ministry roles retain the
+   * existing application behaviour, while Firestore rules remain the final
+   * authorization boundary for workforce writes.
+   */
+  const canManageOwnWorkforce =
+    Boolean(
+      currentOrganizationId
+    ) &&
+    !isMinistryUser &&
+    currentUserRole !==
+      "viewer";
 
   const visibleOrganizations =
     useMemo(() => {
@@ -5709,6 +6382,31 @@ const Workforce = () => {
         return;
       }
 
+      const authenticatedUser =
+        auth.currentUser;
+
+      if (
+        !authenticatedUser?.uid ||
+        authenticatedUser.uid !==
+          currentUserProfile?.id
+      ) {
+        setFormError(
+          "Your signed-in session could not be verified. Please sign in again."
+        );
+        return;
+      }
+
+      if (
+        !canManageOwnWorkforce ||
+        form.organizationId !==
+          currentOrganizationId
+      ) {
+        setFormError(
+          "You can only manage workforce records that belong directly to your organization."
+        );
+        return;
+      }
+
       const organization =
         organizationMap.get(
           form.organizationId
@@ -5749,9 +6447,7 @@ const Workforce = () => {
           Timestamp.now();
 
         const currentUserId =
-          currentUserProfile?.id ||
-          auth.currentUser?.uid ||
-          "";
+          authenticatedUser.uid;
 
         const historyEntry = {
           totalEmployees:
@@ -5807,6 +6503,26 @@ const Workforce = () => {
             organizationMap.get(
               enterpriseId
             )?.companyId ||
+            "",
+          sector:
+            organization.sector ||
+            organizationMap.get(
+              enterpriseId
+            )?.sector ||
+            currentUserProfile?.sector ||
+            "",
+          industrySegment:
+            organization.industrySegment ||
+            organizationMap.get(
+              enterpriseId
+            )?.industrySegment ||
+            "",
+          country:
+            organization.country ||
+            organizationMap.get(
+              enterpriseId
+            )?.country ||
+            currentUserProfile?.country ||
             "",
           regionId:
             getOrganizationRegionId(
@@ -5952,7 +6668,7 @@ const Workforce = () => {
 
           {renderedTab ===
             "roles" &&
-            !isMinistryUser && (
+            canManageOwnWorkforce && (
             <Button
               onClick={
                 openAddRole
@@ -7165,10 +7881,9 @@ const Workforce = () => {
                             </td>
 
                             <td className="px-4 py-4 text-right">
-                              {!isMinistryUser &&
-                              visibleOrganizationIds.has(
-                                record.organizationId
-                              ) ? (
+                              {canManageOwnWorkforce &&
+                              record.organizationId ===
+                                currentOrganizationId ? (
                                 <button
                                   type="button"
                                   onClick={() =>
