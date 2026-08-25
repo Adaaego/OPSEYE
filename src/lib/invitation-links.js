@@ -12,6 +12,10 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
+import {
+  getFunctions,
+  httpsCallable,
+} from "firebase/functions";
 
 import { auth, db } from "../firebase/firebase";
 
