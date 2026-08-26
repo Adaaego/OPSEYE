@@ -34,6 +34,10 @@ import {
   updateUserDocument,
 } from "../../lib/functions";
 import {
+  getOrganizationMember,
+  updateOrganizationMemberProfile,
+} from "../../lib/organization-member-functions";
+import {
   getOrganizationDescendants,
 } from "../../lib/organization-functions";
 import {
@@ -1178,7 +1182,9 @@ const AccountSettings = ({ roles = [] }) => {
       );
 
       const administratorDocuments = await Promise.all(
-        administratorIds.map((userId) => getUserDocument(userId))
+        administratorIds.map((userId) =>
+          getOrganizationMember(userId)
+        )
       );
 
       const administratorMap = new Map(
@@ -1592,6 +1598,16 @@ const AccountSettings = ({ roles = [] }) => {
       };
 
       await updateUserDocument(currentUser.uid, profileUpdates);
+
+      /*
+       * Keep the safe organization directory in sync with editable profile
+       * fields. Private account/security preferences remain only in users/{uid}.
+       */
+      await updateOrganizationMemberProfile({
+        userId: currentUser.uid,
+        fullName,
+        jobTitle,
+      });
 
       setProfile((currentProfile) => ({
         ...currentProfile,
@@ -2903,8 +2919,8 @@ const ToggleRow = ({ icon: Icon, title, description, checked, onChange }) => {
         }`}
       >
         <span
-          className={`h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform ${
-            checked ? "translate-x-[22px]" : "translate-x-1"
+          className={`h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform ${
+            checked ? "translate-x-5.5" : "translate-x-1"
           }`}
         />
       </button>

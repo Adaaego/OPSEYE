@@ -67,6 +67,9 @@ const REPORT_SUBMISSIONS_COLLECTION =
 const USERS_COLLECTION =
   "users";
 
+const ORGANIZATION_MEMBERS_COLLECTION =
+  "organizationMembers";
+
 const COMPANY_FUEL_PRICES_COLLECTION =
   "companyFuelPrices";
 
@@ -1114,7 +1117,8 @@ const getOrganizationRegionLabel = (
 
 /*
  * Administrator identity is read from the organization metadata written by
- * Account Settings. The users collection supplies the person's readable name.
+ * Account Settings. organizationMembers supplies the person's safe directory
+ * details without exposing their private users/{uid} document.
  */
 const getOrganizationAdministrator = (
   organization,
@@ -1733,7 +1737,7 @@ const OperatorsTab = ({
 
           const [
             reports,
-            users,
+            members,
             prices,
             workforce,
           ] = await Promise.all([
@@ -1744,7 +1748,7 @@ const OperatorsTab = ({
             }),
             loadDocumentsForOrganizationIds({
               collectionName:
-                USERS_COLLECTION,
+                ORGANIZATION_MEMBERS_COLLECTION,
               organizationIds,
             }),
             loadFuelPricesForOrganizations(
@@ -1807,7 +1811,7 @@ const OperatorsTab = ({
           );
 
           setOrganizationUsers(
-            users
+            members
           );
 
           setCompanyFuelPrices(
