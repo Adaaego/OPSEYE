@@ -95,8 +95,8 @@ import {
 
 import ghanaRegions from "../../data/ghana-regions.json";
 
-const USERS_COLLECTION =
-  "users";
+const ORGANIZATION_MEMBERS_COLLECTION =
+  "organizationMembers";
 
 const ORGANIZATIONS_COLLECTION =
   "organizations";
@@ -3539,9 +3539,9 @@ const WorkforceRoleModal = ({
 
     setForm({
       /*
-       * The signed-in user's organization is the source of truth for new
-       * workforce records. The organization is resolved by the page from the
-       * user's Firestore profile, so the administrator only enters the role
+       * The signed-in member's organization is the source of truth for new
+       * workforce records. The organization is resolved from the shared
+       * organizationMembers access record, so the administrator only enters the role
        * and workforce figures. Existing records retain their saved owner.
        */
       organizationId:
@@ -4355,40 +4355,21 @@ const getScopedOrganizationReferences = (
       organization
     );
 
+  /*
+   * Ministry is the top-level oversight view and may read all operator
+   * organizations. The Ministry organization itself is included and filtered
+   * out later where only operator organizations are required.
+   */
   if (
     organizationCategory ===
       "ministry" ||
     organizationLevel ===
       "ministry"
   ) {
-    const sector =
-      String(
-        organization.sector ||
-          ""
-      ).trim();
-
-    if (!sector) {
-      throw new Error(
-        "The Ministry organization is missing its sector."
-      );
-    }
-
     return [
-      doc(
+      collection(
         db,
-        ORGANIZATIONS_COLLECTION,
-        organizationId
-      ),
-      query(
-        collection(
-          db,
-          ORGANIZATIONS_COLLECTION
-        ),
-        where(
-          "sector",
-          "==",
-          sector
-        )
+        ORGANIZATIONS_COLLECTION
       ),
     ];
   }
@@ -4397,7 +4378,7 @@ const getScopedOrganizationReferences = (
     organizationLevel ===
     "enterprise"
   ) {
-    return [
+    const references = [
       doc(
         db,
         ORGANIZATIONS_COLLECTION,
@@ -4415,6 +4396,29 @@ const getScopedOrganizationReferences = (
         )
       ),
     ];
+
+    /*
+     * companyId is shared by the Enterprise and its children. This keeps older
+     * Region/Branch organization documents visible when rootEnterpriseId was
+     * not populated yet.
+     */
+    if (organization.companyId) {
+      references.push(
+        query(
+          collection(
+            db,
+            ORGANIZATIONS_COLLECTION
+          ),
+          where(
+            "companyId",
+            "==",
+            organization.companyId
+          )
+        )
+      );
+    }
+
+    return references;
   }
 
   if (
@@ -4435,6 +4439,20 @@ const getScopedOrganizationReferences = (
         where(
           "ancestorIds",
           "array-contains",
+          organizationId
+        )
+      ),
+      /*
+       * Direct parentId is the compatibility fallback for older Branch records.
+       */
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "parentId",
+          "==",
           organizationId
         )
       ),
@@ -4469,11 +4487,21 @@ const getScopedWorkforceReferences = (
       organization
     );
 
+  const visibleOrganizationIds =
+    scopedOrganizations
+      .filter(
+        (item) =>
+          !isMinistryOrganization(
+            item
+          )
+      )
+      .map(
+        getOrganizationId
+      )
+      .filter(Boolean);
+
   /*
-   * Workforce records do not need to expose a broad sector-level query.
-   * Ministry access is resolved from the operator organizations already proven
-   * to be in the Ministry's sector, then split into Firestore's supported
-   * `in` query chunks.
+   * Ministry may inspect every operator workforce record.
    */
   if (
     organizationCategory ===
@@ -4481,21 +4509,21 @@ const getScopedWorkforceReferences = (
     organizationLevel ===
       "ministry"
   ) {
-    const organizationIds =
-      scopedOrganizations
-        .filter(
-          (item) =>
-            !isMinistryOrganization(
-              item
-            )
-        )
-        .map(
-          getOrganizationId
-        )
-        .filter(Boolean);
+    return [
+      collection(
+        db,
+        WORKFORCE_COLLECTION
+      ),
+    ];
+  }
 
-    return chunkValues(
-      organizationIds
+  /*
+   * Exact organizationId queries are the primary source. They preserve older
+   * records that predate rootEnterpriseId / ancestorIds snapshots on workforce.
+   */
+  const references =
+    chunkValues(
+      visibleOrganizationIds
     ).map(
       (organizationIdsChunk) =>
         query(
@@ -4510,13 +4538,16 @@ const getScopedWorkforceReferences = (
           )
         )
     );
-  }
 
   if (
     organizationLevel ===
     "enterprise"
   ) {
-    return [
+    /*
+     * Compatibility queries catch older records whose hierarchy metadata is
+     * present even when their organization link was stored differently.
+     */
+    references.push(
       query(
         collection(
           db,
@@ -4527,37 +4558,31 @@ const getScopedWorkforceReferences = (
           "==",
           organizationId
         )
-      ),
-      query(
-        collection(
-          db,
-          WORKFORCE_COLLECTION
-        ),
-        where(
-          "organizationId",
-          "==",
-          organizationId
+      )
+    );
+
+    if (organization.companyId) {
+      references.push(
+        query(
+          collection(
+            db,
+            WORKFORCE_COLLECTION
+          ),
+          where(
+            "companyId",
+            "==",
+            organization.companyId
+          )
         )
-      ),
-    ];
+      );
+    }
   }
 
   if (
     organizationLevel ===
     "region"
   ) {
-    return [
-      query(
-        collection(
-          db,
-          WORKFORCE_COLLECTION
-        ),
-        where(
-          "organizationId",
-          "==",
-          organizationId
-        )
-      ),
+    references.push(
       query(
         collection(
           db,
@@ -4568,23 +4593,11 @@ const getScopedWorkforceReferences = (
           "array-contains",
           organizationId
         )
-      ),
-    ];
+      )
+    );
   }
 
-  return [
-    query(
-      collection(
-        db,
-        WORKFORCE_COLLECTION
-      ),
-      where(
-        "organizationId",
-        "==",
-        organizationId
-      )
-    ),
-  ];
+  return references;
 };
 
 const Workforce = () => {
@@ -4773,7 +4786,7 @@ const Workforce = () => {
             onSnapshot(
               doc(
                 db,
-                USERS_COLLECTION,
+                ORGANIZATION_MEMBERS_COLLECTION,
                 firebaseUser.uid
               ),
               (snapshot) => {
@@ -4797,7 +4810,7 @@ const Workforce = () => {
                 setLoadError(
                   snapshot.exists()
                     ? ""
-                    : "The current user profile could not be found."
+                    : "The current organization membership could not be found."
                 );
               },
               (error) => {
@@ -4815,7 +4828,7 @@ const Workforce = () => {
 
                 setLoadError(
                   error?.message ||
-                    "The current user profile could not be loaded."
+                    "The current organization membership could not be loaded."
                 );
               }
             );
@@ -5270,12 +5283,41 @@ const Workforce = () => {
           currentOrganization
         );
 
+      const currentUserIsEnterprise =
+        isEnterpriseOrganization(
+          currentOrganization
+        );
+
+      const currentCompanyId =
+        normalizeText(
+          currentOrganization.companyId
+        );
+
       return organizations.filter(
-        (organization) =>
-          belongsToOrganizationHierarchy(
-            organization,
-            currentOrganizationId
-          )
+        (organization) => {
+          if (
+            belongsToOrganizationHierarchy(
+              organization,
+              currentOrganizationId
+            )
+          ) {
+            return true;
+          }
+
+          /*
+           * companyId is only an Enterprise compatibility fallback. Region and
+           * Branch accounts must never receive sibling organizations.
+           */
+          return (
+            currentUserIsEnterprise &&
+            Boolean(
+              currentCompanyId
+            ) &&
+            normalizeText(
+              organization.companyId
+            ) === currentCompanyId
+          );
+        }
       );
     }, [
       currentOrganization,
