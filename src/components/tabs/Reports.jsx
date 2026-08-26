@@ -3393,7 +3393,7 @@ const SubmissionViewer = ({
  * hierarchy already permitted for the signed-in organization.
  *
  * Scope:
- * - Ministry: records in the Ministry sector
+ * - Ministry: all organizations and report submissions
  * - Enterprise: enterprise + descendants
  * - Region: region + descendants
  * - Branch: branch only
@@ -3538,34 +3538,15 @@ const getScopedOrganizationReferences = (
     organizationLevel ===
       "ministry"
   ) {
-    const sector =
-      String(
-        organization.sector ||
-          ""
-      ).trim();
-
-    if (!sector) {
-      throw new Error(
-        "The Ministry organization is missing its sector."
-      );
-    }
-
+    /*
+     * Ministry is the top-level reporting view. Load the full organization
+     * directory rather than relying on denormalized sector snapshots, because
+     * older records may predate those fields.
+     */
     return [
-      doc(
+      collection(
         db,
-        ORGANIZATIONS_COLLECTION,
-        organizationId
-      ),
-      query(
-        collection(
-          db,
-          ORGANIZATIONS_COLLECTION
-        ),
-        where(
-          "sector",
-          "==",
-          sector
-        )
+        ORGANIZATIONS_COLLECTION
       ),
     ];
   }
@@ -3574,7 +3555,7 @@ const getScopedOrganizationReferences = (
     organizationLevel ===
     "enterprise"
   ) {
-    return [
+    const references = [
       doc(
         db,
         ORGANIZATIONS_COLLECTION,
@@ -3592,6 +3573,29 @@ const getScopedOrganizationReferences = (
         )
       ),
     ];
+
+    /*
+     * companyId is shared by an enterprise and all of its children.
+     * Keep this compatibility query so older Region/Branch organization
+     * documents still roll up even if rootEnterpriseId was not populated yet.
+     */
+    if (organization.companyId) {
+      references.push(
+        query(
+          collection(
+            db,
+            ORGANIZATIONS_COLLECTION
+          ),
+          where(
+            "companyId",
+            "==",
+            organization.companyId
+          )
+        )
+      );
+    }
+
+    return references;
   }
 
   if (
@@ -3604,6 +3608,10 @@ const getScopedOrganizationReferences = (
         ORGANIZATIONS_COLLECTION,
         organizationId
       ),
+
+      /*
+       * Current hierarchy records carry ancestorIds.
+       */
       query(
         collection(
           db,
@@ -3612,6 +3620,21 @@ const getScopedOrganizationReferences = (
         where(
           "ancestorIds",
           "array-contains",
+          organizationId
+        )
+      ),
+
+      /*
+       * parentId is a safe fallback for older direct Branch children.
+       */
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "parentId",
+          "==",
           organizationId
         )
       ),
@@ -3627,9 +3650,23 @@ const getScopedOrganizationReferences = (
   ];
 };
 
-const getScopedReportReferences = (
-  organization
-) => {
+/*
+ * Build report listeners from the organization hierarchy that is already
+ * visible to the signed-in account.
+ *
+ * This keeps historical records working:
+ * - exact organizationId queries catch older submissions that predate
+ *   rootEnterpriseId / ancestorIds on reportSubmissions;
+ * - Enterprise also keeps rootEnterpriseId and companyId compatibility
+ *   queries because those fields safely identify the same company hierarchy;
+ * - Region keeps ancestorIds as a compatibility query while also querying the
+ *   Region and each visible Branch by exact organizationId;
+ * - Branch receives only its exact organizationId.
+ */
+const getScopedReportReferences = ({
+  organization,
+  scopedOrganizations = [],
+}) => {
   const organizationId =
     getOrganizationId(
       organization
@@ -3651,38 +3688,64 @@ const getScopedReportReferences = (
     organizationLevel ===
       "ministry"
   ) {
-    const sector =
-      String(
-        organization.sector ||
-          ""
-      ).trim();
-
-    if (!sector) {
-      throw new Error(
-        "The Ministry organization is missing its sector."
-      );
-    }
-
     return [
-      query(
-        collection(
-          db,
-          REPORT_SUBMISSIONS_COLLECTION
-        ),
-        where(
-          "sector",
-          "==",
-          sector
-        )
+      collection(
+        db,
+        REPORT_SUBMISSIONS_COLLECTION
       ),
     ];
   }
+
+  const scopedOrganizationIds =
+    Array.from(
+      new Set(
+        scopedOrganizations
+          .map(
+            getOrganizationId
+          )
+          .filter(Boolean)
+      )
+    );
+
+  /*
+   * Always include the signed-in organization even when a compatibility
+   * organization query has not returned yet.
+   */
+  if (
+    organizationId &&
+    !scopedOrganizationIds.includes(
+      organizationId
+    )
+  ) {
+    scopedOrganizationIds.push(
+      organizationId
+    );
+  }
+
+  const references =
+    scopedOrganizationIds.map(
+      (scopedOrganizationId) =>
+        query(
+          collection(
+            db,
+            REPORT_SUBMISSIONS_COLLECTION
+          ),
+          where(
+            "organizationId",
+            "==",
+            scopedOrganizationId
+          )
+        )
+    );
 
   if (
     organizationLevel ===
     "enterprise"
   ) {
-    return [
+    /*
+     * Newer descendant submissions carry rootEnterpriseId.
+     */
+    references.push(
       query(
         collection(
           db,
@@ -3693,26 +3756,39 @@ const getScopedReportReferences = (
           "==",
           organizationId
         )
-      ),
-    ];
+      )
+    );
+
+    /*
+     * Older Shell/GOL-style submissions may predate hierarchy snapshots but
+     * still carry the stable companyId. companyId is safe at Enterprise level
+     * because it represents only that company's hierarchy.
+     */
+    if (organization.companyId) {
+      references.push(
+        query(
+          collection(
+            db,
+            REPORT_SUBMISSIONS_COLLECTION
+          ),
+          where(
+            "companyId",
+            "==",
+            organization.companyId
+          )
+        )
+      );
+    }
   }
 
   if (
     organizationLevel ===
     "region"
   ) {
-    return [
-      query(
-        collection(
-          db,
-          REPORT_SUBMISSIONS_COLLECTION
-        ),
-        where(
-          "organizationId",
-          "==",
-          organizationId
-        )
-      ),
+    /*
+     * Newer Branch submissions snapshot the Region in ancestorIds.
+     */
+    references.push(
       query(
         collection(
           db,
@@ -3723,23 +3799,11 @@ const getScopedReportReferences = (
           "array-contains",
           organizationId
         )
-      ),
-    ];
+      )
+    );
   }
 
-  return [
-    query(
-      collection(
-        db,
-        REPORT_SUBMISSIONS_COLLECTION
-      ),
-      where(
-        "organizationId",
-        "==",
-        organizationId
-      )
-    ),
-  ];
+  return references;
 };
 
 /*
@@ -4134,16 +4198,10 @@ const Reports = ({
           };
 
           let organizationReferences;
-          let reportReferences;
 
           try {
             organizationReferences =
               getScopedOrganizationReferences(
-                signedInOrganization
-              );
-
-            reportReferences =
-              getScopedReportReferences(
                 signedInOrganization
               );
           } catch (error) {
@@ -4172,6 +4230,9 @@ const Reports = ({
           }
 
           let unsubscribePrices =
+            () => {};
+
+          let unsubscribeReports =
             () => {};
 
           const unsubscribeOrganizations =
@@ -4243,6 +4304,70 @@ const Reports = ({
                           );
                         },
                     });
+
+                  /*
+                   * Reports are derived from the resolved organization hierarchy.
+                   * Rebuild the report listeners whenever that hierarchy changes.
+                   */
+                  unsubscribeReports();
+
+                  unsubscribeReports =
+                    subscribeToScopedReferences({
+                      references:
+                        getScopedReportReferences({
+                          organization:
+                            signedInOrganization,
+                          scopedOrganizations,
+                        }),
+
+                      onData:
+                        (
+                          scopedReports
+                        ) => {
+                          setReportSubmissions(
+                            scopedReports
+                          );
+
+                          setLoadedSources(
+                            (current) => ({
+                              ...current,
+                              reports:
+                                true,
+                            })
+                          );
+
+                          setLoadError(
+                            ""
+                          );
+                        },
+
+                      onError:
+                        (
+                          error
+                        ) => {
+                          console.error(
+                            "Unable to load report submissions:",
+                            error
+                          );
+
+                          setReportSubmissions(
+                            []
+                          );
+
+                          setLoadedSources(
+                            (current) => ({
+                              ...current,
+                              reports:
+                                true,
+                            })
+                          );
+
+                          setLoadError(
+                            error.message ||
+                              "Report submissions could not be loaded."
+                          );
+                        },
+                    });
                 },
 
               onError:
@@ -4273,63 +4398,10 @@ const Reports = ({
                 },
             });
 
-          const unsubscribeReports =
-            subscribeToScopedReferences({
-              references:
-                reportReferences,
-
-              onData:
-                (
-                  scopedReports
-                ) => {
-                  setReportSubmissions(
-                    scopedReports
-                  );
-
-                  setLoadedSources(
-                    (current) => ({
-                      ...current,
-                      reports:
-                        true,
-                    })
-                  );
-
-                  setLoadError(
-                    ""
-                  );
-                },
-
-              onError:
-                (
-                  error
-                ) => {
-                  console.error(
-                    "Unable to load report submissions:",
-                    error
-                  );
-
-                  setReportSubmissions(
-                    []
-                  );
-
-                  setLoadedSources(
-                    (current) => ({
-                      ...current,
-                      reports:
-                        true,
-                    })
-                  );
-
-                  setLoadError(
-                    error.message ||
-                      "Report submissions could not be loaded."
-                  );
-                },
-            });
-
           scopedUnsubscribers = [
             unsubscribeOrganizations,
-            unsubscribeReports,
+            () =>
+              unsubscribeReports(),
             () =>
               unsubscribePrices(),
           ];

@@ -25,6 +25,7 @@ import { Button } from "../ui/Button";
 import {
   collection,
   doc,
+  getDocs,
   onSnapshot,
   query,
   where,
@@ -322,6 +323,311 @@ const isReadOnlyReport = (status) => {
   );
 };
 
+const getOrganizationLevel = (
+  organization
+) => {
+  return normalizeValue(
+    organization?.type ||
+      organization?.organizationType ||
+      organization?.level
+  );
+};
+
+const snapshotDocuments = (
+  snapshot
+) => {
+  return snapshot.docs.map(
+    (documentSnapshot) => ({
+      id: documentSnapshot.id,
+      ...documentSnapshot.data(),
+    })
+  );
+};
+
+const mergeDocumentLists = (
+  documentLists
+) => {
+  const merged = new Map();
+
+  documentLists
+    .flat()
+    .forEach((record) => {
+      if (record?.id) {
+        merged.set(
+          record.id,
+          record
+        );
+      }
+    });
+
+  return Array.from(
+    merged.values()
+  );
+};
+
+/*
+ * Subscribe to several hierarchy-safe Firestore references and expose them as
+ * one deduplicated list. A report may match both the exact-organization query
+ * and a parent hierarchy query, so merging by document ID prevents duplicates.
+ */
+const subscribeToMergedReferences = ({
+  references,
+  onData,
+  onError,
+}) => {
+  if (!references.length) {
+    onData([]);
+    return () => {};
+  }
+
+  const sourceDocuments = new Map();
+  const initializedSources = new Set();
+
+  const unsubscribers =
+    references.map(
+      (reference, index) =>
+        onSnapshot(
+          reference,
+          (snapshot) => {
+            sourceDocuments.set(
+              index,
+              snapshotDocuments(
+                snapshot
+              )
+            );
+
+            initializedSources.add(
+              index
+            );
+
+            if (
+              initializedSources.size ===
+              references.length
+            ) {
+              onData(
+                mergeDocumentLists(
+                  Array.from(
+                    sourceDocuments.values()
+                  )
+                )
+              );
+            }
+          },
+          (error) => {
+            /*
+             * A compatibility query should not erase data returned by the other
+             * hierarchy queries. Mark this source as empty, report the error and
+             * continue merging whatever the permitted references return.
+             */
+            sourceDocuments.set(
+              index,
+              []
+            );
+
+            initializedSources.add(
+              index
+            );
+
+            onError?.(error);
+
+            if (
+              initializedSources.size ===
+              references.length
+            ) {
+              onData(
+                mergeDocumentLists(
+                  Array.from(
+                    sourceDocuments.values()
+                  )
+                )
+              );
+            }
+          }
+        )
+    );
+
+  return () => {
+    unsubscribers.forEach(
+      (unsubscribe) =>
+        unsubscribe()
+    );
+  };
+};
+
+/*
+ * Resolve the organizations visible from the signed-in company's current
+ * hierarchy level before loading reports.
+ *
+ * This is intentionally based on organization documents rather than only on
+ * denormalized fields inside reportSubmissions. Older report records can
+ * therefore remain visible as long as they still carry their organizationId.
+ *
+ * enterprise -> own organization + every region/branch below it
+ * region     -> own organization + every branch below it
+ * branch     -> own organization only
+ */
+const loadScopedOrganizationIds = async (
+  organization
+) => {
+  const organizationId =
+    organization?.organizationId ||
+    organization?.id ||
+    "";
+
+  if (!organizationId) {
+    return [];
+  }
+
+  const organizationLevel =
+    getOrganizationLevel(
+      organization
+    );
+
+  const organizationLists = [
+    [organization],
+  ];
+
+  if (
+    organizationLevel ===
+    "enterprise"
+  ) {
+    const references = [
+      query(
+        collection(
+          db,
+          "organizations"
+        ),
+        where(
+          "rootEnterpriseId",
+          "==",
+          organizationId
+        )
+      ),
+    ];
+
+    /*
+     * companyId is shared by the enterprise and its children. Keeping this
+     * compatibility query helps older organization records that predate a
+     * complete rootEnterpriseId chain.
+     */
+    if (organization.companyId) {
+      references.push(
+        query(
+          collection(
+            db,
+            "organizations"
+          ),
+          where(
+            "companyId",
+            "==",
+            organization.companyId
+          )
+        )
+      );
+    }
+
+    const snapshots =
+      await Promise.all(
+        references.map(
+          (reference) =>
+            getDocs(reference)
+        )
+      );
+
+    organizationLists.push(
+      ...snapshots.map(
+        snapshotDocuments
+      )
+    );
+  }
+
+  if (
+    organizationLevel ===
+    "region"
+  ) {
+    /*
+     * parentId covers the current Enterprise -> Region -> Branch structure.
+     * ancestorIds remains as the forward-compatible descendant lookup.
+     */
+    const snapshots =
+      await Promise.all([
+        getDocs(
+          query(
+            collection(
+              db,
+              "organizations"
+            ),
+            where(
+              "parentId",
+              "==",
+              organizationId
+            )
+          )
+        ),
+        getDocs(
+          query(
+            collection(
+              db,
+              "organizations"
+            ),
+            where(
+              "ancestorIds",
+              "array-contains",
+              organizationId
+            )
+          )
+        ),
+      ]);
+
+    organizationLists.push(
+      ...snapshots.map(
+        snapshotDocuments
+      )
+    );
+  }
+
+  return mergeDocumentLists(
+    organizationLists
+  )
+    .map(
+      (scopedOrganization) =>
+        scopedOrganization.organizationId ||
+        scopedOrganization.id ||
+        ""
+    )
+    .filter(Boolean);
+};
+
+/*
+ * Query each visible organization directly. This preserves historical
+ * submissions that were created before rootEnterpriseId/ancestorIds were
+ * copied onto reportSubmissions.
+ */
+const getReportReferencesForOrganizationIds = (
+  organizationIds
+) => {
+  return Array.from(
+    new Set(
+      organizationIds.filter(
+        Boolean
+      )
+    )
+  ).map(
+    (organizationId) =>
+      query(
+        collection(
+          db,
+          "reportSubmissions"
+        ),
+        where(
+          "organizationId",
+          "==",
+          organizationId
+        )
+      )
+  );
+};
+
 const SortHeader = ({
   label,
   column,
@@ -459,8 +765,13 @@ const OperatorsReports = ({
             ) === "active"
         );
 
+      /*
+       * Historical submissions are authoritative records and must not disappear
+       * because a template was later archived, retargeted, edited or deleted.
+       * Use any still-available template only to enrich the saved snapshot.
+       */
       const templateMap = new Map(
-        eligibleTemplates.map(
+        formTemplates.map(
           (template) => [
             template.id,
             template,
@@ -470,11 +781,6 @@ const OperatorsReports = ({
 
       const submittedReports =
         savedSubmissions
-          .filter((submission) =>
-            templateMap.has(
-              submission.formTemplateId
-            )
-          )
           .map((submission) => {
             const formTemplate =
               templateMap.get(
@@ -792,7 +1098,7 @@ const OperatorsReports = ({
                       "organizations",
                       organizationId
                     ),
-                    (organizationSnapshot) => {
+                    async (organizationSnapshot) => {
                       if (
                         !organizationSnapshot.exists()
                       ) {
@@ -849,41 +1155,38 @@ const OperatorsReports = ({
                           }
                         );
 
-                      unsubscribeSubmissions =
-                        onSnapshot(
-                          query(
-                            collection(
-                              db,
-                              "reportSubmissions"
-                            ),
-                            where(
-                              "organizationId",
-                              "==",
-                              organization.id
-                            )
-                          ),
-                          (submissionsSnapshot) => {
-                            savedSubmissions =
-                              submissionsSnapshot.docs.map(
-                                (submissionDocument) => ({
-                                  id:
-                                    submissionDocument.id,
-                                  ...submissionDocument.data(),
-                                })
-                              );
-
-                            buildReports();
-                          },
-                          (submissionsError) => {
-                            console.error(
-                              "Unable to load report submissions:",
-                              submissionsError
-                            );
-
-                            savedSubmissions = [];
-                            buildReports();
-                          }
+                      /*
+                       * Load the report scope for the current hierarchy level.
+                       * This replaces the old exact-organization-only listener,
+                       * which prevented enterprise and region users from seeing
+                       * submissions created by their child organizations.
+                       */
+                      const scopedOrganizationIds =
+                        await loadScopedOrganizationIds(
+                          organization
                         );
+
+                      unsubscribeSubmissions =
+                        subscribeToMergedReferences({
+                          references:
+                            getReportReferencesForOrganizationIds(
+                              scopedOrganizationIds
+                            ),
+                          onData:
+                            (scopedSubmissions) => {
+                              savedSubmissions =
+                                scopedSubmissions;
+
+                              buildReports();
+                            },
+                          onError:
+                            (submissionsError) => {
+                              console.error(
+                                "One report-scope query could not be loaded:",
+                                submissionsError
+                              );
+                            },
+                        });
                     },
                     (organizationError) => {
                       console.error(
@@ -1600,7 +1903,7 @@ const OperatorsReports = ({
                 <Button
                   size="sm"
                   disabled
-                  className="!bg-navy-950 !text-white disabled:!bg-navy-950 disabled:!text-white disabled:opacity-50"
+                  className="bg-navy-950! text-white! disabled:bg-navy-950! disabled:text-white! disabled:opacity-50"
                 >
                   Next
                 </Button>
