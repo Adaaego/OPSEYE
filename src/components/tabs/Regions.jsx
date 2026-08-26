@@ -1,4 +1,3 @@
-
 import {
   Fragment,
   useEffect,
@@ -81,8 +80,8 @@ import {
 } from "../ui/Button";
 import ghanaRegions from "../../data/ghana-regions.json";
 
-const USERS_COLLECTION =
-  "users";
+const ORGANIZATION_MEMBERS_COLLECTION =
+  "organizationMembers";
 
 const ORGANIZATIONS_COLLECTION =
   "organizations";
@@ -3853,7 +3852,7 @@ const getScopedOrganizationReferences = (
     organizationLevel ===
     "enterprise"
   ) {
-    return [
+    const references = [
       doc(
         db,
         ORGANIZATIONS_COLLECTION,
@@ -3871,6 +3870,24 @@ const getScopedOrganizationReferences = (
         )
       ),
     ];
+
+    if (organization.companyId) {
+      references.push(
+        query(
+          collection(
+            db,
+            ORGANIZATIONS_COLLECTION
+          ),
+          where(
+            "companyId",
+            "==",
+            organization.companyId
+          )
+        )
+      );
+    }
+
+    return references;
   }
 
   if (
@@ -3894,6 +3911,17 @@ const getScopedOrganizationReferences = (
           organizationId
         )
       ),
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "parentId",
+          "==",
+          organizationId
+        )
+      ),
     ];
   }
 
@@ -3906,9 +3934,10 @@ const getScopedOrganizationReferences = (
   ];
 };
 
-const getScopedReportReferences = (
-  organization
-) => {
+const getScopedReportReferences = ({
+  organization,
+  scopedOrganizations = [],
+}) => {
   const organizationId =
     getOrganizationId(
       organization
@@ -3957,11 +3986,55 @@ const getScopedReportReferences = (
     ];
   }
 
+  /*
+   * Query each organization already proven to be inside the signed-in
+   * hierarchy by exact organizationId. This keeps historical submissions
+   * visible even when older report documents do not yet carry
+   * rootEnterpriseId or ancestorIds.
+   */
+  const scopedOrganizationIds =
+    Array.from(
+      new Set(
+        scopedOrganizations
+          .map(
+            getOrganizationId
+          )
+          .filter(Boolean)
+      )
+    );
+
+  if (
+    organizationId &&
+    !scopedOrganizationIds.includes(
+      organizationId
+    )
+  ) {
+    scopedOrganizationIds.push(
+      organizationId
+    );
+  }
+
+  const references =
+    scopedOrganizationIds.map(
+      (scopedOrganizationId) =>
+        query(
+          collection(
+            db,
+            REPORT_SUBMISSIONS_COLLECTION
+          ),
+          where(
+            "organizationId",
+            "==",
+            scopedOrganizationId
+          )
+        )
+    );
+
   if (
     organizationLevel ===
     "enterprise"
   ) {
-    return [
+    references.push(
       query(
         collection(
           db,
@@ -3972,26 +4045,31 @@ const getScopedReportReferences = (
           "==",
           organizationId
         )
-      ),
-    ];
+      )
+    );
+
+    if (organization.companyId) {
+      references.push(
+        query(
+          collection(
+            db,
+            REPORT_SUBMISSIONS_COLLECTION
+          ),
+          where(
+            "companyId",
+            "==",
+            organization.companyId
+          )
+        )
+      );
+    }
   }
 
   if (
     organizationLevel ===
     "region"
   ) {
-    return [
-      query(
-        collection(
-          db,
-          REPORT_SUBMISSIONS_COLLECTION
-        ),
-        where(
-          "organizationId",
-          "==",
-          organizationId
-        )
-      ),
+    references.push(
       query(
         collection(
           db,
@@ -4002,23 +4080,11 @@ const getScopedReportReferences = (
           "array-contains",
           organizationId
         )
-      ),
-    ];
+      )
+    );
   }
 
-  return [
-    query(
-      collection(
-        db,
-        REPORT_SUBMISSIONS_COLLECTION
-      ),
-      where(
-        "organizationId",
-        "==",
-        organizationId
-      )
-    ),
-  ];
+  return references;
 };
 
 /*
@@ -4190,8 +4256,11 @@ const Regions = ({
   });
 
   /*
-   * The signed-in user's organization determines whether this page shows
-   * the national Ministry view or a company hierarchy view.
+   * The signed-in organization member record determines whether this page
+   * shows the Ministry view or a company hierarchy view.
+   *
+   * users/{uid} remains private profile data. organizationMembers/{uid} is the
+   * authoritative access record for role, organization and hierarchy scope.
    */
   useEffect(() => {
     let unsubscribeUser =
@@ -4226,7 +4295,7 @@ const Regions = ({
             onSnapshot(
               doc(
                 db,
-                USERS_COLLECTION,
+                ORGANIZATION_MEMBERS_COLLECTION,
                 firebaseUser.uid
               ),
               (snapshot) => {
@@ -4250,12 +4319,12 @@ const Regions = ({
                 setLoadError(
                   snapshot.exists()
                     ? ""
-                    : "The current user profile could not be found."
+                    : "The current organization member could not be found."
                 );
               },
               (error) => {
                 console.error(
-                  "Unable to load the current user:",
+                  "Unable to load the current organization member:",
                   error
                 );
 
@@ -4268,7 +4337,7 @@ const Regions = ({
 
                 setLoadError(
                   error.message ||
-                    "The current user profile could not be loaded."
+                    "The current organization member could not be loaded."
                 );
               }
             );
@@ -4413,16 +4482,10 @@ const Regions = ({
           };
 
           let organizationReferences;
-          let reportReferences;
 
           try {
             organizationReferences =
               getScopedOrganizationReferences(
-                signedInOrganization
-              );
-
-            reportReferences =
-              getScopedReportReferences(
                 signedInOrganization
               );
           } catch (error) {
@@ -4451,6 +4514,9 @@ const Regions = ({
           }
 
           let unsubscribePrices =
+            () => {};
+
+          let unsubscribeReports =
             () => {};
 
           const unsubscribeOrganizations =
@@ -4527,6 +4593,71 @@ const Regions = ({
                           );
                         },
                     });
+
+                  /*
+                   * Build report listeners from the resolved hierarchy so
+                   * enterprise, region and branch views share the same access
+                   * boundary as the organization list.
+                   */
+                  unsubscribeReports();
+
+                  unsubscribeReports =
+                    subscribeToScopedReferences({
+                      references:
+                        getScopedReportReferences({
+                          organization:
+                            signedInOrganization,
+                          scopedOrganizations,
+                        }),
+
+                      onData:
+                        (
+                          scopedReports
+                        ) => {
+                          setReportSubmissions(
+                            scopedReports
+                          );
+
+                          setLoadedSources(
+                            (current) => ({
+                              ...current,
+                              reports:
+                                true,
+                            })
+                          );
+
+                          setLoadError(
+                            ""
+                          );
+                        },
+
+                      onError:
+                        (
+                          error
+                        ) => {
+                          console.error(
+                            "Unable to load report submissions:",
+                            error
+                          );
+
+                          setReportSubmissions(
+                            []
+                          );
+
+                          setLoadedSources(
+                            (current) => ({
+                              ...current,
+                              reports:
+                                true,
+                            })
+                          );
+
+                          setLoadError(
+                            error.message ||
+                              "Report submissions could not be loaded."
+                          );
+                        },
+                    });
                 },
 
               onError:
@@ -4557,63 +4688,10 @@ const Regions = ({
                 },
             });
 
-          const unsubscribeReports =
-            subscribeToScopedReferences({
-              references:
-                reportReferences,
-
-              onData:
-                (
-                  scopedReports
-                ) => {
-                  setReportSubmissions(
-                    scopedReports
-                  );
-
-                  setLoadedSources(
-                    (current) => ({
-                      ...current,
-                      reports:
-                        true,
-                    })
-                  );
-
-                  setLoadError(
-                    ""
-                  );
-                },
-
-              onError:
-                (
-                  error
-                ) => {
-                  console.error(
-                    "Unable to load report submissions:",
-                    error
-                  );
-
-                  setReportSubmissions(
-                    []
-                  );
-
-                  setLoadedSources(
-                    (current) => ({
-                      ...current,
-                      reports:
-                        true,
-                    })
-                  );
-
-                  setLoadError(
-                    error.message ||
-                      "Report submissions could not be loaded."
-                  );
-                },
-            });
-
           scopedUnsubscribers = [
             unsubscribeOrganizations,
-            unsubscribeReports,
+            () =>
+              unsubscribeReports(),
             () =>
               unsubscribePrices(),
           ];

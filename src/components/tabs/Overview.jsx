@@ -78,8 +78,8 @@ import {
   calculateWorkforcePercentages,
 } from "../../lib/calculation-metrics";
 
-const USERS_COLLECTION =
-  "users";
+const ORGANIZATION_MEMBERS_COLLECTION =
+  "organizationMembers";
 
 const ORGANIZATIONS_COLLECTION =
   "organizations";
@@ -1729,7 +1729,7 @@ const getScopedOrganizationReferences = ({
     organizationLevel ===
     "enterprise"
   ) {
-    return [
+    const references = [
       query(
         collection(
           db,
@@ -1742,6 +1742,29 @@ const getScopedOrganizationReferences = ({
         )
       ),
     ];
+
+    /*
+     * companyId is shared by the enterprise and its children. This fallback
+     * keeps older child organization documents visible while hierarchy fields
+     * are being normalized.
+     */
+    if (organization.companyId) {
+      references.push(
+        query(
+          collection(
+            db,
+            ORGANIZATIONS_COLLECTION
+          ),
+          where(
+            "companyId",
+            "==",
+            organization.companyId
+          )
+        )
+      );
+    }
+
+    return references;
   }
 
   if (
@@ -1762,6 +1785,17 @@ const getScopedOrganizationReferences = ({
         where(
           "ancestorIds",
           "array-contains",
+          organizationId
+        )
+      ),
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "parentId",
+          "==",
           organizationId
         )
       ),
@@ -1863,8 +1897,8 @@ const Overviews = () => {
   ] = useState([]);
 
   const [
-    users,
-    setUsers,
+    organizationMembers,
+    setOrganizationMembers,
   ] = useState([]);
 
   const [
@@ -1893,10 +1927,12 @@ const Overviews = () => {
   ] = useState("");
 
   /*
-   * The authenticated user document determines the visibility scope:
+   * The signed-in organization member record is the access source of truth.
    *
-   * Ministry users see every company organization in their sector.
-   * Company users see only their enterprise and its child organizations.
+   * users/{uid} remains the private account/profile document. Organization,
+   * role and hierarchy access live in organizationMembers/{uid}, which also
+   * means an administrator transfer takes effect here without depending on
+   * duplicated access fields in another person's private user document.
    */
   useEffect(() => {
     let unsubscribeUser =
@@ -1920,7 +1956,7 @@ const Overviews = () => {
             onSnapshot(
               doc(
                 db,
-                USERS_COLLECTION,
+                ORGANIZATION_MEMBERS_COLLECTION,
                 firebaseUser.uid
               ),
               (snapshot) => {
@@ -1944,13 +1980,13 @@ const Overviews = () => {
               },
               (error) => {
                 console.error(
-                  "Unable to load the current user:",
+                  "Unable to load the current organization member:",
                   error
                 );
 
                 setLoadError(
                   error.message ||
-                    "The current user profile could not be loaded."
+                    "The current organization member could not be loaded."
                 );
                 setLoading(false);
               }
@@ -2091,8 +2127,9 @@ const Overviews = () => {
   ]);
 
   /*
-   * Subscribe to reports, users and workforce only for organizations already
-   * proven to be inside the current user's hierarchy/sector. Fuel prices are
+   * Subscribe to reports, organization members and workforce only for
+   * organizations already proven to be inside the current user's
+   * hierarchy/sector. Fuel prices are
    * read only for the relevant root enterprise documents.
    */
   useEffect(() => {
@@ -2145,11 +2182,12 @@ const Overviews = () => {
 
     subscribeCollection({
       collectionName:
-        USERS_COLLECTION,
-      onData: setUsers,
+        ORGANIZATION_MEMBERS_COLLECTION,
+      onData:
+        setOrganizationMembers,
       onError: (error) => {
         console.error(
-          "Unable to load scoped users:",
+          "Unable to load scoped organization members:",
           error
         );
       },
@@ -2285,10 +2323,10 @@ const Overviews = () => {
       currentUserProfile,
     ]);
 
-  const userMap =
+  const memberMap =
     useMemo(() => {
       return new Map(
-        users.map(
+        organizationMembers.map(
           (user) => [
             user.uid ||
               user.id,
@@ -2297,7 +2335,7 @@ const Overviews = () => {
         )
       );
     }, [
-      users,
+      organizationMembers,
     ]);
 
   const priceMap =
@@ -2637,8 +2675,8 @@ const Overviews = () => {
               ),
             };
 
-            const submittedByUser =
-              userMap.get(
+            const submittedByMember =
+              memberMap.get(
                 report.submittedBy ||
                   report.submittedById
               );
@@ -2699,8 +2737,8 @@ const Overviews = () => {
 
               submittedByName:
                 report.submittedByName ||
-                submittedByUser?.fullName ||
-                submittedByUser?.name ||
+                submittedByMember?.fullName ||
+                submittedByMember?.name ||
                 "",
 
               priceRecord,
@@ -2719,7 +2757,7 @@ const Overviews = () => {
       organizationMap,
       organizations,
       priceMap,
-      userMap,
+      memberMap,
       visibleReports,
     ]);
 
