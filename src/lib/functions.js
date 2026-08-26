@@ -1,13 +1,9 @@
 import {
-  collection,
   doc,
   getDoc,
-  getDocs,
-  query,
   serverTimestamp,
   setDoc,
   updateDoc,
-  where,
   writeBatch,
 } from "firebase/firestore";
 import { auth, db } from "../firebase/firebase";
@@ -29,6 +25,12 @@ import {
   getNpaPricesByCompanyId,
   validateNpaPriceRecord,
 } from "./npa-prices";
+
+import {
+  buildOrganizationMemberPayload,
+  getOrganizationMembers,
+  ORGANIZATION_MEMBERS_COLLECTION,
+} from "./organization-member-functions";
 
 const USERS_COLLECTION = "users";
 const ORGANIZATIONS_COLLECTION = "organizations";
@@ -521,6 +523,12 @@ export const submitOnboarding = async (
     uid
   );
 
+  const organizationMemberReference = doc(
+    db,
+    ORGANIZATION_MEMBERS_COLLECTION,
+    uid
+  );
+
   /*
    * The price document uses the same ID as the company organization.
    * A report can therefore load its prices directly with organizationId.
@@ -537,7 +545,7 @@ export const submitOnboarding = async (
   const batch = writeBatch(db);
 
   // Create the main organization document.
-  batch.set(organizationReference, {
+  const organizationData = {
     organizationId,
     name: organizationName,
     normalizedName: isMinistry
@@ -576,10 +584,14 @@ export const submitOnboarding = async (
 
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-  });
+  };
 
-  // Link the existing user to the organization and complete onboarding.
-  batch.update(userReference, {
+  batch.set(
+    organizationReference,
+    organizationData
+  );
+
+  const completedUserData = {
     fullName: userProfile.fullName.trim(),
     jobTitle: userProfile.jobTitle.trim(),
 
@@ -603,7 +615,51 @@ export const submitOnboarding = async (
     onboardingCompletedAt: serverTimestamp(),
 
     updatedAt: serverTimestamp(),
-  });
+  };
+
+  // Link the signed-in user's private profile to the new organization.
+  batch.update(
+    userReference,
+    completedUserData
+  );
+
+  /*
+   * Create the hierarchy-readable member/access record in the same batch.
+   * users/{uid} remains the private profile; organizationMembers/{uid} is the
+   * safe directory record used for organization and team lookups.
+   */
+  batch.set(
+    organizationMemberReference,
+    {
+      ...buildOrganizationMemberPayload({
+        user: {
+          uid,
+          email:
+            currentAuthUser.email ||
+            onboardingEmail,
+          emailLower:
+            currentAuthUser.email ||
+            onboardingEmail,
+          fullName:
+            completedUserData.fullName,
+          jobTitle:
+            completedUserData.jobTitle,
+          department:
+            completedUserData.department,
+          role,
+          status: "active",
+          teamIds: [],
+        },
+        organization: organizationData,
+        userId: uid,
+        updatedBy: uid,
+      }),
+      createdAt: serverTimestamp(),
+    },
+    {
+      merge: true,
+    }
+  );
 
   if (
     !isMinistry &&
@@ -715,33 +771,15 @@ export const getOrganizationDocument = async (
   };
 };
 
-// Loads every active user linked to the selected organization.
-// For Prototype 1, users with the same organizationId are treated
-// as members of the same organization team.
+/*
+ * Loads organization-visible member records rather than other people's private
+ * users/{uid} documents. The function name is preserved so existing callers do
+ * not need to change.
+ */
 export const getOrganizationUsers = async (
   organizationId
 ) => {
-  if (!organizationId) {
-    throw new Error(
-      "An organization ID is required."
-    );
-  }
-
-  const usersQuery = query(
-    collection(db, USERS_COLLECTION),
-    where(
-      "organizationId",
-      "==",
-      organizationId
-    )
-  );
-
-  const usersSnapshot = await getDocs(usersQuery);
-
-  return usersSnapshot.docs.map(
-    (userDocument) => ({
-      id: userDocument.id,
-      ...userDocument.data(),
-    })
+  return getOrganizationMembers(
+    organizationId
   );
 };

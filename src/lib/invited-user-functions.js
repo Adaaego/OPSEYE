@@ -30,6 +30,11 @@ import {
 
 import { auth, db } from "../firebase/firebase";
 
+import {
+  buildOrganizationMemberPayload,
+  ORGANIZATION_MEMBERS_COLLECTION,
+} from "./organization-member-functions";
+
 import { getInvitationById,
 hashInvitationToken,
 validateInvitation, } from "./invitation-links";
@@ -122,6 +127,16 @@ const getUserReference = (uid) => {
   requireValue(uid, "A Firebase user ID is required.");
 
   return doc(db, USERS_COLLECTION, uid);
+};
+
+const getOrganizationMemberReference = (uid) => {
+  requireValue(uid, "A Firebase user ID is required.");
+
+  return doc(
+    db,
+    ORGANIZATION_MEMBERS_COLLECTION,
+    uid
+  );
 };
 
 const getOrganizationReference = (organizationId) => {
@@ -1121,9 +1136,10 @@ export const getInvitedUserNextStep =
  * The Firebase email must already be verified before this function runs.
  *
  * Firestore updates performed together:
- * 1. Complete and activate users/{uid}.
- * 2. Mark organizationInvitations/{invitationId} as accepted.
- * 3. Assign the administrator to the organization where applicable.
+ * 1. Complete and activate the invited user's private users/{uid} profile.
+ * 2. Create/update organizationMembers/{uid} for shared directory/access data.
+ * 3. Mark organizationInvitations/{invitationId} as accepted.
+ * 4. Assign the administrator to the organization where applicable.
  *
  * If any part fails, none of these writes are committed.
  */
@@ -1273,6 +1289,11 @@ export const completeInvitedUserProfile =
             currentAuthUser.uid
           );
 
+        const organizationMemberReference =
+          getOrganizationMemberReference(
+            currentAuthUser.uid
+          );
+
         const organizationReference =
           getOrganizationReference(
             invitation.organizationId
@@ -1290,11 +1311,16 @@ export const completeInvitedUserProfile =
          */
         const [
           userSnapshot,
+          organizationMemberSnapshot,
           organizationSnapshot,
           teamSnapshot,
         ] = await Promise.all([
           transaction.get(
             userReference
+          ),
+
+          transaction.get(
+            organizationMemberReference
           ),
 
           transaction.get(
@@ -1311,6 +1337,11 @@ export const completeInvitedUserProfile =
         const existingUser =
           getSnapshotData(
             userSnapshot
+          );
+
+        const existingOrganizationMember =
+          getSnapshotData(
+            organizationMemberSnapshot
           );
 
         const organization =
@@ -1508,9 +1539,44 @@ export const completeInvitedUserProfile =
             serverTimestamp();
         }
 
+        const organizationMemberData =
+          buildOrganizationMemberPayload({
+            user: {
+              ...completedUserData,
+              uid:
+                currentAuthUser.uid,
+            },
+            organization,
+            userId:
+              currentAuthUser.uid,
+            updatedBy:
+              currentAuthUser.uid,
+          });
+
+        /*
+         * Preserve the directory record's original creation time on retries.
+         * The invitation-completion transaction is intentionally idempotent.
+         */
+        if (!existingOrganizationMember) {
+          organizationMemberData.createdAt =
+            serverTimestamp();
+        }
+
         transaction.set(
           userReference,
           completedUserData,
+          {
+            merge: true,
+          }
+        );
+
+        /*
+         * Store only safe organization-visible identity/access fields here.
+         * Private fields such as phoneNumber remain only on users/{uid}.
+         */
+        transaction.set(
+          organizationMemberReference,
+          organizationMemberData,
           {
             merge: true,
           }
@@ -1544,7 +1610,8 @@ export const completeInvitedUserProfile =
          * Region and branch administrators are also recorded on the
          * organization document for administration and display.
          *
-         * User access still comes from users/{uid}.organizationId and role.
+         * Shared organization access metadata is mirrored in
+         * organizationMembers/{uid}; users/{uid} remains the private profile.
          */
         if (
           isAdministratorInvitation(

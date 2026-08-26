@@ -15,8 +15,12 @@ import {
 
 import { auth, db } from "../firebase/firebase";
 
+import {
+  getTeamOrganizationMembers,
+  ORGANIZATION_MEMBERS_COLLECTION,
+} from "./organization-member-functions";
+
 const TEAMS_COLLECTION = "teams";
-const USERS_COLLECTION = "users";
 const ORGANIZATIONS_COLLECTION = "organizations";
 
 const ADMIN_TRANSFER_ROLES = new Set([
@@ -256,32 +260,15 @@ export const createDefaultOrganizationTeam = async ({
 };
 
 /*
- * Returns the users assigned to a team through users/{uid}.teamIds.
+ * Returns members assigned to a team through organizationMembers/{uid}.teamIds.
  *
- * This keeps the current data model simple: users remain the source of truth
- * for their own team assignments, while the team document stores team metadata.
+ * The team document stores collaboration metadata; the member directory stores
+ * the member IDs associated with that team.
  */
 export const getTeamMembers = async (teamId) => {
-  requireValue(teamId, "A team ID is required to load team members.");
-
-  const membersQuery = query(
-    collection(db, USERS_COLLECTION),
-    where("teamIds", "array-contains", teamId)
+  return getTeamOrganizationMembers(
+    teamId
   );
-
-  const snapshot = await getDocs(membersQuery);
-
-  return snapshot.docs
-    .map((userDocument) => ({
-      id: userDocument.id,
-      uid: userDocument.id,
-      ...userDocument.data(),
-    }))
-    .sort((first, second) =>
-      String(first.fullName || first.email || "").localeCompare(
-        String(second.fullName || second.email || "")
-      )
-    );
 };
 
 /*
@@ -297,55 +284,94 @@ export const addUserToTeam = async ({
 }) => {
   requireValue(userId, "A user ID is required.");
   requireValue(teamId, "A team ID is required.");
-  requireValue(updatedBy, "The user assigning the team member is required.");
+  requireValue(
+    updatedBy,
+    "The user assigning the team member is required."
+  );
 
   requireAuthenticatedActor(
     updatedBy,
     "add this user to the team"
   );
 
-  const userReference = doc(db, USERS_COLLECTION, userId);
-  const teamReference = doc(db, TEAMS_COLLECTION, teamId);
+  const memberReference = doc(
+    db,
+    ORGANIZATION_MEMBERS_COLLECTION,
+    userId
+  );
 
-  const [userSnapshot, teamSnapshot] = await Promise.all([
-    getDoc(userReference),
+  const teamReference = doc(
+    db,
+    TEAMS_COLLECTION,
+    teamId
+  );
+
+  const [
+    memberSnapshot,
+    teamSnapshot,
+  ] = await Promise.all([
+    getDoc(memberReference),
     getDoc(teamReference),
   ]);
 
-  if (!userSnapshot.exists()) {
-    throw new Error("The selected user could not be found.");
+  if (!memberSnapshot.exists()) {
+    throw new Error(
+      "The selected organization member could not be found."
+    );
   }
 
   if (!teamSnapshot.exists()) {
-    throw new Error("The selected team could not be found.");
+    throw new Error(
+      "The selected team could not be found."
+    );
   }
 
-  const user = userSnapshot.data();
-  const team = teamSnapshot.data();
+  const member =
+    memberSnapshot.data();
+
+  const team =
+    teamSnapshot.data();
 
   if (team.status === "archived") {
-    throw new Error("Users cannot be added to an archived team.");
+    throw new Error(
+      "Users cannot be added to an archived team."
+    );
   }
 
   if (
-    !user.organizationId ||
+    !member.organizationId ||
     !team.organizationId ||
-    user.organizationId !== team.organizationId
+    member.organizationId !==
+      team.organizationId
   ) {
     throw new Error(
       "The user and team must belong to the same organization."
     );
   }
 
-  await updateDoc(userReference, {
-    teamIds: arrayUnion(teamId),
-    updatedBy,
-    updatedAt: serverTimestamp(),
-  });
+  /*
+   * Team membership is shared organization-directory data, so it belongs on
+   * organizationMembers rather than another person's private users document.
+   */
+  await updateDoc(
+    memberReference,
+    {
+      teamIds:
+        arrayUnion(teamId),
+      updatedBy,
+      updatedAt:
+        serverTimestamp(),
+    }
+  );
 
-  const updatedUser = await getDoc(userReference);
+  const updatedMember =
+    await getDoc(
+      memberReference
+    );
 
-  return getDocumentData(updatedUser);
+  return getDocumentData(
+    updatedMember
+  );
 };
 
 /*
@@ -359,52 +385,84 @@ export const removeUserFromTeam = async ({
 }) => {
   requireValue(userId, "A user ID is required.");
   requireValue(teamId, "A team ID is required.");
-  requireValue(updatedBy, "The user removing the team member is required.");
+  requireValue(
+    updatedBy,
+    "The user removing the team member is required."
+  );
 
   requireAuthenticatedActor(
     updatedBy,
     "remove this user from the team"
   );
 
-  const userReference = doc(db, USERS_COLLECTION, userId);
-  const teamReference = doc(db, TEAMS_COLLECTION, teamId);
+  const memberReference = doc(
+    db,
+    ORGANIZATION_MEMBERS_COLLECTION,
+    userId
+  );
 
-  const [userSnapshot, teamSnapshot] =
-    await Promise.all([
-      getDoc(userReference),
-      getDoc(teamReference),
-    ]);
+  const teamReference = doc(
+    db,
+    TEAMS_COLLECTION,
+    teamId
+  );
 
-  if (!userSnapshot.exists()) {
-    throw new Error("The selected user could not be found.");
+  const [
+    memberSnapshot,
+    teamSnapshot,
+  ] = await Promise.all([
+    getDoc(memberReference),
+    getDoc(teamReference),
+  ]);
+
+  if (!memberSnapshot.exists()) {
+    throw new Error(
+      "The selected organization member could not be found."
+    );
   }
 
   if (!teamSnapshot.exists()) {
-    throw new Error("The selected team could not be found.");
+    throw new Error(
+      "The selected team could not be found."
+    );
   }
 
-  const user = userSnapshot.data();
-  const team = teamSnapshot.data();
+  const member =
+    memberSnapshot.data();
+
+  const team =
+    teamSnapshot.data();
 
   if (
-    !user.organizationId ||
+    !member.organizationId ||
     !team.organizationId ||
-    user.organizationId !== team.organizationId
+    member.organizationId !==
+      team.organizationId
   ) {
     throw new Error(
       "The user and team must belong to the same organization."
     );
   }
 
-  await updateDoc(userReference, {
-    teamIds: arrayRemove(teamId),
-    updatedBy,
-    updatedAt: serverTimestamp(),
-  });
+  await updateDoc(
+    memberReference,
+    {
+      teamIds:
+        arrayRemove(teamId),
+      updatedBy,
+      updatedAt:
+        serverTimestamp(),
+    }
+  );
 
-  const updatedUser = await getDoc(userReference);
+  const updatedMember =
+    await getDoc(
+      memberReference
+    );
 
-  return getDocumentData(updatedUser);
+  return getDocumentData(
+    updatedMember
+  );
 };
 
 
@@ -482,9 +540,9 @@ export const transferUserToOrganizationTeam = async ({
     "The destination organization is required."
   );
 
-  const userReference = doc(
+  const memberReference = doc(
     db,
-    USERS_COLLECTION,
+    ORGANIZATION_MEMBERS_COLLECTION,
     userId
   );
 
@@ -504,12 +562,12 @@ export const transferUserToOrganizationTeam = async ({
     db,
     async (transaction) => {
       const [
-        userSnapshot,
+        memberSnapshot,
         teamSnapshot,
         organizationSnapshot,
       ] = await Promise.all([
         transaction.get(
-          userReference
+          memberReference
         ),
 
         transaction.get(
@@ -521,7 +579,7 @@ export const transferUserToOrganizationTeam = async ({
         ),
       ]);
 
-      if (!userSnapshot.exists()) {
+      if (!memberSnapshot.exists()) {
         throw new Error(
           "The selected team member could not be found."
         );
@@ -541,8 +599,8 @@ export const transferUserToOrganizationTeam = async ({
         );
       }
 
-      const user =
-        userSnapshot.data();
+      const member =
+        memberSnapshot.data();
 
       const team =
         teamSnapshot.data();
@@ -551,7 +609,7 @@ export const transferUserToOrganizationTeam = async ({
         organizationSnapshot.data();
 
       if (
-        user.organizationId !==
+        member.organizationId !==
         sourceOrganizationId
       ) {
         throw new Error(
@@ -561,7 +619,7 @@ export const transferUserToOrganizationTeam = async ({
 
       const userStatus =
         normalizeIdentifier(
-          user.status
+          member.status
         );
 
       if (
@@ -577,9 +635,9 @@ export const transferUserToOrganizationTeam = async ({
         sourceTeamId &&
         !(
           Array.isArray(
-            user.teamIds
+            member.teamIds
           ) &&
-          user.teamIds.includes(
+          member.teamIds.includes(
             sourceTeamId
           )
         )
@@ -687,7 +745,7 @@ export const transferUserToOrganizationTeam = async ({
        * their primary organization changes.
        */
       transaction.update(
-        userReference,
+        memberReference,
         {
           organizationId:
             targetOrganizationId,
@@ -702,7 +760,14 @@ export const transferUserToOrganizationTeam = async ({
             targetOrganization.type ||
             "",
 
-          parentOrganizationId:
+          organizationCategory:
+            storedOrganization.organizationCategory ||
+            storedOrganization.category ||
+            targetOrganization.organizationCategory ||
+            targetOrganization.category ||
+            "",
+
+          parentId:
             storedOrganization.parentId ||
             "",
 
@@ -735,7 +800,7 @@ export const transferUserToOrganizationTeam = async ({
 
           country:
             storedOrganization.country ||
-            user.country ||
+            member.country ||
             null,
 
           role:
@@ -782,7 +847,7 @@ export const transferUserToOrganizationTeam = async ({
               sourceTeamId || null,
 
             previousRole:
-              user.role || null,
+              member.role || null,
 
             toOrganizationId:
               targetOrganizationId,
@@ -835,11 +900,11 @@ export const transferUserToOrganizationTeam = async ({
   );
 
   const [
-    updatedUserSnapshot,
+    updatedMemberSnapshot,
     updatedOrganizationSnapshot,
   ] = await Promise.all([
     getDoc(
-      userReference
+      memberReference
     ),
 
     getDoc(
@@ -850,7 +915,7 @@ export const transferUserToOrganizationTeam = async ({
   return {
     user:
       getDocumentData(
-        updatedUserSnapshot
+        updatedMemberSnapshot
       ),
 
     organization:
