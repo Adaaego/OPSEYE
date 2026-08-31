@@ -21,7 +21,8 @@ import {
 } from "lucide-react";
 import { Button } from "../ui/Button";
 
-import { getOrganizationDocument, getUserDocument } from "../../lib/functions";
+import { getOrganizationDocument } from "../../lib/functions";
+import { getOrganizationMember } from "../../lib/organization-member-functions";
 
 import OperatorsTab from "./operators-tab";
 import Overviews from "./Overview";
@@ -155,10 +156,12 @@ const SideBar = ({
     String(userName).charAt(0).toUpperCase();
 
   /*
-   * The user's Firestore document contains the organizationId.
+   * organizationMembers/{uid} is the authoritative source for organization
+   * access. The private users/{uid} profile may still contain older duplicated
+   * organization fields after an administrator moves to a Region or Branch.
    *
-   * The actual organization type is stored inside the matching organization
-   * document. Only Ministry accounts receive the Forms navigation item.
+   * The actual organization type/category is stored in the matching
+   * organizations/{organizationId} document.
    */
   useEffect(() => {
     const loadOrganizationCategory = async () => {
@@ -175,41 +178,42 @@ const SideBar = ({
         }
   
         /*
-         * Firebase Authentication only gives us the authenticated
-         * user. The organizationId is stored in that user's
-         * Firestore document, so we load the user document first.
+         * Firebase Authentication gives us the UID. Organization access itself
+         * comes from organizationMembers/{uid}; do not trust duplicated
+         * organization fields from the private users/{uid} profile here.
          */
-        const userDocument = await getUserDocument(
-          currentUser.uid
-        );
-  
-        if (!userDocument) {
-          console.warn(
-            "The signed-in user's Firestore document could not be found."
+        const organizationMember =
+          await getOrganizationMember(
+            currentUser.uid
           );
-  
+
+        if (!organizationMember) {
+          console.warn(
+            "The signed-in user's organization membership could not be found."
+          );
+
           setOrganizationCategory("");
           return;
         }
-  
-        if (!userDocument.organizationId) {
+
+        if (!organizationMember.organizationId) {
           console.warn(
             "The signed-in user is not linked to an organization."
           );
-  
+
           setOrganizationCategory("");
           return;
         }
-  
+
         /*
          * The organization document contains organizationCategory.
          * This field determines whether the Ministry-only Forms page appears.
          */
         const organization =
           await getOrganizationDocument(
-            userDocument.organizationId
+            organizationMember.organizationId
           );
-  
+
         if (!organization) {
           console.warn(
             "The organization linked to this user could not be found."

@@ -1512,6 +1512,7 @@ const OperatorDetail = ({
   backLabel = "Back to Operators",
   onBack = () => {},
   onSelectOrganization = null,
+  showBackButton = true,
 }) => {
   /*
    * Every enterprise, region and branch detail page uses this same component.
@@ -3297,8 +3298,11 @@ const OperatorDetail = ({
         onClick={
           onBack
         }
-        className="mb-5 flex items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-navy-900"
-      >
+        className={`${
+          showBackButton
+            ? "mb-5 flex"
+            : "hidden"
+        } items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-navy-900`}      >
         <ArrowLeft className="h-4 w-4" />
         {backLabel}
       </button>

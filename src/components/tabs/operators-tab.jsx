@@ -64,9 +64,6 @@ const ORGANIZATIONS_COLLECTION =
 const REPORT_SUBMISSIONS_COLLECTION =
   "reportSubmissions";
 
-const USERS_COLLECTION =
-  "users";
-
 const ORGANIZATION_MEMBERS_COLLECTION =
   "organizationMembers";
 
@@ -1673,35 +1670,27 @@ const OperatorsTab = ({
             );
           }
 
-          let organizationId =
-            currentUser
-              ?.profile
-              ?.organizationId ||
-            currentUser
-              ?.organizationId ||
-            "";
+          const memberSnapshot =
+            await getDoc(
+              doc(
+                db,
+                ORGANIZATION_MEMBERS_COLLECTION,
+                currentUser.uid
+              )
+            );
 
           if (
-            !organizationId
+            !memberSnapshot.exists()
           ) {
-            const userSnapshot =
-              await getDoc(
-                doc(
-                  db,
-                  USERS_COLLECTION,
-                  currentUser.uid
-                )
-              );
-
-            if (
-              userSnapshot.exists()
-            ) {
-              organizationId =
-                userSnapshot.data()
-                  ?.organizationId ||
-                "";
-            }
+            throw new Error(
+              "This user's organization membership could not be found."
+            );
           }
+
+          const organizationId =
+            memberSnapshot.data()
+              ?.organizationId ||
+            "";
 
           if (
             !organizationId
@@ -1764,28 +1753,137 @@ const OperatorsTab = ({
           let matchingCompanies =
             [];
 
+          const signedInOrganizationId =
+            getOrganizationId(
+              signedInOrganization
+            );
+
+          const signedInLevel =
+            getOrganizationLevel(
+              signedInOrganization
+            );
+
+          const belongsToOrganization = (
+            organization,
+            parentOrganizationId
+          ) => {
+            const ancestorIds =
+              Array.isArray(
+                organization?.ancestorIds
+              )
+                ? organization.ancestorIds
+                : [];
+
+            return (
+              organization?.parentId ===
+                parentOrganizationId ||
+              ancestorIds.includes(
+                parentOrganizationId
+              )
+            );
+          };
+
+          const sortOrganizationsByName = (
+            organizationList
+          ) => {
+            return [
+              ...organizationList,
+            ].sort(
+              (
+                first,
+                second
+              ) =>
+                String(
+                  first?.name ||
+                    ""
+                ).localeCompare(
+                  String(
+                    second?.name ||
+                      ""
+                  )
+                )
+            );
+          };
+
           if (
             isMinistry(
               signedInOrganization
             )
           ) {
             /*
-             * The Ministry query above is already constrained to its sector.
-             * Only enterprise records become top-level operator rows; their
-             * scoped descendants remain available for roll-up calculations.
+             * Ministry: show enterprise operators only.
              */
             matchingCompanies =
-              organizations.filter(
-                isEnterpriseOperator
+              sortOrganizationsByName(
+                organizations.filter(
+                  isEnterpriseOperator
+                )
               );
           } else if (
             isCompany(
               signedInOrganization
             )
           ) {
-            matchingCompanies = [
-              signedInOrganization,
-            ];
+            if (
+              signedInLevel ===
+              "enterprise"
+            ) {
+              /*
+               * Enterprise: show its Regions only.
+               */
+              matchingCompanies =
+                sortOrganizationsByName(
+                  organizations.filter(
+                    (organization) =>
+                      getOrganizationLevel(
+                        organization
+                      ) ===
+                        "region" &&
+                      belongsToOrganization(
+                        organization,
+                        signedInOrganizationId
+                      )
+                  )
+                );
+            } else if (
+              signedInLevel ===
+              "region"
+            ) {
+              /*
+               * Region: show Branches only. The Region itself must not appear
+               * as another row inside its own Operators page.
+               */
+              matchingCompanies =
+                sortOrganizationsByName(
+                  organizations.filter(
+                    (organization) =>
+                      getOrganizationLevel(
+                        organization
+                      ) ===
+                        "branch" &&
+                      belongsToOrganization(
+                        organization,
+                        signedInOrganizationId
+                      )
+                  )
+                );
+            } else if (
+              signedInLevel ===
+              "branch"
+            ) {
+              /*
+               * Branch: keep the signed-in Branch as the single data object.
+               * The list UI is bypassed below and OperatorDetail renders
+               * immediately.
+               */
+              matchingCompanies = [
+                signedInOrganization,
+              ];
+            } else {
+              matchingCompanies = [
+                signedInOrganization,
+              ];
+            }
           } else {
             throw new Error(
               "The organization category must be ministry or company."
@@ -3017,6 +3115,46 @@ const OperatorsTab = ({
       userMap,
     ]);
 
+  const currentOrganizationLevel =
+    getOrganizationLevel(
+      currentOrganization
+    );
+
+  const isBranchAccount =
+    currentOrganizationLevel ===
+    "branch";
+
+  const canExpandHierarchyRows =
+    isMinistry(
+      currentOrganization
+    ) ||
+    currentOrganizationLevel ===
+      "enterprise";
+
+  /*
+   * Branch accounts do not have an Operators list. Their own calculated
+   * organization object becomes the default detail page as soon as the scoped
+   * data has loaded.
+   */
+  const branchDefaultOperator =
+    isBranchAccount
+      ? mergedOperators.find(
+          (operator) =>
+            getOrganizationId(
+              operator
+            ) ===
+            getOrganizationId(
+              currentOrganization
+            )
+        ) ||
+        mergedOperators[0] ||
+        null
+      : null;
+
+  const activeOperator =
+    selectedOperator ||
+    branchDefaultOperator;
+
   const regionOptions =
     useMemo(() => {
       if (
@@ -3037,18 +3175,35 @@ const OperatorsTab = ({
 
       return [
         ...new Set(
-          mergedOperators
-            .flatMap(
+          [
+            ...mergedOperators.map(
               (operator) =>
-                operator.branches
-            )
-            .map(
-              (branch) =>
-                branch.region
-            )
-            .filter(Boolean)
+                operator.region
+            ),
+            ...mergedOperators
+              .flatMap(
+                (operator) =>
+                  operator.branches
+              )
+              .map(
+                (branch) =>
+                  branch.region
+              ),
+          ].filter(Boolean)
         ),
-      ];
+      ].sort(
+        (
+          first,
+          second
+        ) =>
+          String(
+            first
+          ).localeCompare(
+            String(
+              second
+            )
+          )
+      );
     }, [
       mergedOperators,
       regions,
@@ -3108,6 +3263,8 @@ const OperatorsTab = ({
 
             const matchesRegion =
               !regionFilter ||
+              operator.region ===
+                regionFilter ||
               operator.branches.some(
                 (branch) =>
                   branch.region ===
@@ -3463,7 +3620,7 @@ const OperatorsTab = ({
    * It performs presentation only and does not issue duplicate reads.
    */
   if (
-    selectedOperator
+    activeOperator
   ) {
     return (
       <div
@@ -3475,17 +3632,17 @@ const OperatorsTab = ({
       >
         <OperatorDetail
           key={
-            selectedOperator.organizationId ||
-            selectedOperator.id
+            activeOperator.organizationId ||
+            activeOperator.id
           }
           operator={
-            selectedOperator
+            activeOperator
           }
           regions={
             regions
           }
           updatedAt={
-            selectedOperator.updatedAt ||
+            activeOperator.updatedAt ||
             updatedAt ||
             organizationsLoadedAt
           }
@@ -3506,6 +3663,9 @@ const OperatorsTab = ({
           }
           onSelectOrganization={
             handleSelectChildOrganization
+          }
+          showBackButton={
+            !isBranchAccount
           }
         />
       </div>
@@ -3786,9 +3946,15 @@ const OperatorsTab = ({
                         ? operator.branches
                         : [];
 
+                    const canExpandOperator =
+                      canExpandHierarchyRows &&
+                      operatorBranches.length >
+                        0;
+
                     const isExpanded =
+                      canExpandOperator &&
                       expandedOperatorId ===
-                      operatorId;
+                        operatorId;
 
                     const displayStatus =
                       operator.status ||
@@ -3824,33 +3990,37 @@ const OperatorsTab = ({
                           }
                         >
                           <td className="px-4 py-3">
-                            <button
-                              type="button"
-                              onClick={(
-                                event
-                              ) => {
-                                event.stopPropagation();
+                            {canExpandOperator ? (
+                              <button
+                                type="button"
+                                onClick={(
+                                  event
+                                ) => {
+                                  event.stopPropagation();
 
-                                toggleOperator(
-                                  operatorId
-                                );
-                              }}
-                              aria-expanded={
-                                isExpanded
-                              }
-                              aria-label={
-                                isExpanded
-                                  ? `Collapse ${operator.name}`
-                                  : `Expand ${operator.name}`
-                              }
-                              className="rounded p-1 transition-colors hover:bg-slate-200"
-                            >
-                              {isExpanded ? (
-                                <ChevronDown className="h-4 w-4 text-slate-500" />
-                              ) : (
-                                <ChevronRight className="h-4 w-4 text-slate-500" />
-                              )}
-                            </button>
+                                  toggleOperator(
+                                    operatorId
+                                  );
+                                }}
+                                aria-expanded={
+                                  isExpanded
+                                }
+                                aria-label={
+                                  isExpanded
+                                    ? `Collapse ${operator.name}`
+                                    : `Expand ${operator.name}`
+                                }
+                                className="rounded p-1 transition-colors hover:bg-slate-200"
+                              >
+                                {isExpanded ? (
+                                  <ChevronDown className="h-4 w-4 text-slate-500" />
+                                ) : (
+                                  <ChevronRight className="h-4 w-4 text-slate-500" />
+                                )}
+                              </button>
+                            ) : (
+                              <span className="block h-6 w-6" />
+                            )}
                           </td>
 
                           <td className="px-4 py-3">
@@ -4026,7 +4196,8 @@ const OperatorsTab = ({
                           </td>
                         </tr>
 
-                        {isExpanded && (
+                        {canExpandOperator &&
+                          isExpanded && (
                           <tr className="bg-slate-50/60">
                             <td
                               colSpan={9}
