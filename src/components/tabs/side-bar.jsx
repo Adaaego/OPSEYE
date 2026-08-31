@@ -132,10 +132,15 @@ const SideBar = ({
   const [collapsed, setCollapsed] =
     useState(false);
 
-    const [
-      organizationCategory,
-      setOrganizationCategory,
-    ] = useState("");
+  const [
+    organizationCategory,
+    setOrganizationCategory,
+  ] = useState("");
+
+  const [
+    organizationType,
+    setOrganizationType,
+  ] = useState("");
 
   const [loadingOrganization, setLoadingOrganization] =
     useState(true);
@@ -174,6 +179,7 @@ const SideBar = ({
           );
   
           setOrganizationCategory("");
+          setOrganizationType("");
           return;
         }
   
@@ -193,6 +199,7 @@ const SideBar = ({
           );
 
           setOrganizationCategory("");
+          setOrganizationType("");
           return;
         }
 
@@ -202,6 +209,7 @@ const SideBar = ({
           );
 
           setOrganizationCategory("");
+          setOrganizationType("");
           return;
         }
 
@@ -220,6 +228,7 @@ const SideBar = ({
           );
   
           setOrganizationCategory("");
+          setOrganizationType("");
           return;
         }
   
@@ -229,7 +238,17 @@ const SideBar = ({
           .trim()
           .toLowerCase();
   
+        const type = String(
+          organization.type ||
+            organization.organizationType ||
+            organization.level ||
+            ""
+        )
+          .trim()
+          .toLowerCase();
+
         setOrganizationCategory(category);
+        setOrganizationType(type);
       } catch (error) {
         console.error(
           "Unable to load the user's organization category:",
@@ -237,6 +256,7 @@ const SideBar = ({
         );
   
         setOrganizationCategory("");
+        setOrganizationType("");
       } finally {
         setLoadingOrganization(false);
       }
@@ -253,15 +273,31 @@ const SideBar = ({
   const isMinistry =
     organizationCategory === "ministry";
 
+  const isBranch =
+    organizationType === "branch";
+
   const navigationItems = useMemo(() => {
     /*
-     * Wait until the organisation category has loaded before inserting the
-     * account-specific page. This prevents the wrong item flashing briefly
-     * while Firestore resolves the signed-in user's organisation.
+     * Do not show Regions until the organization level has resolved. This
+     * avoids briefly flashing a Regions tab to branch accounts during load.
      */
     if (loadingOrganization) {
-      return BASE_NAV_ITEMS;
+      return BASE_NAV_ITEMS.filter(
+        (item) => item.id !== "regions"
+      );
     }
+
+    /*
+     * A branch is the leaf organization level. Its own Operator Detail already
+     * provides the branch-level operational view, so Regions adds no useful
+     * navigation and is removed from both desktop and mobile menus.
+     */
+    const baseNavigationItems =
+      isBranch
+        ? BASE_NAV_ITEMS.filter(
+            (item) => item.id !== "regions"
+          )
+        : BASE_NAV_ITEMS;
 
     const accountSpecificItem =
       isMinistry
@@ -277,22 +313,23 @@ const SideBar = ({
           };
 
     const reportsIndex =
-      BASE_NAV_ITEMS.findIndex(
+      baseNavigationItems.findIndex(
         (item) =>
           item.id === "reports"
       );
 
     return [
-      ...BASE_NAV_ITEMS.slice(
+      ...baseNavigationItems.slice(
         0,
         reportsIndex + 1
       ),
       accountSpecificItem,
-      ...BASE_NAV_ITEMS.slice(
+      ...baseNavigationItems.slice(
         reportsIndex + 1
       ),
     ];
   }, [
+    isBranch,
     isMinistry,
     loadingOrganization,
   ]);
@@ -397,6 +434,15 @@ const SideBar = ({
    * prevents operator users from opening the Ministry-only Forms page.
    */
   useEffect(() => {
+    /*
+     * Wait for the authoritative organization level before enforcing navigation.
+     * This prevents a valid Regions deep-link for Ministry/Enterprise/Region
+     * accounts from being redirected while their organization is still loading.
+     */
+    if (loadingOrganization) {
+      return;
+    }
+
     const activeTabIsAvailable =
       navigationItems.some(
         (item) =>
@@ -408,6 +454,7 @@ const SideBar = ({
     }
   }, [
     activeTab,
+    loadingOrganization,
     navigationItems,
     transitionToTab,
   ]);

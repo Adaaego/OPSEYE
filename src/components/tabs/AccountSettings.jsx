@@ -37,9 +37,7 @@ import {
   getOrganizationMember,
   updateOrganizationMemberProfile,
 } from "../../lib/organization-member-functions";
-import {
-  getOrganizationDescendants,
-} from "../../lib/organization-functions";
+import { getOrganizationDescendants } from "../../lib/organization-functions";
 import {
   createDefaultOrganizationTeam,
   getOrganizationTeams,
@@ -52,9 +50,7 @@ import {
   createRegionAndInviteAdministrator,
   inviteOrganizationTeamMember,
 } from "../../lib/organization-workflows";
-import {
-  TEAM_INVITABLE_ROLES,
-} from "../../lib/types";
+import { TEAM_INVITABLE_ROLES } from "../../lib/types";
 import {
   getCompanyById,
   getCompanyByNormalizedName,
@@ -63,12 +59,7 @@ import {
   REGIONS,
 } from "../../lib/companies";
 
-import {
-  Card,
-  EmptyCell,
-  SectionHeader,
-  Table,
-} from "../ui/interface";
+import { Card, EmptyCell, SectionHeader, Table } from "../ui/interface";
 import { Button } from "../ui/Button";
 
 const NAVY = "#0F172A";
@@ -88,7 +79,6 @@ const SETTINGS_TABS = [
     label: "Organizations",
   },
 ];
-
 
 const createProfileForm = (profile = {}) => ({
   fullName: profile.fullName || "",
@@ -247,7 +237,13 @@ const getRegionName = (regionId) => {
   );
 };
 
-const ModalPortal = ({ open, title, onClose, children, maxWidth = "max-w-2xl" }) => {
+const ModalPortal = ({
+  open,
+  title,
+  onClose,
+  children,
+  maxWidth = "max-w-2xl",
+}) => {
   useEffect(() => {
     if (!open) {
       return undefined;
@@ -336,39 +332,27 @@ const CreateChildOrganizationModal = ({
   onClose,
   onCreate,
 }) => {
-  const [regionId, setRegionId] =
-    useState("");
+  const [regionId, setRegionId] = useState("");
 
-  const [branchName, setBranchName] =
-    useState("");
+  const [branchName, setBranchName] = useState("");
 
-  const [assignmentMode, setAssignmentMode] =
-    useState("existing");
+  const [assignmentMode, setAssignmentMode] = useState("existing");
 
-  const [selectedUserId, setSelectedUserId] =
-    useState("");
+  const [selectedUserId, setSelectedUserId] = useState("");
 
-  const [administratorEmail, setAdministratorEmail] =
-    useState("");
+  const [administratorEmail, setAdministratorEmail] = useState("");
 
-  const [submitting, setSubmitting] =
-    useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  const [error, setError] =
-    useState("");
+  const [error, setError] = useState("");
 
-  const isRegionCreation =
-    childType === "region";
+  const isRegionCreation = childType === "region";
 
-  const administratorRoleLabel =
-    isRegionCreation
-      ? "Regional Administrator"
-      : "Branch Administrator";
+  const administratorRoleLabel = isRegionCreation
+    ? "Regional Administrator"
+    : "Branch Administrator";
 
-  const childLabel =
-    isRegionCreation
-      ? "Region"
-      : "Branch";
+  const childLabel = isRegionCreation ? "Region" : "Branch";
 
   /*
    * Existing hierarchy administrators are excluded because moving one of those
@@ -376,57 +360,33 @@ const CreateChildOrganizationModal = ({
    * The current signed-in administrator is also excluded to prevent accidental
    * self-transfer.
    */
-  const eligibleTeamMembers =
-    useMemo(() => {
-      const protectedRoles =
-        new Set([
-          "ministry_admin",
-          "enterprise_admin",
-          "region_admin",
-          "branch_admin",
-        ]);
-
-      return teamMembers
-        .filter((member) => {
-          const memberId =
-            member.uid ||
-            member.id ||
-            "";
-
-          const memberStatus =
-            normalizeRoleCode(
-              member.status ||
-              "active"
-            );
-
-          return (
-            memberId &&
-            memberId !== currentUserId &&
-            memberStatus === "active" &&
-            !protectedRoles.has(
-              normalizeRoleCode(
-                member.role
-              )
-            )
-          );
-        })
-        .sort((first, second) =>
-          String(
-            first.fullName ||
-              first.email ||
-              ""
-          ).localeCompare(
-            String(
-              second.fullName ||
-                second.email ||
-                ""
-            )
-          )
-        );
-    }, [
-      currentUserId,
-      teamMembers,
+  const eligibleTeamMembers = useMemo(() => {
+    const protectedRoles = new Set([
+      "ministry_admin",
+      "enterprise_admin",
+      "region_admin",
+      "branch_admin",
     ]);
+
+    return teamMembers
+      .filter((member) => {
+        const memberId = member.uid || member.id || "";
+
+        const memberStatus = normalizeRoleCode(member.status || "active");
+
+        return (
+          memberId &&
+          memberId !== currentUserId &&
+          memberStatus === "active" &&
+          !protectedRoles.has(normalizeRoleCode(member.role))
+        );
+      })
+      .sort((first, second) =>
+        String(first.fullName || first.email || "").localeCompare(
+          String(second.fullName || second.email || "")
+        )
+      );
+  }, [currentUserId, teamMembers]);
 
   useEffect(() => {
     if (!open) {
@@ -443,88 +403,42 @@ const CreateChildOrganizationModal = ({
      * Prefer existing-member assignment when a suitable team member exists.
      * Otherwise, default to the invitation path.
      */
-    const defaultMode =
-      eligibleTeamMembers.length
-        ? "existing"
-        : "invite";
+    const defaultMode = eligibleTeamMembers.length ? "existing" : "invite";
 
-    setAssignmentMode(
-      defaultMode
-    );
+    setAssignmentMode(defaultMode);
 
     setSelectedUserId(
-      eligibleTeamMembers[0]?.uid ||
-        eligibleTeamMembers[0]?.id ||
-        ""
+      eligibleTeamMembers[0]?.uid || eligibleTeamMembers[0]?.id || ""
     );
-  }, [
-    eligibleTeamMembers,
-    open,
-  ]);
+  }, [eligibleTeamMembers, open]);
 
-  const availableRegions =
-    useMemo(() => {
-      const existing =
-        new Set(
-          existingRegionIds.map(
-            normalizeRegionId
-          )
-        );
+  const availableRegions = useMemo(() => {
+    const existing = new Set(existingRegionIds.map(normalizeRegionId));
 
-      return REGIONS
-        .filter(
-          (region) =>
-            !existing.has(
-              normalizeRegionId(
-                region.id
-              )
-            )
-        )
-        .sort((first, second) =>
-          first.name.localeCompare(
-            second.name
-          )
-        );
-    }, [existingRegionIds]);
+    return REGIONS.filter(
+      (region) => !existing.has(normalizeRegionId(region.id))
+    ).sort((first, second) => first.name.localeCompare(second.name));
+  }, [existingRegionIds]);
 
-  const selectedRegion =
-    availableRegions.find(
-      (region) =>
-        normalizeRegionId(
-          region.id
-        ) ===
-        normalizeRegionId(
-          regionId
-        )
-    );
+  const selectedRegion = availableRegions.find(
+    (region) => normalizeRegionId(region.id) === normalizeRegionId(regionId)
+  );
 
-  const selectedMember =
-    eligibleTeamMembers.find(
-      (member) =>
-        (
-          member.uid ||
-          member.id
-        ) === selectedUserId
-    );
+  const selectedMember = eligibleTeamMembers.find(
+    (member) => (member.uid || member.id) === selectedUserId
+  );
 
-  const childName =
-    isRegionCreation
-      ? selectedRegion?.name || ""
-      : branchName.trim();
+  const childName = isRegionCreation
+    ? selectedRegion?.name || ""
+    : branchName.trim();
 
   const canSubmit =
     Boolean(childName) &&
-    (
-      assignmentMode === "existing"
-        ? Boolean(selectedUserId)
-        : Boolean(
-            administratorEmail.trim()
-          )
-    );
+    (assignmentMode === "existing"
+      ? Boolean(selectedUserId)
+      : Boolean(administratorEmail.trim()));
 
-  const handleSubmit = async (
-    event
-  ) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
 
     if (!childName) {
@@ -537,15 +451,9 @@ const CreateChildOrganizationModal = ({
       return;
     }
 
-    const email =
-      administratorEmail
-        .trim()
-        .toLowerCase();
+    const email = administratorEmail.trim().toLowerCase();
 
-    if (
-      assignmentMode === "existing" &&
-      !selectedMember
-    ) {
+    if (assignmentMode === "existing" && !selectedMember) {
       setError(
         `Select the existing team member who should become the ${administratorRoleLabel}.`
       );
@@ -553,12 +461,7 @@ const CreateChildOrganizationModal = ({
       return;
     }
 
-    if (
-      assignmentMode === "invite" &&
-      !/^\S+@\S+\.\S+$/.test(
-        email
-      )
-    ) {
+    if (assignmentMode === "invite" && !/^\S+@\S+\.\S+$/.test(email)) {
       setError(
         `Enter a valid email address for the ${administratorRoleLabel}.`
       );
@@ -573,32 +476,18 @@ const CreateChildOrganizationModal = ({
       await onCreate({
         childType,
 
-        region:
-          selectedRegion ||
-          null,
+        region: selectedRegion || null,
 
-        branchName:
-          branchName.trim(),
+        branchName: branchName.trim(),
 
         assignmentMode,
 
-        selectedUserId:
-          assignmentMode ===
-          "existing"
-            ? selectedUserId
-            : "",
+        selectedUserId: assignmentMode === "existing" ? selectedUserId : "",
 
-        administratorEmail:
-          assignmentMode ===
-          "invite"
-            ? email
-            : "",
+        administratorEmail: assignmentMode === "invite" ? email : "",
       });
     } catch (createError) {
-      console.error(
-        `Unable to create the ${childType}:`,
-        createError
-      );
+      console.error(`Unable to create the ${childType}:`, createError);
 
       setError(
         createError?.message ||
@@ -647,10 +536,7 @@ const CreateChildOrganizationModal = ({
         </button>
       </div>
 
-      <form
-        onSubmit={handleSubmit}
-        className="p-6"
-      >
+      <form onSubmit={handleSubmit} className="p-6">
         {error && (
           <div className="mb-5 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -669,8 +555,7 @@ const CreateChildOrganizationModal = ({
             <div
               className="flex h-12 w-12 items-center justify-center rounded-xl"
               style={{
-                backgroundColor:
-                  PALE_BLUE,
+                backgroundColor: PALE_BLUE,
 
                 color: NAVY,
               }}
@@ -685,15 +570,12 @@ const CreateChildOrganizationModal = ({
             </p>
 
             <p className="mt-1 truncate font-semibold text-slate-900">
-              {organization?.name ||
-                "Current organization"}
+              {organization?.name || "Current organization"}
             </p>
 
             <p className="mt-0.5 text-xs text-slate-500">
               Organization ID:{" "}
-              {getOrganizationId(
-                organization
-              ) || "Not available"}
+              {getOrganizationId(organization) || "Not available"}
             </p>
           </div>
         </div>
@@ -707,28 +589,17 @@ const CreateChildOrganizationModal = ({
 
               <select
                 value={regionId}
-                onChange={(event) =>
-                  setRegionId(
-                    event.target.value
-                  )
-                }
+                onChange={(event) => setRegionId(event.target.value)}
                 className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 required
               >
-                <option value="">
-                  Select a region
-                </option>
+                <option value="">Select a region</option>
 
-                {availableRegions.map(
-                  (region) => (
-                    <option
-                      key={region.id}
-                      value={region.id}
-                    >
-                      {region.name}
-                    </option>
-                  )
-                )}
+                {availableRegions.map((region) => (
+                  <option key={region.id} value={region.id}>
+                    {region.name}
+                  </option>
+                ))}
               </select>
             </label>
           ) : (
@@ -740,11 +611,7 @@ const CreateChildOrganizationModal = ({
               <input
                 type="text"
                 value={branchName}
-                onChange={(event) =>
-                  setBranchName(
-                    event.target.value
-                  )
-                }
+                onChange={(event) => setBranchName(event.target.value)}
                 placeholder="e.g. Tema Industrial Area Branch"
                 className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 required
@@ -760,17 +627,10 @@ const CreateChildOrganizationModal = ({
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <button
                 type="button"
-                onClick={() =>
-                  setAssignmentMode(
-                    "existing"
-                  )
-                }
-                disabled={
-                  !eligibleTeamMembers.length
-                }
+                onClick={() => setAssignmentMode("existing")}
+                disabled={!eligibleTeamMembers.length}
                 className={`rounded-xl border p-4 text-left transition ${
-                  assignmentMode ===
-                  "existing"
+                  assignmentMode === "existing"
                     ? "border-navy-950 bg-navy-50"
                     : "border-slate-200 bg-white hover:border-slate-300"
                 } disabled:cursor-not-allowed disabled:opacity-50`}
@@ -782,20 +642,16 @@ const CreateChildOrganizationModal = ({
                 </p>
 
                 <p className="mt-1 text-xs leading-5 text-slate-500">
-                  Transfer an active member to the new organization and assign the administrator role immediately.
+                  Transfer an active member to the new organization and assign
+                  the administrator role immediately.
                 </p>
               </button>
 
               <button
                 type="button"
-                onClick={() =>
-                  setAssignmentMode(
-                    "invite"
-                  )
-                }
+                onClick={() => setAssignmentMode("invite")}
                 className={`rounded-xl border p-4 text-left transition ${
-                  assignmentMode ===
-                  "invite"
+                  assignmentMode === "invite"
                     ? "border-navy-950 bg-navy-50"
                     : "border-slate-200 bg-white hover:border-slate-300"
                 }`}
@@ -807,14 +663,14 @@ const CreateChildOrganizationModal = ({
                 </p>
 
                 <p className="mt-1 text-xs leading-5 text-slate-500">
-                  Create a pending invitation and complete the standard email-verification onboarding flow.
+                  Create a pending invitation and complete the standard
+                  email-verification onboarding flow.
                 </p>
               </button>
             </div>
           </div>
 
-          {assignmentMode ===
-          "existing" ? (
+          {assignmentMode === "existing" ? (
             <label className="block">
               <span className="mb-1.5 block text-sm font-semibold text-slate-800">
                 Select Team Member
@@ -822,43 +678,27 @@ const CreateChildOrganizationModal = ({
 
               <select
                 value={selectedUserId}
-                onChange={(event) =>
-                  setSelectedUserId(
-                    event.target.value
-                  )
-                }
+                onChange={(event) => setSelectedUserId(event.target.value)}
                 className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
                 required
               >
-                <option value="">
-                  Select a team member
-                </option>
+                <option value="">Select a team member</option>
 
-                {eligibleTeamMembers.map(
-                  (member) => {
-                    const memberId =
-                      member.uid ||
-                      member.id;
+                {eligibleTeamMembers.map((member) => {
+                  const memberId = member.uid || member.id;
 
-                    return (
-                      <option
-                        key={memberId}
-                        value={memberId}
-                      >
-                        {member.fullName ||
-                          member.email}{" "}
-                        ·{" "}
-                        {formatRole(
-                          member.role
-                        )}
-                      </option>
-                    );
-                  }
-                )}
+                  return (
+                    <option key={memberId} value={memberId}>
+                      {member.fullName || member.email} ·{" "}
+                      {formatRole(member.role)}
+                    </option>
+                  );
+                })}
               </select>
 
               <span className="mt-1.5 block text-xs leading-5 text-slate-500">
-                Their primary organization, role and team membership will move to the new {childLabel.toLowerCase()}.
+                Their primary organization, role and team membership will move
+                to the new {childLabel.toLowerCase()}.
               </span>
             </label>
           ) : (
@@ -872,13 +712,9 @@ const CreateChildOrganizationModal = ({
 
                 <input
                   type="email"
-                  value={
-                    administratorEmail
-                  }
+                  value={administratorEmail}
                   onChange={(event) =>
-                    setAdministratorEmail(
-                      event.target.value
-                    )
+                    setAdministratorEmail(event.target.value)
                   }
                   placeholder="administrator@company.com"
                   className="h-11 w-full rounded-lg border border-slate-300 bg-white pl-10 pr-3 text-sm font-medium text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
@@ -895,19 +731,15 @@ const CreateChildOrganizationModal = ({
               Assignment preview
             </p>
 
-            <p className="mt-2 font-semibold text-slate-900">
-              {childName}
-            </p>
+            <p className="mt-2 font-semibold text-slate-900">{childName}</p>
 
             <p className="mt-1 text-xs text-slate-500">
               {administratorRoleLabel} ·{" "}
-              {assignmentMode ===
-              "existing"
+              {assignmentMode === "existing"
                 ? selectedMember?.fullName ||
                   selectedMember?.email ||
                   "Existing member"
-                : administratorEmail ||
-                  "Invitation pending"}
+                : administratorEmail || "Invitation pending"}
             </p>
           </div>
         )}
@@ -924,10 +756,7 @@ const CreateChildOrganizationModal = ({
 
           <Button
             type="submit"
-            disabled={
-              submitting ||
-              !canSubmit
-            }
+            disabled={submitting || !canSubmit}
             className="text-white hover:opacity-90"
             style={{
               backgroundColor: NAVY,
@@ -938,8 +767,7 @@ const CreateChildOrganizationModal = ({
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Creating...
               </>
-            ) : assignmentMode ===
-              "existing" ? (
+            ) : assignmentMode === "existing" ? (
               <>
                 <CheckCircle2 className="h-4 w-4" />
                 Create & Assign Admin
@@ -1062,7 +890,9 @@ const AccountSettings = ({ roles = [] }) => {
 
       let resolvedDefaultTeam =
         organizationTeams.find((team) => team.isDefault) ||
-        organizationTeams.find((team) => normalizeText(team.status) === "active") ||
+        organizationTeams.find(
+          (team) => normalizeText(team.status) === "active"
+        ) ||
         null;
 
       if (
@@ -1109,10 +939,12 @@ const AccountSettings = ({ roles = [] }) => {
        * invitations as well as invitations for their own default team.
        */
       const invitationOrganizationIds = Array.from(
-        new Set([
-          normalizedOrganization.organizationId,
-          ...descendants.map(getOrganizationId),
-        ].filter(Boolean))
+        new Set(
+          [
+            normalizedOrganization.organizationId,
+            ...descendants.map(getOrganizationId),
+          ].filter(Boolean)
+        )
       );
 
       const invitationGroups = await Promise.all(
@@ -1182,9 +1014,7 @@ const AccountSettings = ({ roles = [] }) => {
       );
 
       const administratorDocuments = await Promise.all(
-        administratorIds.map((userId) =>
-          getOrganizationMember(userId)
-        )
+        administratorIds.map((userId) => getOrganizationMember(userId))
       );
 
       const administratorMap = new Map(
@@ -1246,8 +1076,8 @@ const AccountSettings = ({ roles = [] }) => {
             adminRole: administrator
               ? formatRole(administrator.role)
               : pendingInvitation
-                ? formatRole(pendingInvitation.role)
-                : "",
+              ? formatRole(pendingInvitation.role)
+              : "",
             status: organizationItem.status || "active",
             invitationStatus,
             invitationId: pendingInvitation
@@ -1351,180 +1181,115 @@ const AccountSettings = ({ roles = [] }) => {
     return getOrganizationDisplayName(organization, organizationMetadata);
   }, [organization, organizationMetadata]);
 
-  const currentRole =
-    normalizeRoleCode(
-      profile.role
-    );
+  const currentRole = normalizeRoleCode(profile.role);
 
   const currentUserId =
-    profile.uid ||
-    profile.id ||
-    auth.currentUser?.uid ||
-    "";
+    profile.uid || profile.id || auth.currentUser?.uid || "";
 
-  const organizationType =
-    normalizeText(
-      organization?.type
-    );
+  const organizationType = normalizeText(organization?.type);
 
-  const isMinistryContext =
-    organizationType ===
-    "ministry";
+  const isMinistryContext = organizationType === "ministry";
 
-  const isEnterpriseContext =
-    organizationType ===
-    "enterprise";
+  const isEnterpriseContext = organizationType === "enterprise";
 
-  const isRegionContext =
-    organizationType ===
-    "region";
+  const isRegionContext = organizationType === "region";
 
-  const isBranchContext =
-    organizationType ===
-    "branch";
+  const isBranchContext = organizationType === "branch";
+
+  const visibleSettingsTabs = useMemo(() => {
+    return isBranchContext
+      ? SETTINGS_TABS.filter((tab) => tab.id !== "organization")
+      : SETTINGS_TABS;
+  }, [isBranchContext]);
+
+  useEffect(() => {
+    if (isBranchContext && activeTab === "organization") {
+      setActiveTab("account");
+    }
+  }, [activeTab, isBranchContext]);
 
   const isEnterpriseAdmin =
-    currentRole ===
-      "enterprise_admin" ||
-    (
-      isEnterpriseContext &&
-      currentRole === "admin"
-    );
+    currentRole === "enterprise_admin" ||
+    (isEnterpriseContext && currentRole === "admin");
 
-  const isRegionAdmin =
-    currentRole ===
-      "region_admin" &&
-    isRegionContext;
+  const isRegionAdmin = currentRole === "region_admin" && isRegionContext;
 
   /*
    * Every hierarchy administrator may manage their own organization's team.
    * This includes Ministry and Branch Admins, but it does not grant either role
    * permission to create child organizations.
    */
-  const canInviteTeamMembers =
-    [
-      "ministry_admin",
-      "enterprise_admin",
-      "region_admin",
-      "branch_admin",
-      "organization_admin",
-    ].includes(
-      currentRole
-    );
+  const canInviteTeamMembers = [
+    "ministry_admin",
+    "enterprise_admin",
+    "region_admin",
+    "branch_admin",
+    "organization_admin",
+  ].includes(currentRole);
 
   /*
    * Enterprise Admins create regions. Regional Admins create branches beneath
    * their own region. Ministry and Branch Admins remain view-only in the
    * organization hierarchy tab.
    */
-  const childTypeToCreate =
-    isEnterpriseAdmin
-      ? "region"
-      : isRegionAdmin
-        ? "branch"
-        : "";
+  const childTypeToCreate = isEnterpriseAdmin
+    ? "region"
+    : isRegionAdmin
+    ? "branch"
+    : "";
 
-  const canCreateChildOrganization =
-    Boolean(
-      childTypeToCreate
-    );
+  const canCreateChildOrganization = Boolean(childTypeToCreate);
 
-  const existingRegions =
-    useMemo(() => {
-      return hierarchyLevels
-        .filter(
-          (item) =>
-            normalizeText(
-              item.level
-            ) === "region" &&
-            (
-              !currentOrganizationId ||
-              item.parentId ===
-                currentOrganizationId
-            )
-        )
-        .sort((first, second) =>
-          String(
-            first.name || ""
-          ).localeCompare(
-            String(
-              second.name || ""
-            )
-          )
-        );
-    }, [
-      currentOrganizationId,
-      hierarchyLevels,
-    ]);
+  const existingRegions = useMemo(() => {
+    return hierarchyLevels
+      .filter(
+        (item) =>
+          normalizeText(item.level) === "region" &&
+          (!currentOrganizationId || item.parentId === currentOrganizationId)
+      )
+      .sort((first, second) =>
+        String(first.name || "").localeCompare(String(second.name || ""))
+      );
+  }, [currentOrganizationId, hierarchyLevels]);
 
-  const existingBranches =
-    useMemo(() => {
-      return hierarchyLevels
-        .filter(
-          (item) =>
-            normalizeText(
-              item.level
-            ) === "branch" &&
-            item.parentId ===
-              currentOrganizationId
-        )
-        .sort((first, second) =>
-          String(
-            first.name || ""
-          ).localeCompare(
-            String(
-              second.name || ""
-            )
-          )
-        );
-    }, [
-      currentOrganizationId,
-      hierarchyLevels,
-    ]);
+  const existingBranches = useMemo(() => {
+    return hierarchyLevels
+      .filter(
+        (item) =>
+          normalizeText(item.level) === "branch" &&
+          item.parentId === currentOrganizationId
+      )
+      .sort((first, second) =>
+        String(first.name || "").localeCompare(String(second.name || ""))
+      );
+  }, [currentOrganizationId, hierarchyLevels]);
 
-  const existingRegionIds =
-    useMemo(() => {
-      return existingRegions
-        .map(
-          (region) =>
-            region.regionId
-        )
-        .filter(Boolean);
-    }, [existingRegions]);
+  const existingRegionIds = useMemo(() => {
+    return existingRegions.map((region) => region.regionId).filter(Boolean);
+  }, [existingRegions]);
 
   const visibleChildOrganizations =
-    childTypeToCreate ===
-    "region"
+    childTypeToCreate === "region"
       ? existingRegions
-      : childTypeToCreate ===
-          "branch"
-        ? existingBranches
-        : [];
+      : childTypeToCreate === "branch"
+      ? existingBranches
+      : [];
 
   /*
    * Regional and branch administrator assignment must use a person who is
    * already in the parent organization's default team. The backend validates
    * this again before any organization is created.
    */
-  const defaultTeamMembers =
-    useMemo(() => {
-      if (!teamId) {
-        return [];
-      }
+  const defaultTeamMembers = useMemo(() => {
+    if (!teamId) {
+      return [];
+    }
 
-      return teamMembers.filter(
-        (member) =>
-          Array.isArray(
-            member.teamIds
-          ) &&
-          member.teamIds.includes(
-            teamId
-          )
-      );
-    }, [
-      teamId,
-      teamMembers,
-    ]);
+    return teamMembers.filter(
+      (member) =>
+        Array.isArray(member.teamIds) && member.teamIds.includes(teamId)
+    );
+  }, [teamId, teamMembers]);
 
   const teamPendingInvites = useMemo(() => {
     return pendingInvites.filter((invitation) => {
@@ -1654,7 +1419,9 @@ const AccountSettings = ({ roles = [] }) => {
     }
 
     if (!canInviteTeamMembers) {
-      setPageError("You do not have permission to invite organization members.");
+      setPageError(
+        "You do not have permission to invite organization members."
+      );
       return;
     }
 
@@ -1696,193 +1463,139 @@ const AccountSettings = ({ roles = [] }) => {
     }
   };
 
-  const handleCreateChildOrganization =
-    async ({
-      childType,
-      region,
-      branchName,
-      assignmentMode,
-      selectedUserId,
-      administratorEmail,
-    }) => {
-      if (!organization) {
-        throw new Error(
-          "The parent organization could not be resolved."
-        );
+  const handleCreateChildOrganization = async ({
+    childType,
+    region,
+    branchName,
+    assignmentMode,
+    selectedUserId,
+    administratorEmail,
+  }) => {
+    if (!organization) {
+      throw new Error("The parent organization could not be resolved.");
+    }
+
+    if (!defaultTeam) {
+      throw new Error(
+        "The parent organization's default team is not available."
+      );
+    }
+
+    let result;
+    let organizationName;
+    let administratorRoleLabel;
+
+    if (childType === "region") {
+      if (!region?.id) {
+        throw new Error("Select the region you are creating.");
       }
 
-      if (!defaultTeam) {
-        throw new Error(
-          "The parent organization's default team is not available."
-        );
+      organizationName = `${companyDisplayName} ${region.name}`
+        .replace(/\s+/g, " ")
+        .trim();
+
+      administratorRoleLabel = "Regional Administrator";
+
+      result =
+        assignmentMode === "existing"
+          ? await createRegionAndAssignExistingAdministrator({
+              parentOrganization: organization,
+
+              sourceTeam: defaultTeam,
+
+              regionId: normalizeRegionId(region.id),
+
+              organizationName,
+
+              selectedUserId,
+
+              currentUser: profile,
+            })
+          : await createRegionAndInviteAdministrator({
+              parentOrganization: organization,
+
+              regionId: normalizeRegionId(region.id),
+
+              organizationName,
+
+              administratorEmail,
+
+              currentUser: profile,
+            });
+    } else if (childType === "branch") {
+      const trimmedBranchName = String(branchName || "").trim();
+
+      if (!trimmedBranchName) {
+        throw new Error("Enter the branch name.");
       }
 
-      let result;
-      let organizationName;
-      let administratorRoleLabel;
+      /*
+       * Prefixing the branch with its region keeps names understandable in
+       * Ministry and enterprise roll-up views where the parent may not be
+       * visible beside every record.
+       */
+      organizationName = `${organization.name} - ${trimmedBranchName}`
+        .replace(/\s+/g, " ")
+        .trim();
 
-      if (childType === "region") {
-        if (!region?.id) {
-          throw new Error(
-            "Select the region you are creating."
-          );
-        }
+      administratorRoleLabel = "Branch Administrator";
 
-        organizationName =
-          `${companyDisplayName} ${region.name}`
-            .replace(/\s+/g, " ")
-            .trim();
+      result =
+        assignmentMode === "existing"
+          ? await createBranchAndAssignExistingAdministrator({
+              parentOrganization: organization,
 
-        administratorRoleLabel =
-          "Regional Administrator";
+              sourceTeam: defaultTeam,
 
-        result =
-          assignmentMode ===
-          "existing"
-            ? await createRegionAndAssignExistingAdministrator({
-                parentOrganization:
-                  organization,
+              organizationName,
 
-                sourceTeam:
-                  defaultTeam,
+              selectedUserId,
 
-                regionId:
-                  normalizeRegionId(
-                    region.id
-                  ),
+              currentUser: profile,
+            })
+          : await createBranchAndInviteAdministrator({
+              parentOrganization: organization,
 
-                organizationName,
+              organizationName,
 
-                selectedUserId,
+              administratorEmail,
 
-                currentUser:
-                  profile,
-              })
-            : await createRegionAndInviteAdministrator({
-                parentOrganization:
-                  organization,
+              currentUser: profile,
+            });
+    } else {
+      throw new Error("Your organization cannot create child organizations.");
+    }
 
-                regionId:
-                  normalizeRegionId(
-                    region.id
-                  ),
+    if (result.invitation && result.invitationUrl) {
+      rememberInvitationLink(result.invitation, result.invitationUrl);
+    }
 
-                organizationName,
+    setCreateChildOpen(false);
 
-                administratorEmail,
+    await loadAccountData({
+      showLoading: false,
+    });
 
-                currentUser:
-                  profile,
-              });
-      } else if (
-        childType === "branch"
-      ) {
-        const trimmedBranchName =
-          String(
-            branchName || ""
-          ).trim();
-
-        if (!trimmedBranchName) {
-          throw new Error(
-            "Enter the branch name."
-          );
-        }
-
-        /*
-         * Prefixing the branch with its region keeps names understandable in
-         * Ministry and enterprise roll-up views where the parent may not be
-         * visible beside every record.
-         */
-        organizationName =
-          `${organization.name} - ${trimmedBranchName}`
-            .replace(/\s+/g, " ")
-            .trim();
-
-        administratorRoleLabel =
-          "Branch Administrator";
-
-        result =
-          assignmentMode ===
-          "existing"
-            ? await createBranchAndAssignExistingAdministrator({
-                parentOrganization:
-                  organization,
-
-                sourceTeam:
-                  defaultTeam,
-
-                organizationName,
-
-                selectedUserId,
-
-                currentUser:
-                  profile,
-              })
-            : await createBranchAndInviteAdministrator({
-                parentOrganization:
-                  organization,
-
-                organizationName,
-
-                administratorEmail,
-
-                currentUser:
-                  profile,
-              });
-      } else {
-        throw new Error(
-          "Your organization cannot create child organizations."
-        );
-      }
-
-      if (
-        result.invitation &&
-        result.invitationUrl
-      ) {
-        rememberInvitationLink(
-          result.invitation,
-          result.invitationUrl
-        );
-      }
-
-      setCreateChildOpen(false);
-
-      await loadAccountData({
-        showLoading: false,
-      });
-
-      if (
-        assignmentMode ===
-        "existing"
-      ) {
-        setPageNotice({
-          type: "success",
-
-          message:
-            `${organizationName} was created and the selected team member is now its ${administratorRoleLabel}.`,
-        });
-
-        return;
-      }
-
-      const emailWasSent =
-        Boolean(
-          result.emailDelivery
-            ?.success
-        );
-
+    if (assignmentMode === "existing") {
       setPageNotice({
-        type:
-          emailWasSent
-            ? "success"
-            : "warning",
+        type: "success",
 
-        message:
-          emailWasSent
-            ? `${organizationName} was created and the ${administratorRoleLabel} invitation was sent to ${administratorEmail}.`
-            : `${organizationName} was created, but EmailJS could not send the invitation. Copy the invitation link from the organization card and share it manually.`,
+        message: `${organizationName} was created and the selected team member is now its ${administratorRoleLabel}.`,
       });
-    };
+
+      return;
+    }
+
+    const emailWasSent = Boolean(result.emailDelivery?.success);
+
+    setPageNotice({
+      type: emailWasSent ? "success" : "warning",
+
+      message: emailWasSent
+        ? `${organizationName} was created and the ${administratorRoleLabel} invitation was sent to ${administratorEmail}.`
+        : `${organizationName} was created, but EmailJS could not send the invitation. Copy the invitation link from the organization card and share it manually.`,
+    });
+  };
 
   if (loadingPage) {
     return (
@@ -1903,15 +1616,11 @@ const AccountSettings = ({ roles = [] }) => {
        * same distance from the sidebar at every viewport width.
        */}
       <div className="mb-3 flex items-center gap-2 text-sm text-slate-500">
-        <span className="font-medium text-slate-600">
-          Settings
-        </span>
+        <span className="font-medium text-slate-600">Settings</span>
 
         <ChevronRight className="h-3.5 w-3.5" />
 
-        <span className="capitalize">
-          {activeTab}
-        </span>
+        <span className="capitalize">{activeTab}</span>
       </div>
 
       <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
@@ -1920,8 +1629,7 @@ const AccountSettings = ({ roles = [] }) => {
             <span
               className="h-6 w-1.5 rounded-full"
               style={{
-                backgroundColor:
-                  NAVY,
+                backgroundColor: NAVY,
               }}
             />
 
@@ -1932,14 +1640,11 @@ const AccountSettings = ({ roles = [] }) => {
             <span
               className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
               style={{
-                backgroundColor:
-                  PALE_BLUE,
-                color:
-                  NAVY,
+                backgroundColor: PALE_BLUE,
+                color: NAVY,
               }}
             >
-              {organization?.name ||
-                "Organization Settings"}
+              {organization?.name || "Organization Settings"}
             </span>
           </div>
 
@@ -1956,41 +1661,42 @@ const AccountSettings = ({ roles = [] }) => {
         </div>
       )}
 
-      {pageNotice && (() => {
-        const isWarning = pageNotice.type === "warning";
-        const NoticeIcon = isWarning ? AlertCircle : CheckCircle2;
+      {pageNotice &&
+        (() => {
+          const isWarning = pageNotice.type === "warning";
+          const NoticeIcon = isWarning ? AlertCircle : CheckCircle2;
 
-        return (
-          <div
-            className={`mb-5 flex items-start justify-between gap-4 rounded-lg border px-4 py-3 text-sm ${
-              isWarning
-                ? "border-amber-200 bg-amber-50 text-amber-800"
-                : "border-emerald-200 bg-emerald-50 text-emerald-800"
-            }`}
-          >
-            <div className="flex items-start gap-3">
-              <NoticeIcon className="mt-0.5 h-4 w-4 shrink-0" />
-              <p>{pageNotice.message}</p>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setPageNotice(null)}
-              className={`rounded p-1 transition ${
+          return (
+            <div
+              className={`mb-5 flex items-start justify-between gap-4 rounded-lg border px-4 py-3 text-sm ${
                 isWarning
-                  ? "text-amber-700 hover:bg-amber-100"
-                  : "text-emerald-700 hover:bg-emerald-100"
+                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-800"
               }`}
-              aria-label="Dismiss notice"
             >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        );
-      })()}
+              <div className="flex items-start gap-3">
+                <NoticeIcon className="mt-0.5 h-4 w-4 shrink-0" />
+                <p>{pageNotice.message}</p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setPageNotice(null)}
+                className={`rounded p-1 transition ${
+                  isWarning
+                    ? "text-amber-700 hover:bg-amber-100"
+                    : "text-emerald-700 hover:bg-emerald-100"
+                }`}
+                aria-label="Dismiss notice"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          );
+        })()}
 
       <div className="mb-8 inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
-        {SETTINGS_TABS.map((tab) => {
+        {visibleSettingsTabs.map((tab) => {
           const isActive = activeTab === tab.id;
 
           return (
@@ -2085,7 +1791,8 @@ const AccountSettings = ({ roles = [] }) => {
                     {organization?.name || "Organization"}
                   </p>
                   <p className="mt-1 text-sm capitalize text-slate-500">
-                    {organization?.type || "Organization"} · {formatRole(profile.role)}
+                    {organization?.type || "Organization"} ·{" "}
+                    {formatRole(profile.role)}
                   </p>
                 </div>
               </div>
@@ -2125,7 +1832,9 @@ const AccountSettings = ({ roles = [] }) => {
 
           <Card className="overflow-hidden">
             <div className="border-b border-slate-100 px-6 py-5">
-              <h2 className="text-base font-semibold text-navy-950">Security</h2>
+              <h2 className="text-base font-semibold text-navy-950">
+                Security
+              </h2>
 
               <p className="mt-0.5 text-sm text-slate-500">
                 Keep your account secure with additional protection.
@@ -2182,10 +1891,12 @@ const AccountSettings = ({ roles = [] }) => {
                     Shared dashboard team
                   </p>
                   <h2 className="mt-1 truncate text-xl font-semibold">
-                    {defaultTeam?.name || `${organization?.name || "Organization"} Team`}
+                    {defaultTeam?.name ||
+                      `${organization?.name || "Organization"} Team`}
                   </h2>
                   <p className="mt-1 text-sm text-slate-300">
-                    Members of this team share access to the same organization dashboard.
+                    Members of this team share access to the same organization
+                    dashboard.
                   </p>
                 </div>
               </div>
@@ -2245,7 +1956,9 @@ const AccountSettings = ({ roles = [] }) => {
 
             {canInviteTeamMembers && (
               <Button
-                onClick={() => setShowInviteForm((currentValue) => !currentValue)}
+                onClick={() =>
+                  setShowInviteForm((currentValue) => !currentValue)
+                }
                 disabled={!defaultTeam}
                 className="bg-navy-950 text-white hover:bg-navy-900"
               >
@@ -2291,10 +2004,7 @@ const AccountSettings = ({ roles = [] }) => {
                     className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
                   >
                     {roleOptions.map((roleOption) => (
-                      <option
-                        key={roleOption.value}
-                        value={roleOption.value}
-                      >
+                      <option key={roleOption.value} value={roleOption.value}>
                         {roleOption.label}
                       </option>
                     ))}
@@ -2365,7 +2075,8 @@ const AccountSettings = ({ roles = [] }) => {
                           {invitation.email}
                         </p>
                         <p className="mt-0.5 text-xs text-slate-500">
-                          {formatRole(invitation.role)} · {invitation.organizationName}
+                          {formatRole(invitation.role)} ·{" "}
+                          {invitation.organizationName}
                         </p>
                       </div>
                     </div>
@@ -2376,7 +2087,9 @@ const AccountSettings = ({ roles = [] }) => {
                       </span>
                       {recentInvitationLinks[getInvitationId(invitation)] ? (
                         <CopyButton
-                          value={recentInvitationLinks[getInvitationId(invitation)]}
+                          value={
+                            recentInvitationLinks[getInvitationId(invitation)]
+                          }
                           label="Copy invite link"
                         />
                       ) : (
@@ -2463,7 +2176,7 @@ const AccountSettings = ({ roles = [] }) => {
         </div>
       )}
 
-      {activeTab === "organization" && (
+      {activeTab === "organization" && !isBranchContext && (
         <div className="space-y-7">
           <Card className="overflow-hidden">
             <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -2479,8 +2192,7 @@ const AccountSettings = ({ roles = [] }) => {
                     <div
                       className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl"
                       style={{
-                        backgroundColor:
-                          PALE_BLUE,
+                        backgroundColor: PALE_BLUE,
 
                         color: NAVY,
                       }}
@@ -2491,23 +2203,21 @@ const AccountSettings = ({ roles = [] }) => {
 
                   <div className="min-w-0">
                     <span className="rounded-md bg-slate-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                      {organization?.type ||
-                        "Organization"}
+                      {organization?.type || "Organization"}
                     </span>
 
                     <h2 className="mt-3 truncate text-xl font-semibold text-slate-900">
-                      {organization?.name ||
-                        "Organization"}
+                      {organization?.name || "Organization"}
                     </h2>
 
                     <p className="mt-1 text-sm text-slate-500">
                       {isMinistryContext
                         ? "Government oversight organization. Operator hierarchy creation is not available from Ministry accounts."
                         : isEnterpriseContext
-                          ? "Enterprise parent for regional operating organizations."
-                          : isRegionContext
-                            ? "Regional organization with permission to create and manage branches beneath it."
-                            : "Branch organization and terminal level in the current hierarchy."}
+                        ? "Enterprise parent for regional operating organizations."
+                        : isRegionContext
+                        ? "Regional organization with permission to create and manage branches beneath it."
+                        : "Branch organization and terminal level in the current hierarchy."}
                     </p>
                   </div>
                 </div>
@@ -2520,35 +2230,24 @@ const AccountSettings = ({ roles = [] }) => {
 
                 <div className="mt-3 space-y-3 text-xs">
                   <div className="flex items-center justify-between gap-4">
-                    <span className="text-slate-500">
-                      Organization ID
-                    </span>
+                    <span className="text-slate-500">Organization ID</span>
 
                     <code className="max-w-[190px] truncate font-semibold text-slate-800">
-                      {currentOrganizationId ||
-                        "—"}
+                      {currentOrganizationId || "—"}
                     </code>
                   </div>
 
                   <div className="flex items-center justify-between gap-4">
-                    <span className="text-slate-500">
-                      Root enterprise ID
-                    </span>
+                    <span className="text-slate-500">Root enterprise ID</span>
 
                     <code className="max-w-[190px] truncate font-semibold text-slate-800">
                       {organization?.rootEnterpriseId ||
-                        (
-                          isEnterpriseContext
-                            ? currentOrganizationId
-                            : "—"
-                        )}
+                        (isEnterpriseContext ? currentOrganizationId : "—")}
                     </code>
                   </div>
 
                   <div className="flex items-center justify-between gap-4">
-                    <span className="text-slate-500">
-                      Child organizations
-                    </span>
+                    <span className="text-slate-500">Child organizations</span>
 
                     <span className="font-semibold text-slate-800">
                       {visibleChildOrganizations.length}
@@ -2564,235 +2263,177 @@ const AccountSettings = ({ roles = [] }) => {
               <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                   <SectionHeader>
-                    {childTypeToCreate ===
-                    "region"
+                    {childTypeToCreate === "region"
                       ? "Regional Organizations"
                       : "Branch Organizations"}
                   </SectionHeader>
 
                   <p className="-mt-2 max-w-2xl text-sm text-slate-500">
-                    {childTypeToCreate ===
-                    "region"
+                    {childTypeToCreate === "region"
                       ? "Each region receives its own organization and default team while inheriting the enterprise hierarchy."
                       : "Each branch is created directly beneath this region and inherits the same enterprise and region metadata."}
                   </p>
                 </div>
 
                 <Button
-                  onClick={() =>
-                    setCreateChildOpen(
-                      true
-                    )
-                  }
+                  onClick={() => setCreateChildOpen(true)}
                   className="bg-navy-950 text-white hover:bg-navy-900"
                 >
                   <Plus className="h-4 w-4" />
-
                   Create New{" "}
-                  {childTypeToCreate ===
-                  "region"
-                    ? "Region"
-                    : "Branch"}
+                  {childTypeToCreate === "region" ? "Region" : "Branch"}
                 </Button>
               </div>
 
-              {visibleChildOrganizations.length >
-              0 ? (
+              {visibleChildOrganizations.length > 0 ? (
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  {visibleChildOrganizations.map(
-                    (item) => {
-                      const FallbackIcon =
-                        getHierarchyIcon(
-                          item.level
-                        );
+                  {visibleChildOrganizations.map((item) => {
+                    const FallbackIcon = getHierarchyIcon(item.level);
 
-                      const invitationStatus =
-                        normalizeRoleCode(
-                          item.invitationStatus
-                        );
+                    const invitationStatus = normalizeRoleCode(
+                      item.invitationStatus
+                    );
 
-                      const pending =
-                        invitationStatus ===
-                        "pending";
+                    const pending = invitationStatus === "pending";
 
-                      const active =
-                        [
-                          "accepted",
-                          "active",
-                        ].includes(
-                          invitationStatus
-                        );
+                    const active = ["accepted", "active"].includes(
+                      invitationStatus
+                    );
 
-                      const statusLabel =
-                        pending
-                          ? "Invitation pending"
-                          : active
-                            ? "Active"
-                            : "Administrator unassigned";
+                    const statusLabel = pending
+                      ? "Invitation pending"
+                      : active
+                      ? "Active"
+                      : "Administrator unassigned";
 
-                      const statusClassName =
-                        pending
-                          ? "bg-amber-100 text-amber-700"
-                          : active
-                            ? "bg-emerald-100 text-emerald-700"
-                            : "bg-slate-200 text-slate-600";
+                    const statusClassName = pending
+                      ? "bg-amber-100 text-amber-700"
+                      : active
+                      ? "bg-emerald-100 text-emerald-700"
+                      : "bg-slate-200 text-slate-600";
 
-                      const invitationUrl =
-                        item.invitationId
-                          ? recentInvitationLinks[
-                              item
-                                .invitationId
-                            ]
-                          : "";
+                    const invitationUrl = item.invitationId
+                      ? recentInvitationLinks[item.invitationId]
+                      : "";
 
-                      const administratorLabel =
-                        normalizeText(
-                          item.level
-                        ) === "region"
-                          ? "Regional Administrator"
-                          : "Branch Administrator";
+                    const administratorLabel =
+                      normalizeText(item.level) === "region"
+                        ? "Regional Administrator"
+                        : "Branch Administrator";
 
-                      return (
-                        <Card
-                          key={
-                            item.organizationId ||
-                            item.id
-                          }
-                          className="overflow-hidden transition hover:border-slate-300 hover:shadow-md"
-                        >
-                          <div className="p-5">
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="flex min-w-0 items-start gap-4">
-                                {item.logo ||
-                                organizationLogo ? (
-                                  <img
-                                    src={
-                                      item.logo ||
-                                      organizationLogo
-                                    }
-                                    alt={`${item.name} logo`}
-                                    className="h-11 w-11 shrink-0 rounded-xl border border-slate-200 bg-white object-contain p-1"
-                                  />
-                                ) : (
-                                  <div
-                                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
-                                    style={{
-                                      backgroundColor:
-                                        PALE_BLUE,
+                    return (
+                      <Card
+                        key={item.organizationId || item.id}
+                        className="overflow-hidden transition hover:border-slate-300 hover:shadow-md"
+                      >
+                        <div className="p-5">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="flex min-w-0 items-start gap-4">
+                              {item.logo || organizationLogo ? (
+                                <img
+                                  src={item.logo || organizationLogo}
+                                  alt={`${item.name} logo`}
+                                  className="h-11 w-11 shrink-0 rounded-xl border border-slate-200 bg-white object-contain p-1"
+                                />
+                              ) : (
+                                <div
+                                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
+                                  style={{
+                                    backgroundColor: PALE_BLUE,
 
-                                      color:
-                                        NAVY,
-                                    }}
-                                  >
-                                    <FallbackIcon className="h-5 w-5" />
-                                  </div>
-                                )}
-
-                                <div className="min-w-0">
-                                  <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                                    {item.level}
-                                  </span>
-
-                                  <p className="mt-2 truncate text-base font-semibold text-navy-950">
-                                    <EmptyCell
-                                      value={
-                                        item.name
-                                      }
-                                    />
-                                  </p>
-
-                                  <p className="mt-1 text-xs text-slate-500">
-                                    {normalizeText(
-                                      item.level
-                                    ) ===
-                                    "region"
-                                      ? `${getRegionName(
-                                          item.regionId
-                                        )} · Parent: ${
-                                          item.parent ||
-                                          organization?.name
-                                        }`
-                                      : `Parent: ${
-                                          item.parent ||
-                                          organization?.name
-                                        }`}
-                                  </p>
+                                    color: NAVY,
+                                  }}
+                                >
+                                  <FallbackIcon className="h-5 w-5" />
                                 </div>
-                              </div>
+                              )}
 
-                              <ChevronRight className="h-5 w-5 shrink-0 text-slate-300" />
-                            </div>
+                              <div className="min-w-0">
+                                <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                                  {item.level}
+                                </span>
 
-                            <div className="mt-5 grid grid-cols-1 gap-3 border-t border-slate-100 pt-4 sm:grid-cols-2">
-                              <div>
-                                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                                  {administratorLabel}
+                                <p className="mt-2 truncate text-base font-semibold text-navy-950">
+                                  <EmptyCell value={item.name} />
                                 </p>
 
-                                <p className="mt-1 truncate text-sm font-semibold text-slate-800">
-                                  {item.adminName ||
-                                    "No admin assigned"}
+                                <p className="mt-1 text-xs text-slate-500">
+                                  {normalizeText(item.level) === "region"
+                                    ? `${getRegionName(
+                                        item.regionId
+                                      )} · Parent: ${
+                                        item.parent || organization?.name
+                                      }`
+                                    : `Parent: ${
+                                        item.parent || organization?.name
+                                      }`}
                                 </p>
-
-                                {item.adminRole && (
-                                  <p className="mt-0.5 text-xs text-slate-500">
-                                    {
-                                      item.adminRole
-                                    }
-                                  </p>
-                                )}
-                              </div>
-
-                              <div>
-                                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                                  Organization ID
-                                </p>
-
-                                <code className="mt-1 block truncate text-xs font-semibold text-slate-700">
-                                  {item.organizationId ||
-                                    item.id}
-                                </code>
                               </div>
                             </div>
+
+                            <ChevronRight className="h-5 w-5 shrink-0 text-slate-300" />
                           </div>
 
-                          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3">
-                            <span
-                              className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${statusClassName}`}
-                            >
-                              {statusLabel}
-                            </span>
+                          <div className="mt-5 grid grid-cols-1 gap-3 border-t border-slate-100 pt-4 sm:grid-cols-2">
+                            <div>
+                              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                                {administratorLabel}
+                              </p>
 
-                            {invitationUrl && (
-                              <CopyButton
-                                value={
-                                  invitationUrl
-                                }
-                                label="Copy invite link"
-                              />
-                            )}
+                              <p className="mt-1 truncate text-sm font-semibold text-slate-800">
+                                {item.adminName || "No admin assigned"}
+                              </p>
+
+                              {item.adminRole && (
+                                <p className="mt-0.5 text-xs text-slate-500">
+                                  {item.adminRole}
+                                </p>
+                              )}
+                            </div>
+
+                            <div>
+                              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                                Organization ID
+                              </p>
+
+                              <code className="mt-1 block truncate text-xs font-semibold text-slate-700">
+                                {item.organizationId || item.id}
+                              </code>
+                            </div>
                           </div>
-                        </Card>
-                      );
-                    }
-                  )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3">
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${statusClassName}`}
+                          >
+                            {statusLabel}
+                          </span>
+
+                          {invitationUrl && (
+                            <CopyButton
+                              value={invitationUrl}
+                              label="Copy invite link"
+                            />
+                          )}
+                        </div>
+                      </Card>
+                    );
+                  })}
                 </div>
               ) : (
                 <Card className="border-dashed px-6 py-14 text-center">
                   <Layers3 className="mx-auto h-8 w-8 text-slate-400" />
 
                   <p className="mt-3 text-sm font-semibold text-slate-700">
-                    No{" "}
-                    {childTypeToCreate ===
-                    "region"
-                      ? "regional"
-                      : "branch"}{" "}
+                    No {childTypeToCreate === "region" ? "regional" : "branch"}{" "}
                     organizations created
                   </p>
 
                   <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-400">
-                    Create the first{" "}
-                    {childTypeToCreate} and choose whether to assign an existing team member or invite a new administrator.
+                    Create the first {childTypeToCreate} and choose whether to
+                    assign an existing team member or invite a new
+                    administrator.
                   </p>
                 </Card>
               )}
@@ -2805,8 +2446,8 @@ const AccountSettings = ({ roles = [] }) => {
                 {isMinistryContext
                   ? "Ministry accounts can manage their own team, but they cannot create operator regions or branches."
                   : isBranchContext
-                    ? "A branch is the final organization level and cannot create additional child organizations."
-                    : "Your current role has view-only access to organization hierarchy settings."}
+                  ? "A branch is the final organization level and cannot create additional child organizations."
+                  : "Your current role has view-only access to organization hierarchy settings."}
               </p>
             </div>
           )}
@@ -2823,7 +2464,10 @@ const AccountSettings = ({ roles = [] }) => {
                 </h3>
 
                 <p className="mt-1 text-sm leading-relaxed text-slate-500">
-                  Existing-member assignments take effect immediately and transfer the selected user's organization and team. New-person assignments use a secure invitation whose raw token is never stored in Firestore.
+                  Existing-member assignments take effect immediately and
+                  transfer the selected user's organization and team. New-person
+                  assignments use a secure invitation whose raw token is never
+                  stored in Firestore.
                 </p>
               </div>
             </div>
@@ -2839,12 +2483,8 @@ const AccountSettings = ({ roles = [] }) => {
         teamMembers={defaultTeamMembers}
         currentUserId={currentUserId}
         existingRegionIds={existingRegionIds}
-        onClose={() =>
-          setCreateChildOpen(false)
-        }
-        onCreate={
-          handleCreateChildOrganization
-        }
+        onClose={() => setCreateChildOpen(false)}
+        onCreate={handleCreateChildOrganization}
       />
     </section>
   );
