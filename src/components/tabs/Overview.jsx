@@ -1562,11 +1562,10 @@ const Overviews = () => {
   }, [enrichedReports, today]);
 
   /*
-   * Workforce records are entered and maintained in the Workforce module.
+   * Workforce is additive across the hierarchy.
    *
-   * The overview reads the same current role-level records and applies the
-   * same organisation scope. Reporting forms are deliberately not consulted,
-   * which prevents duplicate or stale headcount values across the product.
+   * Parent staff are real employees, so Enterprise and Region workforce stays
+   * included alongside workforce from every descendant organization.
    */
   const enrichedWorkforceRecords = useMemo(
     () =>
@@ -1574,10 +1573,7 @@ const Overviews = () => {
         .map((record) => {
           const organization = organizationMap.get(record.organizationId);
 
-          if (
-            !organization ||
-            !operationalOrganizationIds.has(getOrganizationId(organization))
-          ) {
+          if (!organization) {
             return null;
           }
 
@@ -1603,7 +1599,6 @@ const Overviews = () => {
         })
         .filter(Boolean),
     [
-      operationalOrganizationIds,
       organizationMap,
       scopeConfig.level,
       workforceRecords,
