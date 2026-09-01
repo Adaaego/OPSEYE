@@ -562,23 +562,23 @@ const formatUpdatedAt = (value) => {
   return `Data as of ${time} · ${day}`;
 };
 
-const getOrganizationCompany = (record = {}) =>
-  getCompanyById(record.companyId || record.operatorCompanyId) ||
+const getOrganizationCompany = (record) =>
+  getCompanyById(record?.companyId || record?.operatorCompanyId) ||
   getCompanyByNormalizedName(
-    record.normalizedCompanyName ||
-      record.organizationNormalizedName ||
-      record.normalizedName ||
-      record.name
+    record?.normalizedCompanyName ||
+      record?.organizationNormalizedName ||
+      record?.normalizedName ||
+      record?.name
   );
 
-const getOrganizationLogo = (record = {}) =>
-  record.logoUrl || record.logo || getOrganizationCompany(record)?.logo || "";
+const getOrganizationLogo = (record) =>
+  record?.logoUrl || record?.logo || getOrganizationCompany(record)?.logo || "";
 
-const getOrganizationName = (record = {}) =>
-  record.name ||
-  record.organizationName ||
-  record.operatorName ||
-  record.companyName ||
+const getOrganizationName = (record) =>
+  record?.name ||
+  record?.organizationName ||
+  record?.operatorName ||
+  record?.companyName ||
   "Unnamed organization";
 
 const chunkValues = (values, size = FIRESTORE_IN_QUERY_LIMIT) => {
@@ -1270,6 +1270,25 @@ const Overviews = () => {
   );
 
   /*
+   * Only leaf organizations contribute operational data. Once a parent has
+   * children, its old direct records are ignored and totals roll up from below.
+   */
+  const operationalOrganizationIds = useMemo(() => {
+    const parentIds = new Set(
+      dataOrganizations.map((organization) => organization.parentId).filter(Boolean)
+    );
+
+    return new Set(
+      dataOrganizations
+        .filter((organization) => {
+          const organizationId = getOrganizationId(organization);
+          return organizationId && !parentIds.has(organizationId);
+        })
+        .map(getOrganizationId)
+    );
+  }, [dataOrganizations]);
+
+  /*
    * Reports already carry organizationId and hierarchy metadata. The page uses
    * organizationId as the direct link and does not re-read user records.
    */
@@ -1279,7 +1298,10 @@ const Overviews = () => {
         .map((report) => {
           const organization = getReportOrganization(report, organizationMap);
 
-          if (!organization) {
+          if (
+            !organization ||
+            !operationalOrganizationIds.has(getOrganizationId(organization))
+          ) {
             return null;
           }
 
@@ -1349,7 +1371,13 @@ const Overviews = () => {
           };
         })
         .filter(Boolean),
-    [organizationMap, priceMap, reportSubmissions, scopeConfig.level]
+    [
+      operationalOrganizationIds,
+      organizationMap,
+      priceMap,
+      reportSubmissions,
+      scopeConfig.level,
+    ]
   );
 
   const today = useMemo(() => new Date(), []);
@@ -1546,7 +1574,10 @@ const Overviews = () => {
         .map((record) => {
           const organization = organizationMap.get(record.organizationId);
 
-          if (!organization) {
+          if (
+            !organization ||
+            !operationalOrganizationIds.has(getOrganizationId(organization))
+          ) {
             return null;
           }
 
@@ -1571,7 +1602,12 @@ const Overviews = () => {
           };
         })
         .filter(Boolean),
-    [organizationMap, scopeConfig.level, workforceRecords]
+    [
+      operationalOrganizationIds,
+      organizationMap,
+      scopeConfig.level,
+      workforceRecords,
+    ]
   );
 
   const workforce = useMemo(() => {
@@ -1766,14 +1802,14 @@ const Overviews = () => {
           "region"
         );
         unitId = getOrganizationId(unitOrganization);
-        unitName = getOrganizationName(unitOrganization);
+        unitName = unitId ? getOrganizationName(unitOrganization) : "";
       } else if (scopeConfig.level === "region") {
         unitOrganization =
           getOrganizationLevel(report.organization) === "branch"
             ? report.organization
             : null;
         unitId = getOrganizationId(unitOrganization);
-        unitName = getOrganizationName(unitOrganization);
+        unitName = unitId ? getOrganizationName(unitOrganization) : "";
       }
 
       if (!unitId) {
