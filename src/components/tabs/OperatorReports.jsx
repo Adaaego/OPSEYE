@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CalendarClock,
@@ -686,6 +686,22 @@ const OperatorsReports = ({
 
   const [currentUserProfile, setCurrentUserProfile] =
     useState(null);
+
+  /*
+   * Keep the reporting table deliberately compact. Users can choose either
+   * 10 or 20 rows per page; larger page sizes are intentionally not offered.
+   */
+  const [pageSize, setPageSize] =
+    useState(10);
+
+  const [currentPage, setCurrentPage] =
+    useState(0);
+
+  const [tablePageVisible, setTablePageVisible] =
+    useState(true);
+
+  const tablePageTimerRef =
+    useRef(null);
 
   const today = getDateKey(new Date());
 
@@ -1447,6 +1463,165 @@ const OperatorsReports = ({
     sortDirection,
   ]);
 
+  const totalPages = Math.max(
+    Math.ceil(
+      visibleReports.length /
+        pageSize
+    ),
+    1
+  );
+
+  const paginatedReports = useMemo(() => {
+    const startIndex =
+      currentPage * pageSize;
+
+    return visibleReports.slice(
+      startIndex,
+      startIndex + pageSize
+    );
+  }, [
+    currentPage,
+    pageSize,
+    visibleReports,
+  ]);
+
+  const firstVisibleReportNumber =
+    visibleReports.length
+      ? currentPage *
+          pageSize +
+        1
+      : 0;
+
+  const lastVisibleReportNumber =
+    visibleReports.length
+      ? Math.min(
+          (currentPage + 1) *
+            pageSize,
+          visibleReports.length
+        )
+      : 0;
+
+  /*
+   * Filtering or changing the sort order starts again from page one. This
+   * prevents an empty page when the previous page number no longer exists.
+   */
+  useEffect(() => {
+    setCurrentPage(0);
+    setTablePageVisible(true);
+  }, [
+    pageSize,
+    search,
+    statusFilter,
+    sortKey,
+    sortDirection,
+  ]);
+
+  /*
+   * Live Firestore updates can reduce the number of available pages. Clamp the
+   * current page rather than leaving the table stranded beyond the final page.
+   */
+  useEffect(() => {
+    setCurrentPage(
+      (page) =>
+        Math.min(
+          page,
+          totalPages - 1
+        )
+    );
+  }, [totalPages]);
+
+  useEffect(() => {
+    return () => {
+      if (
+        tablePageTimerRef.current
+      ) {
+        window.clearTimeout(
+          tablePageTimerRef.current
+        );
+      }
+    };
+  }, []);
+
+  const transitionToPage = (
+    nextPage
+  ) => {
+    if (
+      nextPage < 0 ||
+      nextPage >= totalPages ||
+      nextPage === currentPage
+    ) {
+      return;
+    }
+
+    if (
+      tablePageTimerRef.current
+    ) {
+      window.clearTimeout(
+        tablePageTimerRef.current
+      );
+    }
+
+    setTablePageVisible(false);
+
+    tablePageTimerRef.current =
+      window.setTimeout(() => {
+        setCurrentPage(nextPage);
+
+        window.requestAnimationFrame(
+          () => {
+            setTablePageVisible(true);
+          }
+        );
+
+        tablePageTimerRef.current =
+          null;
+      }, 140);
+  };
+
+  const handlePageSizeChange = (
+    nextPageSize
+  ) => {
+    if (
+      nextPageSize !== 10 &&
+      nextPageSize !== 20
+    ) {
+      return;
+    }
+
+    if (
+      nextPageSize === pageSize
+    ) {
+      return;
+    }
+
+    setTablePageVisible(false);
+
+    if (
+      tablePageTimerRef.current
+    ) {
+      window.clearTimeout(
+        tablePageTimerRef.current
+      );
+    }
+
+    tablePageTimerRef.current =
+      window.setTimeout(() => {
+        setPageSize(
+          nextPageSize
+        );
+        setCurrentPage(0);
+
+        window.requestAnimationFrame(
+          () => {
+            setTablePageVisible(true);
+          }
+        );
+
+        tablePageTimerRef.current =
+          null;
+      }, 140);
+  };
+
   const handleSort = (
     column
   ) => {
@@ -1641,7 +1816,13 @@ const OperatorsReports = ({
               />
             </div>
 
-            <div className="overflow-x-auto">
+            <div
+              className={`overflow-x-auto transition-[opacity,transform] duration-150 ease-out ${
+                tablePageVisible
+                  ? "translate-y-0 opacity-100"
+                  : "translate-y-1 opacity-0"
+              }`}
+            >
               <table className="w-full min-w-[1050px]">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50/50">
@@ -1730,9 +1911,9 @@ const OperatorsReports = ({
                 </thead>
 
                 <tbody>
-                  {visibleReports.length >
+                  {paginatedReports.length >
                   0 ? (
-                    visibleReports.map(
+                    paginatedReports.map(
                       (report) => {
                         const reportStatus =
                           normalizeStatus(
@@ -1930,29 +2111,82 @@ const OperatorsReports = ({
               </table>
             </div>
 
-            <div className="flex flex-col gap-3 border-t border-slate-200 px-5 py-3 text-xs font-medium text-slate-700 sm:flex-row sm:items-center sm:justify-between">
-              <span>
-                Showing{" "}
-                {visibleReports.length} of{" "}
-                {reports.length} reports
-              </span>
+            <div className="flex flex-col gap-3 border-t border-slate-200 px-5 py-3 text-xs font-medium text-slate-700 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <span>
+                  Showing{" "}
+                  {firstVisibleReportNumber}–{lastVisibleReportNumber} of{" "}
+                  {visibleReports.length} reports
+                </span>
 
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  disabled
-                  className="!bg-navy-950 !text-white disabled:!bg-navy-950 disabled:!text-white disabled:opacity-50"
-                >
-                  Previous
-                </Button>
+                <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
+                  <span className="px-2 text-[11px] font-semibold text-slate-500">
+                    Rows
+                  </span>
 
-                <Button
-                  size="sm"
-                  disabled
-                  className="!bg-navy-950 !text-white disabled:!bg-navy-950 disabled:!text-white disabled:opacity-50"
-                >
-                  Next
-                </Button>
+                  {[10, 20].map(
+                    (size) => (
+                      <button
+                        key={size}
+                        type="button"
+                        onClick={() =>
+                          handlePageSizeChange(
+                            size
+                          )
+                        }
+                        aria-pressed={
+                          pageSize === size
+                        }
+                        className={`min-w-8 rounded-md px-2 py-1 text-[11px] font-bold transition-colors ${
+                          pageSize === size
+                            ? "bg-navy-950 text-white shadow-sm"
+                            : "text-slate-600 hover:bg-white hover:text-navy-950"
+                        }`}
+                      >
+                        {size}
+                      </button>
+                    )
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <span className="min-w-20 text-center text-[11px] font-semibold text-slate-500">
+                  Page {currentPage + 1} of {totalPages}
+                </span>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      transitionToPage(
+                        currentPage - 1
+                      )
+                    }
+                    disabled={
+                      currentPage === 0
+                    }
+                    className="!bg-navy-950 !text-white disabled:!bg-navy-950 disabled:!text-white disabled:opacity-40"
+                  >
+                    Previous
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      transitionToPage(
+                        currentPage + 1
+                      )
+                    }
+                    disabled={
+                      currentPage >=
+                      totalPages - 1
+                    }
+                    className="!bg-navy-950 !text-white disabled:!bg-navy-950 disabled:!text-white disabled:opacity-40"
+                  >
+                    Next
+                  </Button>
+                </div>
               </div>
             </div>
           </Card>
