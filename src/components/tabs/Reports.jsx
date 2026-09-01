@@ -83,8 +83,8 @@ import {
 const DEFAULT_PAGE_SIZE =
   25;
 
-const USERS_COLLECTION =
-  "users";
+const ORGANIZATION_MEMBERS_COLLECTION =
+  "organizationMembers";
 
 const ORGANIZATIONS_COLLECTION =
   "organizations";
@@ -163,8 +163,12 @@ const PERIOD_OPTIONS = [
 
 const SORT_OPTIONS = [
   {
+    value: "organizationName",
+    label: "Branch",
+  },
+  {
     value: "operator",
-    label: "Operator",
+    label: "Enterprise",
   },
   {
     value: "region",
@@ -997,8 +1001,7 @@ const belongsToOrganizationHierarchy = (
 
   const organizationId =
     getOrganizationId(
-      organization
-    );
+      organization);
 
   const ancestorIds =
     Array.isArray(
@@ -1600,6 +1603,77 @@ const getWorkflowEventUserName = (
   );
 };
 
+/*
+ * The report remains owned by the organization that originally submitted it.
+ * Later Region/Enterprise approvals must not replace the Branch submitter in
+ * the Reports table or report details.
+ */
+const getOriginalSubmitter = (
+  report
+) => {
+  const submissionEvent =
+    getWorkflowHistory(
+      report
+    ).find(
+      (event) => {
+        const action =
+          normalizeStatus(
+            getWorkflowEventAction(
+              event
+            )
+          );
+
+        const role =
+          normalizeStatus(
+            getWorkflowEventRole(
+              event,
+              null
+            )
+          );
+
+        return (
+          (
+            action ===
+              "submitted" ||
+            action ===
+              "submit" ||
+            action ===
+              "submitted_report"
+          ) &&
+          role !==
+            "system"
+        );
+      }
+    );
+
+  return {
+    name:
+      getWorkflowEventUserName(
+        submissionEvent,
+        null
+      ) ||
+      report?.submittedByName ||
+      report?.submittedByUserName ||
+      "",
+
+    role:
+      getWorkflowEventRole(
+        submissionEvent,
+        null
+      ) ||
+      report?.submittedByRole ||
+      report?.submitterRole ||
+      "",
+
+    email:
+      submissionEvent?.userEmail ||
+      submissionEvent?.actorEmail ||
+      submissionEvent?.submittedByEmail ||
+      report?.submittedByEmail ||
+      "",
+  };
+};
+
 const buildReportTimeline = (
   report
 ) => {
@@ -1997,8 +2071,7 @@ const isReportSubmittedLate = (
     );
 
   return Boolean(
-    submittedAt &&
-    deadlineAt &&
+    submittedAt &&deadlineAt &&
     submittedAt >
       deadlineAt
   );
@@ -2996,9 +3069,7 @@ const SubmissionViewer = ({
               <div className="p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                   Submission timing
-                </p>
-
-                <p
+                </p><p
                   className={`mt-2 text-sm font-semibold ${
                     submissionTiming.isLate
                       ? "text-amber-700"
@@ -3393,7 +3464,7 @@ const SubmissionViewer = ({
  * hierarchy already permitted for the signed-in organization.
  *
  * Scope:
- * - Ministry: all organizations and report submissions
+ * - Ministry: organizations and reports in the Ministry sector
  * - Enterprise: enterprise + descendants
  * - Region: region + descendants
  * - Branch: branch only
@@ -3538,15 +3609,34 @@ const getScopedOrganizationReferences = (
     organizationLevel ===
       "ministry"
   ) {
-    /*
-     * Ministry is the top-level reporting view. Load the full organization
-     * directory rather than relying on denormalized sector snapshots, because
-     * older records may predate those fields.
-     */
+    const sector =
+      String(
+        organization?.sector ||
+          ""
+      ).trim();
+
+    if (!sector) {
+      throw new Error(
+        "The Ministry organization is missing its sector."
+      );
+    }
+
     return [
-      collection(
+      doc(
         db,
-        ORGANIZATIONS_COLLECTION
+        ORGANIZATIONS_COLLECTION,
+        organizationId
+      ),
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "sector",
+          "==",
+          sector
+        )
       ),
     ];
   }
@@ -3555,7 +3645,7 @@ const getScopedOrganizationReferences = (
     organizationLevel ===
     "enterprise"
   ) {
-    const references = [
+    return [
       doc(
         db,
         ORGANIZATIONS_COLLECTION,
@@ -3573,29 +3663,6 @@ const getScopedOrganizationReferences = (
         )
       ),
     ];
-
-    /*
-     * companyId is shared by an enterprise and all of its children.
-     * Keep this compatibility query so older Region/Branch organization
-     * documents still roll up even if rootEnterpriseId was not populated yet.
-     */
-    if (organization.companyId) {
-      references.push(
-        query(
-          collection(
-            db,
-            ORGANIZATIONS_COLLECTION
-          ),
-          where(
-            "companyId",
-            "==",
-            organization.companyId
-          )
-        )
-      );
-    }
-
-    return references;
   }
 
   if (
@@ -3608,10 +3675,6 @@ const getScopedOrganizationReferences = (
         ORGANIZATIONS_COLLECTION,
         organizationId
       ),
-
-      /*
-       * Current hierarchy records carry ancestorIds.
-       */
       query(
         collection(
           db,
@@ -3620,21 +3683,6 @@ const getScopedOrganizationReferences = (
         where(
           "ancestorIds",
           "array-contains",
-          organizationId
-        )
-      ),
-
-      /*
-       * parentId is a safe fallback for older direct Branch children.
-       */
-      query(
-        collection(
-          db,
-          ORGANIZATIONS_COLLECTION
-        ),
-        where(
-          "parentId",
-          "==",
           organizationId
         )
       ),
@@ -3688,10 +3736,29 @@ const getScopedReportReferences = ({
     organizationLevel ===
       "ministry"
   ) {
+    const sector =
+      String(
+        organization?.sector ||
+          ""
+      ).trim();
+
+    if (!sector) {
+      throw new Error(
+        "The Ministry organization is missing its sector."
+      );
+    }
+
     return [
-      collection(
-        db,
-        REPORT_SUBMISSIONS_COLLECTION
+      query(
+        collection(
+          db,
+          REPORT_SUBMISSIONS_COLLECTION
+        ),
+        where(
+          "sector",
+          "==",
+          sector
+        )
       ),
     ];
   }
@@ -3722,88 +3789,20 @@ const getScopedReportReferences = ({
     );
   }
 
-  const references =
-    scopedOrganizationIds.map(
-      (scopedOrganizationId) =>
-        query(
-          collection(
-            db,
-            REPORT_SUBMISSIONS_COLLECTION
-          ),
-          where(
-            "organizationId",
-            "==",
-            scopedOrganizationId
-          )
-        )
-    );
-
-  if (
-    organizationLevel ===
-    "enterprise"
-  ) {
-    /*
-     * Newer descendant submissions carry rootEnterpriseId.
-     */
-    references.push(
+  return scopedOrganizationIds.map(
+    (scopedOrganizationId) =>
       query(
         collection(
           db,
           REPORT_SUBMISSIONS_COLLECTION
         ),
         where(
-          "rootEnterpriseId",
+          "organizationId",
           "==",
-          organizationId
+          scopedOrganizationId
         )
       )
-    );
-
-    /*
-     * Older Shell/GOL-style submissions may predate hierarchy snapshots but
-     * still carry the stable companyId. companyId is safe at Enterprise level
-     * because it represents only that company's hierarchy.
-     */
-    if (organization.companyId) {
-      references.push(
-        query(
-          collection(
-            db,
-            REPORT_SUBMISSIONS_COLLECTION
-          ),
-          where(
-            "companyId",
-            "==",
-            organization.companyId
-          )
-        )
-      );
-    }
-  }
-
-  if (
-    organizationLevel ===
-    "region"
-  ) {
-    /*
-     * Newer Branch submissions snapshot the Region in ancestorIds.
-     */
-    references.push(
-      query(
-        collection(
-          db,
-          REPORT_SUBMISSIONS_COLLECTION
-        ),
-        where(
-          "ancestorIds",
-          "array-contains",
-          organizationId
-        )
-      )
-    );
-  }
-
-  return references;
+  );
 };
 
 /*
@@ -3997,8 +3996,7 @@ const Reports = ({
             setLoadedSources(
               (current) => ({
                 ...current,
-                user: true,
-              })
+                user: true,})
             );
 
             setLoadError(
@@ -4012,7 +4010,7 @@ const Reports = ({
             onSnapshot(
               doc(
                 db,
-                USERS_COLLECTION,
+                ORGANIZATION_MEMBERS_COLLECTION,
                 firebaseUser.uid
               ),
               (snapshot) => {
@@ -4540,43 +4538,12 @@ const Reports = ({
           currentOrganization
         );
 
-      const currentIsEnterprise =
-        isEnterpriseOrganization(
-          currentOrganization
-        );
-
-      const currentCompanyId =
-        normalizeText(
-          currentOrganization.companyId ||
-            currentUserProfile?.companyId
-        );
-
       return organizations.filter(
-        (organization) => {
-          if (
-            belongsToOrganizationHierarchy(
-              organization,
-              currentOrganizationId
-            )
-          ) {
-            return true;
-          }
-
-          /*
-           * This compatibility fallback supports older enterprise records
-           * while ancestorIds is being backfilled.
-           */
-          return (
-            currentIsEnterprise &&
-            Boolean(
-              currentCompanyId
-            ) &&
-            normalizeText(
-              organization.companyId
-            ) ===
-              currentCompanyId
-          );
-        }
+        (organization) =>
+          belongsToOrganizationHierarchy(
+            organization,
+            currentOrganizationId
+          )
       );
     }, [
       currentOrganization,
@@ -4593,6 +4560,71 @@ const Reports = ({
         )
       );
     }, [visibleOrganizations]);
+
+  /*
+   * Reporting data rolls up from the lowest organization in each hierarchy.
+   * Once an Enterprise has Regions/Branches, its old test submissions no longer
+   * contribute. The same rule applies to a Region once it has Branches.
+   */
+  const operationalOrganizationIds =
+    useMemo(() => {
+      return new Set(
+        visibleOrganizations
+          .filter(
+            (organization) => {
+              const organizationId =
+                getOrganizationId(
+                  organization
+                );
+
+              if (!organizationId) {
+                return false;
+              }
+
+              const hasChild =
+                visibleOrganizations.some(
+                  (candidate) => {
+                    const candidateId =
+                      getOrganizationId(
+                        candidate
+                      );
+
+                    if (
+                      !candidateId ||
+                      candidateId ===
+                        organizationId
+                    ) {
+                      return false;
+                    }
+
+                    const ancestorIds =
+                      Array.isArray(
+                        candidate?.ancestorIds
+                      )
+                        ? candidate.ancestorIds
+                        : [];
+
+                    return (
+                      candidate?.parentId ===
+                        organizationId ||
+                      ancestorIds.includes(
+                        organizationId
+                      )
+                    );
+                  }
+                );
+
+              return !hasChild;
+            }
+          )
+          .map(
+            getOrganizationId
+          )
+          .filter(Boolean)
+      );
+    }, [
+      visibleOrganizations,
+    ]);
 
   const priceMap =
     useMemo(() => {
@@ -4634,6 +4666,9 @@ const Reports = ({
         .filter(
           (report) =>
             visibleOrganizationIds.has(
+              report.organizationId
+            ) &&
+            operationalOrganizationIds.has(
               report.organizationId
             )
         )
@@ -4728,15 +4763,16 @@ const Reports = ({
                 nationalVolume: 0,
               });
 
+            const originalSubmitter =
+              getOriginalSubmitter(
+                report
+              );
+
             const submittedByName =
-              report.submittedByName ||
-              report.submittedByUserName ||
-              "";
+              originalSubmitter.name;
 
             const submittedByRole =
-              report.submittedByRole ||
-              report.submitterRole ||
-              "";
+              originalSubmitter.role;
 
             const enrichedReport = {
               ...report,
@@ -4796,8 +4832,7 @@ const Reports = ({
               submittedByRole,
 
               submittedByEmail:
-                report.submittedByEmail ||
-                "",
+                originalSubmitter.email,
 
               currentStageRole:
                 getCurrentStageRole(
@@ -4858,6 +4893,7 @@ const Reports = ({
     }, [
       organizationMap,
       priceMap,
+      operationalOrganizationIds,
       reportSubmissions,
       visibleOrganizationIds,
     ]);
@@ -4997,8 +5033,7 @@ const Reports = ({
 
   const statusOptions =
     useMemo(() => {
-      return [
-        ...new Set(
+      return [...new Set(
           submittedReports
             .map(
               (report) =>
@@ -5533,13 +5568,13 @@ const Reports = ({
       if (
         isMinistryUser
       ) {
-        return "Showing submitted reports from all operators and child organisations.";
+        return "Showing submitted reports from reporting organizations across operators in this Ministry sector.";
       }
 
       if (
         currentOrganization
       ) {
-        return `Showing submitted reports for ${currentOrganization.name || "your organisation"} and every child organisation below it.`;
+        return `Showing submitted reports from reporting organizations within ${currentOrganization.name || "your organisation"} and its hierarchy.`;
       }
 
       return "";
@@ -5671,8 +5706,8 @@ const Reports = ({
 
       const rows = [
         [
-          "Operator",
-          "Organisation",
+          "Branch",
+          "Enterprise",
           "Region",
           "Report Type",
           "Status",
@@ -5686,8 +5721,8 @@ const Reports = ({
         ],
         ...filteredReports.map(
           (report) => [
-            report.operator,
             report.organizationName,
+            report.operator,
             report.region,
             report.reportType,
             report.status,
@@ -5855,7 +5890,7 @@ const Reports = ({
               value
             )
           }
-          placeholder="Search reports, operators or branches…"
+          placeholder="Search reports, branches or enterprises…"
         />
 
         <FilterSelect
@@ -5997,8 +6032,7 @@ const Reports = ({
           onClick={
             toggleSortDirection
           }
-        >
-          <ArrowUpDown className="h-4 w-4" />
+        ><ArrowUpDown className="h-4 w-4" />
 
           {sortDirection ===
           "asc"
@@ -6442,8 +6476,8 @@ const Reports = ({
               >
                 {[
                   {
-                    label: "Operator",
-                    className: "w-[250px]",
+                    label: "Branch",
+                    className: "w-[290px]",
                   },
                   {
                     label: "Region",
@@ -6504,16 +6538,30 @@ const Reports = ({
                         <div className="flex items-center gap-3">
                           <OperatorLogo
                             name={
-                              report.operator
+                              report.organizationName
                             }
                             logoUrl={
-                              report.operatorLogo
+                              report.organizationLogo
                             }
                           />
 
-                          <span className="truncate font-semibold text-slate-900">
-                            {report.operator}
-                          </span>
+                          <div className="min-w-0">
+                            <p className="truncate font-semibold text-slate-900">
+                              {report.organizationName}
+                            </p>
+
+                            {report.operator &&
+                              normalizeText(
+                                report.operator
+                              ) !==
+                                normalizeText(
+                                  report.organizationName
+                                ) && (
+                              <p className="mt-0.5 truncate text-[11px] font-medium text-slate-400">
+                                {report.operator}
+                              </p>
+                            )}
+                          </div>
                         </div>
                       </td>
 
