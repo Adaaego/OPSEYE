@@ -311,18 +311,6 @@ const getWorkflowStageLabel = (report) => {
   );
 };
 
-const isReadOnlyReport = (status) => {
-  return [
-    "submitted",
-    "submitted_late",
-    "under_review",
-    "approved",
-    "rejected",
-  ].includes(
-    normalizeStatus(status)
-  );
-};
-
 const getOrganizationLevel = (
   organization
 ) => {
@@ -696,6 +684,9 @@ const OperatorsReports = ({
   const [currentUserRole, setCurrentUserRole] =
     useState("");
 
+  const [currentUserProfile, setCurrentUserProfile] =
+    useState(null);
+
   const today = getDateKey(new Date());
 
   /*
@@ -1028,6 +1019,7 @@ const OperatorsReports = ({
 
           if (!currentUser?.uid) {
             setCurrentUserRole("");
+            setCurrentUserProfile(null);
             setReports([]);
             setReportsLoading(false);
             setReportsError(
@@ -1043,15 +1035,16 @@ const OperatorsReports = ({
             onSnapshot(
               doc(
                 db,
-                "users",
+                "organizationMembers",
                 currentUser.uid
               ),
               (userSnapshot) => {
                 if (!userSnapshot.exists()) {
+                  setCurrentUserProfile(null);
                   setReports([]);
                   setReportsLoading(false);
                   setReportsError(
-                    "Your user profile could not be found."
+                    "Your organization membership could not be found."
                   );
                   return;
                 }
@@ -1064,6 +1057,10 @@ const OperatorsReports = ({
 
                 activeUserRecord =
                   userRecord;
+
+                setCurrentUserProfile(
+                  userRecord
+                );
 
                 setCurrentUserRole(
                   normalizeValue(
@@ -1205,15 +1202,16 @@ const OperatorsReports = ({
               },
               (userError) => {
                 console.error(
-                  "Unable to load user profile:",
+                  "Unable to load organization membership:",
                   userError
                 );
 
+                setCurrentUserProfile(null);
                 setReports([]);
                 setReportsLoading(false);
                 setReportsError(
                   userError.message ||
-                    "Your user profile could not be loaded."
+                    "Your organization membership could not be loaded."
                 );
               }
             );
@@ -1293,18 +1291,22 @@ const OperatorsReports = ({
           ) === today
       ).length;
 
+    /*
+     * Parent levels may see a report before it reaches their own workflow stage.
+     * Count only reviews that the signed-in role can act on now.
+     */
     const pendingReview =
-      reports.filter((report) =>
-        [
-          "submitted",
-          "submitted_late",
-          "under_review",
-        ].includes(
+      reports.filter((report) => {
+        return (
           normalizeStatus(
             report.status
-          )
-        )
-      ).length;
+          ) === "under_review" &&
+          normalizeValue(
+            report.currentStageRole ||
+              report.assignedRole
+          ) === currentUserRole
+        );
+      }).length;
 
     const overdueReports =
       reports.filter(
@@ -1352,7 +1354,11 @@ const OperatorsReports = ({
           "bg-red-50 ring-red-200",
       },
     ];
-  }, [reports, today]);
+  }, [
+    currentUserRole,
+    reports,
+    today,
+  ]);
 
   const visibleReports = useMemo(() => {
     const normalizedSearch =
@@ -1737,10 +1743,48 @@ const OperatorsReports = ({
                           reportStatus ===
                           "overdue";
 
-                        const previewOnly =
-                          isReadOnlyReport(
-                            report.status
+                        const reportStageRole =
+                          normalizeValue(
+                            report.currentStageRole ||
+                              report.assignedRole
                           );
+
+                        const hasReachedMinistry =
+                          reportStageRole ===
+                          "ministry";
+
+                        const isFinalReport =
+                          [
+                            "submitted",
+                            "submitted_late",
+                            "approved",
+                            "rejected",
+                          ].includes(
+                            reportStatus
+                          ) ||
+                          hasReachedMinistry;
+
+                        /*
+                         * Visibility follows hierarchy, but actions follow the
+                         * current workflow stage. This prevents an Enterprise Admin
+                         * from approving while a report is still waiting for Region.
+                         */
+                        const canCurrentUserAct =
+                          Boolean(
+                            currentUserRole
+                          ) &&
+                          currentUserRole ===
+                            reportStageRole &&
+                          !isFinalReport;
+
+                        const isReviewStage =
+                          canCurrentUserAct &&
+                          Number(
+                            report.currentStageIndex
+                          ) > 0;
+
+                        const previewOnly =
+                          !canCurrentUserAct;
 
                         return (
                           <tr
@@ -1842,7 +1886,9 @@ const OperatorsReports = ({
 
                                 {previewOnly
                                   ? "Preview Report"
-                                  : "Open Report"}
+                                  : isReviewStage
+                                    ? "Review Report"
+                                    : "Open Report"}
                               </Button>
                             </td>
                           </tr>
@@ -1903,7 +1949,7 @@ const OperatorsReports = ({
                 <Button
                   size="sm"
                   disabled
-                  className="bg-navy-950! text-white! disabled:bg-navy-950! disabled:text-white! disabled:opacity-50"
+                  className="!bg-navy-950 !text-white disabled:!bg-navy-950 disabled:!text-white disabled:opacity-50"
                 >
                   Next
                 </Button>
@@ -1916,6 +1962,9 @@ const OperatorsReports = ({
       {openReport && (
         <ReportViewer
           report={openReport}
+          currentUserProfile={
+            currentUserProfile
+          }
           onClose={() =>
             setOpenReport(null)
           }

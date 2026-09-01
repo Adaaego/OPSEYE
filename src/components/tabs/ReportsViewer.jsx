@@ -63,6 +63,22 @@ const normalizeRole = (value) => {
     .toLowerCase();
 };
 
+const formatRoleLabel = (value) => {
+  const role = String(value ?? "")
+    .trim()
+    .replace(/[_-]+/g, " ");
+
+  if (!role) {
+    return "Next stage";
+  }
+
+  return role.replace(
+    /\b\w/g,
+    (character) =>
+      character.toUpperCase()
+  );
+};
+
 const formatFieldType = (type) => {
   return String(type || "text")
     .replace(/_/g, " ")
@@ -96,6 +112,7 @@ const formatAuditTimestamp = (value) => {
 
 const ReportViewer = ({
   report,
+  currentUserProfile = null,
   onClose = () => {},
   onUpdate = () => {},
 }) => {
@@ -157,6 +174,12 @@ const ReportViewer = ({
       report?.status
     );
 
+  const currentUserRole =
+    normalizeRole(
+      currentUserProfile?.role ||
+        currentUserProfile?.userRole
+    );
+
   const hasReachedMinistry =
     currentStageRole === "ministry";
 
@@ -166,13 +189,42 @@ const ReportViewer = ({
     reportStatus === "submitted_late" ||
     hasReachedMinistry;
 
-  const isReadOnly = [
-    "submitted",
-    "submitted_late",
-    "under_review",
-    "approved",
-    "rejected",
-  ].includes(reportStatus);
+  const isInitialStage =
+    currentStageIndex === 0;
+
+  /*
+   * Hierarchy determines which reports a user may see. Workflow ownership is
+   * stricter: only the role at the report's current stage may advance it.
+   * A higher-level administrator can therefore preview an earlier-stage report
+   * without being able to skip the required approval in between.
+   */
+  const isCurrentStageOwner =
+    Boolean(currentUserRole) &&
+    currentUserRole ===
+      currentStageRole &&
+    currentStageRole !==
+      "ministry" &&
+    !isCompleted &&
+    reportStatus !== "rejected";
+
+  const canSubmitReport =
+    isCurrentStageOwner &&
+    isInitialStage;
+
+  const canApproveReport =
+    isCurrentStageOwner &&
+    !isInitialStage;
+
+  const canAdvanceWorkflow =
+    canSubmitReport ||
+    canApproveReport;
+
+  /*
+   * Only the original submitter edits report answers. Reviewers inspect the
+   * submitted responses and approve them without changing the submitted data.
+   */
+  const fieldsAreReadOnly =
+    !canSubmitReport;
 
   const activeStageIndex =
     Math.min(
@@ -186,10 +238,38 @@ const ReportViewer = ({
   const displayStatus =
     isCompleted
       ? "Submitted to Ministry"
-      : String(
-          report?.status ||
-            "Pending Submission"
-        ).replace(/_/g, " ");
+      : reportStatus ===
+          "under_review"
+        ? `Awaiting ${formatRoleLabel(
+            currentStageRole
+          )} approval`
+        : String(
+            report?.status ||
+              "Pending Submission"
+          ).replace(/_/g, " ");
+
+  const nextStage =
+    workflowStages[
+      currentStageIndex + 1
+    ] || null;
+
+  const nextStageRole =
+    normalizeRole(
+      nextStage?.role
+    );
+
+  const nextStageLabel =
+    nextStageRole === "ministry"
+      ? "Ministry"
+      : formatRoleLabel(
+          nextStage?.label ||
+            nextStage?.role
+        );
+
+  const primaryActionLabel =
+    canApproveReport
+      ? `Approve & Send to ${nextStageLabel}`
+      : "Submit Report";
 
   const operatorCompany =
     useMemo(
@@ -375,7 +455,24 @@ const ReportViewer = ({
   };
 
   const handleSubmit = async () => {
-    if (!validateFields()) {
+    if (!canAdvanceWorkflow) {
+      setSubmitError(
+        `This report is currently awaiting ${formatRoleLabel(
+          currentStageRole
+        )}.`
+      );
+
+      return;
+    }
+
+    /*
+     * Only the initial submitter completes fields. Review stages reuse the saved
+     * values and therefore do not re-run input validation against an editable UI.
+     */
+    if (
+      canSubmitReport &&
+      !validateFields()
+    ) {
       return;
     }
 
@@ -390,23 +487,34 @@ const ReportViewer = ({
           currentUser:
             auth.currentUser,
 
+          /*
+           * Pass the signed-in member's real role and identity. Never substitute
+           * report.assignedRole here: a parent administrator may be able to view
+           * the report before it reaches their workflow stage.
+           */
           userProfile: {
+            ...currentUserProfile,
+
             role:
-              report?.assignedRole,
+              currentUserRole,
 
             fullName:
-              report?.assignedUserName ||
+              currentUserProfile?.fullName ||
+              currentUserProfile?.displayName ||
+              auth.currentUser?.displayName ||
               "Unknown user",
 
             email:
-              report?.assignedUserEmail ||
+              currentUserProfile?.email ||
               auth.currentUser?.email ||
               "",
 
             organizationId:
-              report?.organizationId,
+              currentUserProfile?.organizationId ||
+              "",
 
             country:
+              currentUserProfile?.country ||
               report?.country,
           },
         });
@@ -415,13 +523,19 @@ const ReportViewer = ({
       onClose();
     } catch (error) {
       console.error(
-        "Unable to submit report:",
+        canApproveReport
+          ? "Unable to approve report:"
+          : "Unable to submit report:",
         error
       );
 
       setSubmitError(
         error.message ||
-          "The report could not be submitted."
+          (
+            canApproveReport
+              ? "The report could not be approved."
+              : "The report could not be submitted."
+          )
       );
     } finally {
       setSubmitting(false);
@@ -804,11 +918,28 @@ const ReportViewer = ({
               </div>
             )}
 
-            {isReadOnly &&
+            {canApproveReport && (
+              <div className="mt-4 flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+
+                <span>
+                  This report is awaiting your approval. Review the submitted responses below, then send it to {nextStageLabel}.
+                </span>
+              </div>
+            )}
+
+            {!canApproveReport &&
+              reportStatus ===
+                "under_review" &&
               !isCompleted && (
-                <div className="mt-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
-                  <Lock className="h-4 w-4 shrink-0" />
-                  This report is being reviewed and cannot be edited.
+                <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                  <Lock className="mt-0.5 h-4 w-4 shrink-0" />
+
+                  <span>
+                    This report is awaiting {formatRoleLabel(
+                      currentStageRole
+                    )} approval. You can preview it, but only the current workflow stage may approve it.
+                  </span>
                 </div>
               )}
           </section>
@@ -864,7 +995,7 @@ const ReportViewer = ({
               </p>
 
               <h3 className="mt-1 text-base font-bold text-navy-950">
-                {isReadOnly
+                {fieldsAreReadOnly
                   ? "Submitted responses"
                   : "Complete the report"}
               </h3>
@@ -914,7 +1045,7 @@ const ReportViewer = ({
                       </div>
                     </div>
 
-                    {isReadOnly ? (
+                    {fieldsAreReadOnly ? (
                       <div className="min-h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-semibold text-slate-800">
                         {report?.fieldValues?.[
                           field.id
@@ -1074,7 +1205,7 @@ const ReportViewer = ({
         )}
 
         <footer className="flex shrink-0 items-center justify-end gap-3 border-t border-slate-200 bg-white px-5 py-4">
-          {isReadOnly ? (
+          {!canAdvanceWorkflow ? (
             <Button
               onClick={onClose}
               className="!bg-navy-950 !text-white hover:!bg-navy-900"
@@ -1083,17 +1214,19 @@ const ReportViewer = ({
             </Button>
           ) : (
             <>
-              <Button
-                variant="outline"
-                onClick={
-                  handleSaveDraft
-                }
-                disabled={submitting}
-                className="!border-slate-300 !bg-white !text-navy-950 hover:!bg-slate-50"
-              >
-                <Save className="h-4 w-4" />
-                Save Draft
-              </Button>
+              {canSubmitReport && (
+                <Button
+                  variant="outline"
+                  onClick={
+                    handleSaveDraft
+                  }
+                  disabled={submitting}
+                  className="!border-slate-300 !bg-white !text-navy-950 hover:!bg-slate-50"
+                >
+                  <Save className="h-4 w-4" />
+                  Save Draft
+                </Button>
+              )}
 
               <Button
                 onClick={
@@ -1107,8 +1240,10 @@ const ReportViewer = ({
                 <Send className="h-4 w-4" />
 
                 {submitting
-                  ? "Submitting..."
-                  : "Submit Report"}
+                  ? canApproveReport
+                    ? "Approving..."
+                    : "Submitting..."
+                  : primaryActionLabel}
               </Button>
             </>
           )}
