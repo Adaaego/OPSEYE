@@ -449,23 +449,10 @@ const isMinistryOrganization = (
 const isEnterpriseOrganization = (
   organization
 ) => {
-  const organizationId =
-    getOrganizationId(
-      organization
-    );
-
   return (
     getOrganizationLevel(
       organization
-    ) === "enterprise" ||
-    (
-      !organization?.parentId &&
-      (
-        !organization?.rootEnterpriseId ||
-        organization.rootEnterpriseId ===
-          organizationId
-      )
-    )
+    ) === "enterprise"
   );
 };
 
@@ -500,6 +487,44 @@ const belongsToOrganizationHierarchy = (
       parentOrganizationId
     )
   );
+};
+
+const getAncestorOrganizationByLevel = (
+  organization,
+  targetLevel,
+  organizationMap
+) => {
+  let current = organization;
+  const visitedIds = new Set();
+
+  while (current) {
+    if (
+      getOrganizationLevel(
+        current
+      ) === targetLevel
+    ) {
+      return current;
+    }
+
+    const parentId =
+      current.parentId ||
+      current.parentOrganizationId ||
+      "";
+
+    if (
+      !parentId ||
+      visitedIds.has(parentId)
+    ) {
+      break;
+    }
+
+    visitedIds.add(parentId);
+    current =
+      organizationMap.get(parentId) ||
+      null;
+  }
+
+  return null;
 };
 
 const getEnterpriseIdForOrganization = (
@@ -585,79 +610,28 @@ const getOrganizationRegionId = (
     );
   }
 
-  let current =
-    organization;
-
-  const visitedIds =
-    new Set();
-
-  while (
-    current?.parentId &&
-    !visitedIds.has(
-      current.parentId
-    )
+  /*
+   * Enterprise staff are head-office workforce and should not be assigned to a
+   * geographic Region unless the Enterprise record explicitly carries one.
+   */
+  if (
+    getOrganizationLevel(
+      organization
+    ) === "enterprise"
   ) {
-    visitedIds.add(
-      current.parentId
-    );
-
-    const parent =
-      organizationMap.get(
-        current.parentId
-      );
-
-    if (!parent) {
-      break;
-    }
-
-    if (parent.regionId) {
-      return normalizeRegionId(
-        parent.regionId
-      );
-    }
-
-    current =
-      parent;
+    return "";
   }
 
-  const enterpriseId =
-    getEnterpriseIdForOrganization(
+  const regionOrganization =
+    getAncestorOrganizationByLevel(
       organization,
+      "region",
       organizationMap
     );
 
-  const enterprise =
-    organizationMap.get(
-      enterpriseId
-    );
-
-  /*
-   * Firestore remains the primary source of truth. The configured company
-   * record is only a compatibility fallback for organisations that have not
-   * yet had regionId backfilled.
-   */
-  const organizationCompany =
-    getCompanyById(
-      organization.companyId
-    ) ||
-    getCompanyByNormalizedName(
-      organization.normalizedName ||
-        organization.name
-    );
-
-  const enterpriseCompany =
-    getCompanyById(
-      enterprise?.companyId
-    ) ||
-    getCompanyByNormalizedName(
-      enterprise?.normalizedName ||
-        enterprise?.name
-    );
-
   return normalizeRegionId(
-    enterprise?.regionId ||
-      organizationCompany?.regionId ||
-      enterpriseCompany?.regionId
+    regionOrganization?.regionId ||
+      ""
   );
 };
 
@@ -721,54 +695,24 @@ const getCompanyScopeKey = (
  */
 const resolveWorkforceRecordOrganization = (
   record,
-  organizationMap,
-  organizations
+  organizationMap
 ) => {
-  const candidateIds = [
-    record?.organizationId,
-    record?.branchId,
-    record?.enterpriseId,
-    record?.rootEnterpriseId,
-  ].filter(Boolean);
+  const organizationId =
+    record?.organizationId ||
+    "";
 
-  for (
-    const candidateId of
-    candidateIds
-  ) {
-    const organization =
-      organizationMap.get(
-        candidateId
-      );
-
-    if (organization) {
-      return organization;
-    }
+  if (!organizationId) {
+    return null;
   }
 
-  const companyId =
-    normalizeText(
-      record?.companyId
-    );
-
-  if (companyId) {
-    const enterpriseMatch =
-      organizations.find(
-        (organization) =>
-          isEnterpriseOrganization(
-            organization
-          ) &&
-          normalizeText(
-            organization.companyId
-          ) === companyId
-      );
-
-    if (enterpriseMatch) {
-      return enterpriseMatch;
-    }
-  }
-
-  return null;
+  return (
+    organizationMap.get(
+      organizationId
+    ) ||
+    null
+  );
 };
+
 
 /*
  * Vacancies are approved positions that are currently unfilled. Projected
@@ -997,8 +941,7 @@ const getRecordSnapshots = (
       toNumber(
         record.vacancies
       ),
-    projectedNeed:
-      toNumber(
+    projectedNeed:toNumber(
         record.projectedNeed
       ),
     shortage:
@@ -1997,8 +1940,7 @@ const RoleRankingList = ({
               onClick={() =>
                 changePage(
                   page - 1
-                )
-              }
+                )}
               disabled={
                 page === 0 ||
                 isPageTransitioning
@@ -2039,8 +1981,8 @@ const RoleRankingList = ({
 };
 
 /*
- * Opens from either role ranking and gives the Ministry a fast explanation of
- * where a role is concentrated or where its shortage is coming from.
+ * Opens from either role ranking and explains where a role is concentrated or
+ * where its shortage is coming from within the signed-in hierarchy.
  *
  * The drawer uses the same point-in-time workforce records as the Insights
  * cards and charts, so its totals remain aligned with the active date, company
@@ -2051,6 +1993,7 @@ const RoleDrilldownDrawer = ({
   role = null,
   mode = "headcount",
   records = [],
+  scopeLevel = "branch",
   onClose = () => {},
   onSelectRegion = () => {},
 }) => {
@@ -2144,7 +2087,10 @@ const RoleDrilldownDrawer = ({
               name:
                 regionId ===
                 "unassigned"
-                  ? "Region not assigned"
+                  ? scopeLevel ===
+                      "enterprise"
+                    ? "Enterprise Admin"
+                    : "Region not assigned"
                   : getRegionName(
                       regionId
                     ),
@@ -2230,6 +2176,7 @@ const RoleDrilldownDrawer = ({
     }, [
       mode,
       roleRecords,
+      scopeLevel,
     ]);
 
   /*
@@ -2330,6 +2277,70 @@ const RoleDrilldownDrawer = ({
               : second.headcount -
                 first.headcount
         );
+    }, [
+      mode,
+      roleRecords,
+    ]);
+
+  const organizationBreakdown =
+    useMemo(() => {
+      const groups = new Map();
+
+      roleRecords.forEach(
+        (record) => {
+          const organizationId =
+            record.organizationId ||
+            "unassigned";
+
+          const current =
+            groups.get(
+              organizationId
+            ) || {
+              organizationId,
+              name:
+                record.organizationName ||
+                "Unnamed organisation",
+              logo:
+                getOrganizationLogo(
+                  record.organization
+                ) ||
+                record.operatorLogo ||
+                "",
+              level:
+                record.organizationLevel ||
+                getOrganizationLevel(
+                  record.organization
+                ),
+              headcount: 0,
+              shortage: 0,
+            };
+
+          current.headcount +=
+            toNumber(
+              record.totalEmployees
+            );
+          current.shortage +=
+            toNumber(
+              record.shortage
+            );
+
+          groups.set(
+            organizationId,
+            current
+          );
+        }
+      );
+
+      return Array.from(
+        groups.values()
+      ).sort(
+        (first, second) =>
+          mode === "shortage"
+            ? second.shortage -
+              first.shortage
+            : second.headcount -
+              first.headcount
+      );
     }, [
       mode,
       roleRecords,
@@ -2556,6 +2567,12 @@ const RoleDrilldownDrawer = ({
             ))}
           </div>
 
+          {[
+            "ministry",
+            "enterprise",
+          ].includes(
+            scopeLevel
+          ) && (
           <section className="mt-7">
             <div className="mb-4 flex items-end justify-between gap-4">
               <div>
@@ -2697,7 +2714,10 @@ const RoleDrilldownDrawer = ({
               <EmptyState message="No regional workforce data is available for this role" />
             )}
           </section>
+          )}
 
+          {scopeLevel ===
+          "ministry" ? (
           <section className="mt-7">
             <div className="mb-4">
               <h3 className="text-base font-semibold text-slate-900">
@@ -2775,6 +2795,90 @@ const RoleDrilldownDrawer = ({
               <EmptyState message="No company workforce data is available for this role" />
             )}
           </section>
+          ) : scopeLevel !==
+          "branch" ? (
+          <section className="mt-7">
+            <div className="mb-4">
+              <h3 className="text-base font-semibold text-slate-900">
+                Organization breakdown
+              </h3>
+
+              <p className="mt-1 text-xs text-slate-500">
+                Compare the direct organizations contributing to this role's headcount and workforce gap.
+              </p>
+            </div>
+
+            {organizationBreakdown.length >
+            0 ? (
+              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                <div className="max-h-[360px] divide-y divide-slate-100 overflow-y-auto">
+                  {organizationBreakdown.map(
+                    (organization) => (
+                      <div
+                        key={
+                          organization.organizationId
+                        }
+                        className="grid grid-cols-[minmax(0,1fr)_88px_88px] items-center gap-3 px-4 py-3"
+                      >
+                        <div className="flex min-w-0 items-center gap-3">
+                          {organization.logo ? (
+                            <img
+                              src={organization.logo}
+                              alt={`${organization.name} logo`}
+                              className="h-9 w-9 shrink-0 rounded-md border border-slate-200 bg-white object-contain p-1"
+                            />
+                          ) : (
+                            <div
+                              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md"
+                              style={{
+                                backgroundColor:
+                                  PALE_BLUE,
+                                color: NAVY,
+                              }}
+                            >
+                              <Building2 className="h-4 w-4" />
+                            </div>
+                          )}
+
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-slate-900">
+                              {organization.name}
+                            </p>
+                            <p className="mt-0.5 text-[11px] text-slate-500">
+                              {organization.level ===
+                              "region"
+                                ? "Region Admin"
+                                : organization.level ===
+                                    "enterprise"
+                                  ? "Enterprise Admin"
+                                  : "Branch"}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="text-right">
+                          <p className="text-xs text-slate-400">Headcount</p>
+                          <p className="mt-0.5 text-sm font-semibold tabular-nums text-slate-900">
+                            {formatNumber(organization.headcount)}
+                          </p>
+                        </div>
+
+                        <div className="text-right">
+                          <p className="text-xs text-slate-400">Shortage</p>
+                          <p className={`mt-0.5 text-sm font-semibold tabular-nums ${organization.shortage > 0 ? "text-amber-700" : "text-slate-900"}`}>
+                            {formatNumber(organization.shortage)}
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  )}
+                </div>
+              </div>
+            ) : (
+              <EmptyState message="No organization workforce data is available for this role" />
+            )}
+          </section>
+          ) : null}
         </div>
       </aside>
     </div>,
@@ -2997,8 +3101,7 @@ const prepareGhanaGeography = (
           if (
             geometry?.type ===
             "Polygon"
-          ) {
-            return {
+          ) {return {
               ...feature,
               geometry: {
                 ...geometry,
@@ -3997,8 +4100,7 @@ const WorkforceRoleModal = ({
 
               <input
                 type="number"
-                value={
-                  expatriateEmployees
+                value={expatriateEmployees
                 }
                 readOnly
                 className="h-11 w-full rounded-lg border border-slate-200 bg-slate-100 px-3 text-sm font-semibold text-slate-700"
@@ -4355,21 +4457,40 @@ const getScopedOrganizationReferences = (
       organization
     );
 
-  /*
-   * Ministry is the top-level oversight view and may read all operator
-   * organizations. The Ministry organization itself is included and filtered
-   * out later where only operator organizations are required.
-   */
   if (
     organizationCategory ===
       "ministry" ||
     organizationLevel ===
       "ministry"
   ) {
+    const sector =
+      String(
+        organization?.sector ||
+          ""
+      ).trim();
+
+    if (!sector) {
+      throw new Error(
+        "The Ministry organization is missing its sector."
+      );
+    }
+
     return [
-      collection(
+      doc(
         db,
-        ORGANIZATIONS_COLLECTION
+        ORGANIZATIONS_COLLECTION,
+        organizationId
+      ),
+      query(
+        collection(
+          db,
+          ORGANIZATIONS_COLLECTION
+        ),
+        where(
+          "sector",
+          "==",
+          sector
+        )
       ),
     ];
   }
@@ -4378,7 +4499,7 @@ const getScopedOrganizationReferences = (
     organizationLevel ===
     "enterprise"
   ) {
-    const references = [
+    return [
       doc(
         db,
         ORGANIZATIONS_COLLECTION,
@@ -4396,29 +4517,6 @@ const getScopedOrganizationReferences = (
         )
       ),
     ];
-
-    /*
-     * companyId is shared by the Enterprise and its children. This keeps older
-     * Region/Branch organization documents visible when rootEnterpriseId was
-     * not populated yet.
-     */
-    if (organization.companyId) {
-      references.push(
-        query(
-          collection(
-            db,
-            ORGANIZATIONS_COLLECTION
-          ),
-          where(
-            "companyId",
-            "==",
-            organization.companyId
-          )
-        )
-      );
-    }
-
-    return references;
   }
 
   if (
@@ -4439,20 +4537,6 @@ const getScopedOrganizationReferences = (
         where(
           "ancestorIds",
           "array-contains",
-          organizationId
-        )
-      ),
-      /*
-       * Direct parentId is the compatibility fallback for older Branch records.
-       */
-      query(
-        collection(
-          db,
-          ORGANIZATIONS_COLLECTION
-        ),
-        where(
-          "parentId",
-          "==",
           organizationId
         )
       ),
@@ -4469,24 +4553,8 @@ const getScopedOrganizationReferences = (
 };
 
 const getScopedWorkforceReferences = (
-  organization,
   scopedOrganizations
 ) => {
-  const organizationId =
-    getOrganizationId(
-      organization
-    );
-
-  const organizationLevel =
-    getOrganizationLevel(
-      organization
-    );
-
-  const organizationCategory =
-    getOrganizationCategory(
-      organization
-    );
-
   const visibleOrganizationIds =
     scopedOrganizations
       .filter(
@@ -4501,103 +4569,26 @@ const getScopedWorkforceReferences = (
       .filter(Boolean);
 
   /*
-   * Ministry may inspect every operator workforce record.
+   * Workforce is additive: every direct organization record in the permitted
+   * hierarchy contributes to the parent total. Query those owners explicitly
+   * rather than downloading the full collection and filtering in the browser.
    */
-  if (
-    organizationCategory ===
-      "ministry" ||
-    organizationLevel ===
-      "ministry"
-  ) {
-    return [
-      collection(
-        db,
-        WORKFORCE_COLLECTION
-      ),
-    ];
-  }
-
-  /*
-   * Exact organizationId queries are the primary source. They preserve older
-   * records that predate rootEnterpriseId / ancestorIds snapshots on workforce.
-   */
-  const references =
-    chunkValues(
-      visibleOrganizationIds
-    ).map(
-      (organizationIdsChunk) =>
-        query(
-          collection(
-            db,
-            WORKFORCE_COLLECTION
-          ),
-          where(
-            "organizationId",
-            "in",
-            organizationIdsChunk
-          )
-        )
-    );
-
-  if (
-    organizationLevel ===
-    "enterprise"
-  ) {
-    /*
-     * Compatibility queries catch older records whose hierarchy metadata is
-     * present even when their organization link was stored differently.
-     */
-    references.push(
+  return chunkValues(
+    visibleOrganizationIds
+  ).map(
+    (organizationIdsChunk) =>
       query(
         collection(
           db,
           WORKFORCE_COLLECTION
         ),
         where(
-          "rootEnterpriseId",
-          "==",
-          organizationId
+          "organizationId",
+          "in",
+          organizationIdsChunk
         )
       )
-    );
-
-    if (organization.companyId) {
-      references.push(
-        query(
-          collection(
-            db,
-            WORKFORCE_COLLECTION
-          ),
-          where(
-            "companyId",
-            "==",
-            organization.companyId
-          )
-        )
-      );
-    }
-  }
-
-  if (
-    organizationLevel ===
-    "region"
-  ) {
-    references.push(
-      query(
-        collection(
-          db,
-          WORKFORCE_COLLECTION
-        ),
-        where(
-          "ancestorIds",
-          "array-contains",
-          organizationId
-        )
-      )
-    );
-  }
-
-  return references;
+  );
 };
 
 const Workforce = () => {
@@ -4996,9 +4987,7 @@ const Workforce = () => {
           const unsubscribeOrganizations =
             subscribeToScopedReferences({
               references:
-                organizationReferences,
-
-              onData:
+                organizationReferences,onData:
                 (
                   scopedOrganizations
                 ) => {
@@ -5015,9 +5004,8 @@ const Workforce = () => {
                   );
 
                   /*
-                   * Ministry workforce queries depend on the sector-scoped
-                   * organization IDs. Other hierarchy levels use their stored
-                   * rootEnterpriseId / ancestorIds metadata directly.
+                   * Workforce records are queried by the exact organization IDs
+                   * already resolved for the signed-in hierarchy.
                    */
                   unsubscribeWorkforce();
 
@@ -5026,7 +5014,6 @@ const Workforce = () => {
                   try {
                     workforceReferences =
                       getScopedWorkforceReferences(
-                        signedInOrganization,
                         scopedOrganizations
                       );
                   } catch (error) {
@@ -5241,6 +5228,13 @@ const Workforce = () => {
       currentOrganization
     );
 
+  const currentOrganizationLevel =
+    isMinistryUser
+      ? "ministry"
+      : getOrganizationLevel(
+          currentOrganization
+        );
+
   const currentUserRole =
     normalizeStatus(
       currentUserProfile?.role
@@ -5283,41 +5277,12 @@ const Workforce = () => {
           currentOrganization
         );
 
-      const currentUserIsEnterprise =
-        isEnterpriseOrganization(
-          currentOrganization
-        );
-
-      const currentCompanyId =
-        normalizeText(
-          currentOrganization.companyId
-        );
-
       return organizations.filter(
-        (organization) => {
-          if (
-            belongsToOrganizationHierarchy(
-              organization,
-              currentOrganizationId
-            )
-          ) {
-            return true;
-          }
-
-          /*
-           * companyId is only an Enterprise compatibility fallback. Region and
-           * Branch accounts must never receive sibling organizations.
-           */
-          return (
-            currentUserIsEnterprise &&
-            Boolean(
-              currentCompanyId
-            ) &&
-            normalizeText(
-              organization.companyId
-            ) === currentCompanyId
-          );
-        }
+        (organization) =>
+          belongsToOrganizationHierarchy(
+            organization,
+            currentOrganizationId
+          )
       );
     }, [
       currentOrganization,
@@ -5343,8 +5308,7 @@ const Workforce = () => {
             const organization =
               resolveWorkforceRecordOrganization(
                 record,
-                organizationMap,
-                organizations
+                organizationMap
               );
 
             if (
@@ -5403,6 +5367,25 @@ const Workforce = () => {
                 record.projectedNeed
               );
 
+            const organizationLevel =
+              getOrganizationLevel(
+                organization
+              );
+
+            const baseOrganizationName =
+              organization.name ||
+              "Unnamed organisation";
+
+            const organizationName =
+              [
+                "enterprise",
+                "region",
+              ].includes(
+                organizationLevel
+              )
+                ? `${baseOrganizationName} – Admin`
+                : baseOrganizationName;
+
             return {
               ...record,
               organizationId:
@@ -5410,9 +5393,8 @@ const Workforce = () => {
                   organization
                 ),
               organization,
-              organizationName:
-                organization.name ||
-                "Unnamed organisation",
+              organizationLevel,
+              organizationName,
               enterprise,
               enterpriseId,
               companyKey:
@@ -5471,7 +5453,6 @@ const Workforce = () => {
         .filter(Boolean);
     }, [
       organizationMap,
-      organizations,
       visibleOrganizationIds,
       workforceRecords,
     ]);
@@ -5914,6 +5895,165 @@ const Workforce = () => {
       );
     }, [pointInTimeRecords]);
 
+  const hierarchyComparisonData =
+    useMemo(() => {
+      if (isMinistryUser) {
+        return operatorChartData;
+      }
+
+      if (
+        ![
+          "enterprise",
+          "region",
+        ].includes(
+          currentOrganizationLevel
+        )
+      ) {
+        return [];
+      }
+
+      const groups = new Map();
+
+      pointInTimeRecords.forEach(
+        (record) => {
+          const organization =
+            record.organization;
+
+          if (!organization) {
+            return;
+          }
+
+          let groupOrganization =
+            organization;
+          let groupKey =
+            record.organizationId;
+          let groupName =
+            record.organizationName;
+
+          if (
+            currentOrganizationLevel ===
+            "enterprise"
+          ) {
+            if (
+              record.organizationId ===
+              currentOrganizationId
+            ) {
+              groupOrganization =
+                currentOrganization;
+              groupKey =
+                `${currentOrganizationId}__admin`;
+              groupName =
+                `${currentOrganization?.name || "Enterprise"} – Admin`;
+            } else {
+              const regionOrganization =
+                getAncestorOrganizationByLevel(
+                  organization,
+                  "region",
+                  organizationMap
+                );
+
+              if (!regionOrganization) {
+                return;
+              }
+
+              groupOrganization =
+                regionOrganization;
+              groupKey =
+                getOrganizationId(
+                  regionOrganization
+                );
+              groupName =
+                regionOrganization.name ||
+                "Unnamed Region";
+            }
+          } else if (
+            currentOrganizationLevel ===
+            "region"
+          ) {
+            if (
+              record.organizationId ===
+              currentOrganizationId
+            ) {
+              groupKey =
+                `${currentOrganizationId}__admin`;
+              groupName =
+                `${currentOrganization?.name || "Region"} – Admin`;
+            } else if (
+              getOrganizationLevel(
+                organization
+              ) !== "branch"
+            ) {
+              return;
+            }
+          }
+
+          const current =
+            groups.get(groupKey) || {
+              id: groupKey,
+              name: groupName,
+              logo:
+                getOrganizationLogo(
+                  groupOrganization
+                ) ||
+                record.operatorLogo,
+              Local: 0,
+              Expat: 0,
+              Vacancies: 0,
+              total: 0,
+            };
+
+          current.Local +=
+            record.localEmployees;
+          current.Expat +=
+            record.expatriateEmployees;
+          current.Vacancies +=
+            record.vacancies;
+          current.total +=
+            record.totalEmployees;
+
+          groups.set(
+            groupKey,
+            current
+          );
+        }
+      );
+
+      return Array.from(
+        groups.values()
+      ).sort(
+        (first, second) =>
+          second.total -
+          first.total
+      );
+    }, [
+      currentOrganization,
+      currentOrganizationId,
+      currentOrganizationLevel,
+      isMinistryUser,
+      operatorChartData,
+      organizationMap,
+      pointInTimeRecords,
+    ]);
+
+  const hierarchyComparisonTitle =
+    isMinistryUser
+      ? "Workforce Distribution by Company"
+      : currentOrganizationLevel ===
+          "enterprise"
+        ? "Workforce Distribution by Region & Admin"
+        : currentOrganizationLevel ===
+            "region"
+          ? "Workforce Distribution by Branch & Admin"
+          : "";
+
+  const hierarchyComparisonDescription =
+    isMinistryUser
+      ? "Compares operator headcount and local-versus-expatriate composition using actual employee totals."
+      : currentOrganizationLevel ===
+          "enterprise"
+        ? "Compares Enterprise Admin staff with workforce rolled up under each Region."
+        : "Compares Regional Admin staff with each Branch workforce in this Region.";
+
   const regionChartData =
     useMemo(() => {
       const groups =
@@ -5997,8 +6137,7 @@ const Workforce = () => {
                 record.roleCategory,
               category:
                 record.roleCategoryLabel,
-              headcount: 0,
-              local: 0,
+              headcount: 0,local: 0,
               expat: 0,
               vacancies: 0,
               projectedNeed: 0,
@@ -6157,8 +6296,17 @@ const Workforce = () => {
               organization
             ),
           name:
-            organization.name ||
-            "Unnamed organisation",
+            [
+              "enterprise",
+              "region",
+            ].includes(
+              getOrganizationLevel(
+                organization
+              )
+            )
+              ? `${organization.name || "Unnamed organisation"} – Admin`
+              : organization.name ||
+                "Unnamed organisation",
         }))
         .sort(
           (first, second) =>
@@ -6276,9 +6424,11 @@ const Workforce = () => {
 
   const scopeDescription =
     isMinistryUser
-      ? "View workforce structure and trends across every operator and child organisation."
+      ? "View workforce structure and trends across Enterprises, Regions and Branches in this Ministry sector."
       : currentOrganization?.name
-        ? `Manage workforce roles for ${currentOrganization.name} and the organisations below it.`
+        ? canManageOwnWorkforce
+          ? `View workforce across ${currentOrganization.name} and its hierarchy. You can manage only ${currentOrganization.name}'s direct workforce records.`
+          : `View workforce across ${currentOrganization.name} and its hierarchy.`
         : "View workforce data within your organisation scope.";
 
 
@@ -6997,8 +7147,7 @@ const Workforce = () => {
                 caption={`${formatNumber(
                   workforceTotals.expat
                 )} expatriate employees`}
-                icon={BriefcaseBusiness}
-              />
+                icon={BriefcaseBusiness}/>
 
               <KpiCard
                 label="Current Vacancies"
@@ -7328,47 +7477,55 @@ const Workforce = () => {
               </Card>
             </div>
 
-            <div className="mb-8">
-              <SectionHeader description="Interactive Ghana map showing current workforce totals by region.">
-                Workforce Distribution by Region
-              </SectionHeader>
+            {[
+              "ministry",
+              "enterprise",
+            ].includes(
+              currentOrganizationLevel
+            ) && (
+              <div className="mb-8">
+                <SectionHeader description="Interactive Ghana map showing current workforce totals by region. Enterprise Admin workforce remains in the overall totals but is not assigned to a Region unless explicitly configured.">
+                  Workforce Distribution by Region
+                </SectionHeader>
 
-              <Card className="overflow-hidden">
-                <WorkforceRegionalMap
-                  data={
-                    regionChartData
-                  }
-                  selectedRegionId={
-                    regionFilter
-                  }
-                  onSelectRegion={
-                    setRegionFilter
-                  }
-                />
-              </Card>
-            </div>
+                <Card className="overflow-hidden">
+                  <WorkforceRegionalMap
+                    data={
+                      regionChartData
+                    }
+                    selectedRegionId={
+                      regionFilter
+                    }
+                    onSelectRegion={
+                      setRegionFilter
+                    }
+                  />
+                </Card>
+              </div>
+            )}
 
+            {hierarchyComparisonTitle && (
             <div className="mb-8">
-              <SectionHeader description="Compares operator headcount and local-versus-expatriate composition using actual employee totals.">
-                Workforce Distribution by Company
+              <SectionHeader description={hierarchyComparisonDescription}>
+                {hierarchyComparisonTitle}
               </SectionHeader>
 
               <Card className="p-5">
-                {operatorChartData.length >
+                {hierarchyComparisonData.length >
                 0 ? (
                   <ResponsiveContainer
                     width="100%"
                     height={
                       Math.max(
                         300,
-                        operatorChartData.length *
+                        hierarchyComparisonData.length *
                           62
                       )
                     }
                   >
                     <BarChart
                       data={
-                        operatorChartData
+                        hierarchyComparisonData
                       }
                       layout="vertical"
                       margin={{
@@ -7404,7 +7561,7 @@ const Workforce = () => {
                         tick={
                           <CompanyAxisTick
                             data={
-                              operatorChartData
+                              hierarchyComparisonData
                             }
                           />
                         }
@@ -7444,10 +7601,11 @@ const Workforce = () => {
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
-                  <EmptyState message="Company workforce distribution will appear here" />
+                  <EmptyState message="Workforce distribution will appear here" />
                 )}
               </Card>
             </div>
+            )}
 
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
               <div>
@@ -7996,9 +8154,11 @@ const Workforce = () => {
         records={
           pointInTimeRecords
         }
-        onClose={
-          closeRoleDetail
+        scopeLevel={
+          currentOrganizationLevel
         }
+        onClose={
+          closeRoleDetail}
         onSelectRegion={(regionId) => {
           setRegionFilter(
             regionId
