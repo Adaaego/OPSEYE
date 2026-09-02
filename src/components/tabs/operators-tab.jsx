@@ -129,7 +129,8 @@ const isCompany = (organization) => {
     return (getOrganizationCategory(organization) === "company");
 };
 const isMinistry = (organization) => {
-    return (getOrganizationCategory(organization) === "ministry");
+    return (getOrganizationCategory(organization) === "ministry" ||
+        getOrganizationLevel(organization) === "ministry");
 };
 /*
  * Enterprise organizations are shown as the main operator rows.
@@ -558,24 +559,21 @@ const getOrganizationRegionLabel = (organization) => {
         "");
 };
 /*
- * Administrator identity is read from the organization metadata written by
- * Account Settings. organizationMembers supplies the person's safe directory
- * details without exposing their private users/{uid} document.
+ * Operational dashboards do not bulk-read organizationMembers simply to enrich
+ * administrator names. Account Settings writes the safe administrator metadata
+ * needed for display onto the organization record itself.
  */
-const getOrganizationAdministrator = (organization, userMap) => {
+const getOrganizationAdministrator = (organization) => {
     const administratorId = organization?.primaryAdminUserId ||
         (Array.isArray(organization?.adminIds)
             ? organization.adminIds[0]
             : "");
-    const administrator = administratorId
-        ? userMap.get(administratorId)
-        : null;
     return {
         id: administratorId || "",
-        name: administrator?.fullName ||
-            administrator?.name ||
-            administrator?.email ||
+        name: organization?.primaryAdminName ||
             organization?.adminName ||
+            organization?.administratorName ||
+            organization?.adminEmail ||
             "",
     };
 };
@@ -616,14 +614,6 @@ const SortHeader = ({ label, sortKey, activeSortKey, sortDirection, onSort, }) =
  * before it reaches Firestore so the browser never asks for another operator's
  * records and then relies on React to hide them.
  */
-const FIRESTORE_IN_QUERY_LIMIT = 30;
-const chunkValues = (values, size = FIRESTORE_IN_QUERY_LIMIT) => {
-    const chunks = [];
-    for (let index = 0; index < values.length; index += size) {
-        chunks.push(values.slice(index, index + size));
-    }
-    return chunks;
-};
 const mergeDocumentLists = (documentLists) => {
     const merged = new Map();
     documentLists
@@ -651,12 +641,8 @@ const loadScopedOrganizations = async (organizationId) => {
         ...currentOrganizationSnapshot.data(),
     };
     const organizationLevel = getOrganizationLevel(currentOrganization);
-    const organizationCategory = getOrganizationCategory(currentOrganization);
     let scopedOrganizations = [];
-    if (organizationCategory ===
-        "ministry" ||
-        organizationLevel ===
-            "ministry") {
+    if (isMinistry(currentOrganization)) {
         const sector = String(currentOrganization.sector ||
             "").trim();
         if (!sector) {
@@ -688,13 +674,68 @@ const loadScopedOrganizations = async (organizationId) => {
         ]),
     };
 };
-const loadDocumentsForOrganizationIds = async ({ collectionName, organizationIds, }) => {
-    const uniqueOrganizationIds = Array.from(new Set(organizationIds.filter(Boolean)));
-    if (uniqueOrganizationIds.length ===
-        0) {
-        return [];
+const getScopedReportReferences = (organization) => {
+    const organizationId = getOrganizationId(organization);
+    const organizationLevel = getOrganizationLevel(organization);
+    if (isMinistry(organization)) {
+        const sector = String(organization?.sector ||
+            "").trim();
+        if (!sector) {
+            throw new Error("The Ministry organization is missing its sector.");
+        }
+        return [
+            query(collection(db, REPORT_SUBMISSIONS_COLLECTION), where("sector", "==", sector)),
+        ];
     }
-    const snapshots = await Promise.all(chunkValues(uniqueOrganizationIds).map((organizationIdChunk) => getDocs(query(collection(db, collectionName), where("organizationId", "in", organizationIdChunk)))));
+    if (organizationLevel ===
+        "enterprise") {
+        return [
+            query(collection(db, REPORT_SUBMISSIONS_COLLECTION), where("rootEnterpriseId", "==", organizationId)),
+        ];
+    }
+    if (organizationLevel ===
+        "region") {
+        return [
+            query(collection(db, REPORT_SUBMISSIONS_COLLECTION), where("ancestorIds", "array-contains", organizationId)),
+        ];
+    }
+    return [
+        query(collection(db, REPORT_SUBMISSIONS_COLLECTION), where("organizationId", "==", organizationId)),
+    ];
+};
+const getScopedWorkforceReferences = (organization) => {
+    const organizationId = getOrganizationId(organization);
+    const organizationLevel = getOrganizationLevel(organization);
+    if (isMinistry(organization)) {
+        const sector = String(organization?.sector ||
+            "").trim();
+        if (!sector) {
+            throw new Error("The Ministry organization is missing its sector.");
+        }
+        return [
+            query(collection(db, WORKFORCE_COLLECTION), where("sector", "==", sector)),
+        ];
+    }
+    if (organizationLevel ===
+        "enterprise") {
+        return [
+            query(collection(db, WORKFORCE_COLLECTION), where("rootEnterpriseId", "==", organizationId)),
+            query(collection(db, WORKFORCE_COLLECTION), where("organizationId", "==", organizationId)),
+        ];
+    }
+    if (organizationLevel ===
+        "region") {
+        return [
+            query(collection(db, WORKFORCE_COLLECTION), where("organizationId", "==", organizationId)),
+            query(collection(db, WORKFORCE_COLLECTION), where("ancestorIds", "array-contains", organizationId)),
+        ];
+    }
+    return [
+        query(collection(db, WORKFORCE_COLLECTION), where("organizationId", "==", organizationId)),
+    ];
+};
+const loadScopedDocuments = async (references) => {
+    const snapshots = await Promise.all(references.map((reference) => getDocs(reference)));
     return mergeDocumentLists(snapshots.map(snapshotDocuments));
 };
 const loadFuelPricesForOrganizations = async (organizations) => {
@@ -720,7 +761,6 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
     const [allOrganizations, setAllOrganizations,] = useState([]);
     const [visibleOrganizations, setVisibleOrganizations,] = useState([]);
     const [reportSubmissions, setReportSubmissions,] = useState([]);
-    const [organizationUsers, setOrganizationUsers,] = useState([]);
     const [companyFuelPrices, setCompanyFuelPrices,] = useState([]);
     const [workforceRecords, setWorkforceRecords,] = useState([]);
     const [currentOrganization, setCurrentOrganization,] = useState(null);
@@ -741,9 +781,9 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
      */
     const [detailHistory, setDetailHistory,] = useState([]);
     /*
-     * Resolve the signed-in organization first, then load only that user's
-     * permitted Ministry sector or company hierarchy. Every dependent collection
-     * is queried by those organization IDs instead of loading the whole database.
+     * Resolve the signed-in organization first. Every operational collection is
+     * then queried with the same canonical hierarchy predicate enforced by the
+     * Firestore rules.
      */
     useEffect(() => {
         let requestIsActive = true;
@@ -766,23 +806,10 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
                 }
                 const { currentOrganization: signedInOrganization, organizations, } = await loadScopedOrganizations(organizationId);
                 const dataOrganizations = organizations.filter((organization) => !isMinistry(organization));
-                const organizationIds = dataOrganizations
-                    .map(getOrganizationId)
-                    .filter(Boolean);
-                const [reports, members, prices, workforce,] = await Promise.all([
-                    loadDocumentsForOrganizationIds({
-                        collectionName: REPORT_SUBMISSIONS_COLLECTION,
-                        organizationIds,
-                    }),
-                    loadDocumentsForOrganizationIds({
-                        collectionName: ORGANIZATION_MEMBERS_COLLECTION,
-                        organizationIds,
-                    }),
+                const [reports, prices, workforce,] = await Promise.all([
+                    loadScopedDocuments(getScopedReportReferences(signedInOrganization)),
                     loadFuelPricesForOrganizations(dataOrganizations),
-                    loadDocumentsForOrganizationIds({
-                        collectionName: WORKFORCE_COLLECTION,
-                        organizationIds,
-                    }),
+                    loadScopedDocuments(getScopedWorkforceReferences(signedInOrganization)),
                 ]);
                 let matchingCompanies = [];
                 const signedInOrganizationId = getOrganizationId(signedInOrganization);
@@ -857,7 +884,6 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
                 setAllOrganizations(organizations);
                 setVisibleOrganizations(matchingCompanies);
                 setReportSubmissions(reports);
-                setOrganizationUsers(members);
                 setCompanyFuelPrices(prices);
                 setWorkforceRecords(workforce);
                 setCurrentOrganization(signedInOrganization);
@@ -869,8 +895,7 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
                     setAllOrganizations([]);
                     setVisibleOrganizations([]);
                     setReportSubmissions([]);
-                    setOrganizationUsers([]);
-                    setCompanyFuelPrices([]);
+                        setCompanyFuelPrices([]);
                     setWorkforceRecords([]);
                     setCurrentOrganization(null);
                     setLoadError(error?.message ||
@@ -898,15 +923,6 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
         ]));
     }, [
         allOrganizations,
-    ]);
-    const userMap = useMemo(() => {
-        return new Map(organizationUsers.map((user) => [
-            user.uid ||
-                user.id,
-            user,
-        ]));
-    }, [
-        organizationUsers,
     ]);
     const priceMap = useMemo(() => {
         return new Map(companyFuelPrices.map((price) => [
@@ -950,7 +966,6 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
                 nationalVolume: 0,
             });
             const originalSubmitter = getOriginalSubmitter(report);
-            const submittedByUser = userMap.get(originalSubmitter.userId);
             return {
                 ...report,
                 organization,
@@ -990,8 +1005,6 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
                         {}),
                 },
                 submittedByName: originalSubmitter.name ||
-                    submittedByUser?.fullName ||
-                    submittedByUser?.name ||
                     "",
                 reportDate: getReportDate(report),
             };
@@ -1000,7 +1013,6 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
         organizationMap,
         priceMap,
         reportSubmissions,
-        userMap,
     ]);
     /*
      * Creates the full detail object for one visible operator.
@@ -1160,7 +1172,7 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
                             ? "overdue"
                             : "missing";
         }
-        const administrator = getOrganizationAdministrator(organization, userMap);
+        const administrator = getOrganizationAdministrator(organization);
         const regionLabel = getOrganizationRegionLabel(organization);
         return {
             ...organization,
@@ -1237,7 +1249,6 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
         organizationsLoadedAt,
         visibleOrganizations,
         workforceRecords,
-        userMap,
     ]);
     const currentOrganizationLevel = getOrganizationLevel(currentOrganization);
     const isBranchAccount = currentOrganizationLevel ===

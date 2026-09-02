@@ -379,15 +379,9 @@ const getOrganizationId = (
 };
 
 const getUserOrganizationId = (
-  userProfile
+  member
 ) => {
-  return (
-    userProfile?.organizationId ||
-    userProfile?.companyId ||
-    userProfile?.enterpriseId ||
-    userProfile?.branchId ||
-    ""
-  );
+  return member?.organizationId || "";
 };
 
 const getOrganizationCategory = (
@@ -4409,36 +4403,6 @@ const subscribeToScopedReferences = ({
   };
 };
 
-const chunkValues = (
-  values,
-  size = 30
-) => {
-  const uniqueValues =
-    Array.from(
-      new Set(
-        values.filter(Boolean)
-      )
-    );
-
-  const chunks = [];
-
-  for (
-    let index = 0;
-    index <
-    uniqueValues.length;
-    index += size
-  ) {
-    chunks.push(
-      uniqueValues.slice(
-        index,
-        index + size
-      )
-    );
-  }
-
-  return chunks;
-};
-
 const getScopedOrganizationReferences = (
   organization
 ) => {
@@ -4553,30 +4517,80 @@ const getScopedOrganizationReferences = (
 };
 
 const getScopedWorkforceReferences = (
-  scopedOrganizations
+  organization
 ) => {
-  const visibleOrganizationIds =
-    scopedOrganizations
-      .filter(
-        (item) =>
-          !isMinistryOrganization(
-            item
-          )
-      )
-      .map(
-        getOrganizationId
-      )
-      .filter(Boolean);
+  const organizationId =
+    getOrganizationId(
+      organization
+    );
 
-  /*
-   * Workforce is additive: every direct organization record in the permitted
-   * hierarchy contributes to the parent total. Query those owners explicitly
-   * rather than downloading the full collection and filtering in the browser.
-   */
-  return chunkValues(
-    visibleOrganizationIds
-  ).map(
-    (organizationIdsChunk) =>
+  const organizationLevel =
+    getOrganizationLevel(
+      organization
+    );
+
+  const organizationCategory =
+    getOrganizationCategory(
+      organization
+    );
+
+  if (
+    organizationCategory ===
+      "ministry" ||
+    organizationLevel ===
+      "ministry"
+  ) {
+    const sector =
+      String(
+        organization?.sector ||
+          ""
+      ).trim();
+
+    if (!sector) {
+      throw new Error(
+        "The Ministry organization is missing its sector."
+      );
+    }
+
+    return [
+      query(
+        collection(
+          db,
+          WORKFORCE_COLLECTION
+        ),
+        where(
+          "sector",
+          "==",
+          sector
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "enterprise"
+  ) {
+    return [
+      query(
+        collection(
+          db,
+          WORKFORCE_COLLECTION
+        ),
+        where(
+          "rootEnterpriseId",
+          "==",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "region"
+  ) {
+    return [
       query(
         collection(
           db,
@@ -4584,11 +4598,37 @@ const getScopedWorkforceReferences = (
         ),
         where(
           "organizationId",
-          "in",
-          organizationIdsChunk
+          "==",
+          organizationId
         )
+      ),
+      query(
+        collection(
+          db,
+          WORKFORCE_COLLECTION
+        ),
+        where(
+          "ancestorIds",
+          "array-contains",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  return [
+    query(
+      collection(
+        db,
+        WORKFORCE_COLLECTION
+      ),
+      where(
+        "organizationId",
+        "==",
+        organizationId
       )
-  );
+    ),
+  ];
 };
 
 const Workforce = () => {
@@ -5004,8 +5044,9 @@ const Workforce = () => {
                   );
 
                   /*
-                   * Workforce records are queried by the exact organization IDs
-                   * already resolved for the signed-in hierarchy.
+                   * Workforce uses the same canonical hierarchy fields as the
+                   * security rules. Region includes its own direct workforce plus
+                   * descendant workforce because workforce is additive.
                    */
                   unsubscribeWorkforce();
 
@@ -5014,7 +5055,7 @@ const Workforce = () => {
                   try {
                     workforceReferences =
                       getScopedWorkforceReferences(
-                        scopedOrganizations
+                        signedInOrganization
                       );
                   } catch (error) {
                     setWorkforceRecords(

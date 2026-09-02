@@ -919,15 +919,9 @@ const getOrganizationId = (
 };
 
 const getUserOrganizationId = (
-  userProfile
+  member
 ) => {
-  return (
-    userProfile?.organizationId ||
-    userProfile?.companyId ||
-    userProfile?.enterpriseId ||
-    userProfile?.branchId ||
-    ""
-  );
+  return member?.organizationId || "";
 };
 
 const getOrganizationCategory = (
@@ -3699,22 +3693,18 @@ const getScopedOrganizationReferences = (
 };
 
 /*
- * Build report listeners from the organization hierarchy that is already
- * visible to the signed-in account.
+ * Operational collections use the same canonical hierarchy fields enforced by
+ * Firestore Rules. The browser never enumerates descendant organization IDs to
+ * manufacture an access scope.
  *
- * This keeps historical records working:
- * - exact organizationId queries catch older submissions that predate
- *   rootEnterpriseId / ancestorIds on reportSubmissions;
- * - Enterprise also keeps rootEnterpriseId and companyId compatibility
- *   queries because those fields safely identify the same company hierarchy;
- * - Region keeps ancestorIds as a compatibility query while also querying the
- *   Region and each visible Branch by exact organizationId;
- * - Branch receives only its exact organizationId.
+ * Ministry   -> sector
+ * Enterprise -> rootEnterpriseId
+ * Region     -> ancestorIds
+ * Branch     -> organizationId
  */
-const getScopedReportReferences = ({
-  organization,
-  scopedOrganizations = [],
-}) => {
+const getScopedReportReferences = (
+  organization
+) => {
   const organizationId =
     getOrganizationId(
       organization
@@ -3763,46 +3753,57 @@ const getScopedReportReferences = ({
     ];
   }
 
-  const scopedOrganizationIds =
-    Array.from(
-      new Set(
-        scopedOrganizations
-          .map(
-            getOrganizationId
-          )
-          .filter(Boolean)
-      )
-    );
-
-  /*
-   * Always include the signed-in organization even when a compatibility
-   * organization query has not returned yet.
-   */
   if (
-    organizationId &&
-    !scopedOrganizationIds.includes(
-      organizationId
-    )
+    organizationLevel ===
+    "enterprise"
   ) {
-    scopedOrganizationIds.push(
-      organizationId
-    );
-  }
-
-  return scopedOrganizationIds.map(
-    (scopedOrganizationId) =>
+    return [
       query(
         collection(
           db,
           REPORT_SUBMISSIONS_COLLECTION
         ),
         where(
-          "organizationId",
+          "rootEnterpriseId",
           "==",
-          scopedOrganizationId
+          organizationId
         )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "region"
+  ) {
+    return [
+      query(
+        collection(
+          db,
+          REPORT_SUBMISSIONS_COLLECTION
+        ),
+        where(
+          "ancestorIds",
+          "array-contains",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  return [
+    query(
+      collection(
+        db,
+        REPORT_SUBMISSIONS_COLLECTION
+      ),
+      where(
+        "organizationId",
+        "==",
+        organizationId
       )
-  );
+    ),
+  ];
 };
 
 /*
@@ -4312,11 +4313,9 @@ const Reports = ({
                   unsubscribeReports =
                     subscribeToScopedReferences({
                       references:
-                        getScopedReportReferences({
-                          organization:
-                            signedInOrganization,
-                          scopedOrganizations,
-                        }),
+                        getScopedReportReferences(
+                          signedInOrganization
+                        ),
 
                       onData:
                         (

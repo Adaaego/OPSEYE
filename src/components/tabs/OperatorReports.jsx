@@ -324,28 +324,82 @@ const loadScopedOrganizations = async (
 };
 
 const getReportReferences = (
-  organizations,
+  organization,
   currentUserRole
 ) => {
   if (!currentUserRole) {
     return [];
   }
 
-  const organizationIds = [
-    ...new Set(
-      organizations
-        .map(getOrganizationId)
-        .filter(Boolean)
-    ),
-  ];
+  const organizationId =
+    getOrganizationId(
+      organization
+    );
 
-  return organizationIds.map(
-    (organizationId) =>
+  const organizationLevel =
+    getOrganizationLevel(
+      organization
+    );
+
+  if (!organizationId) {
+    return [];
+  }
+
+  const reportCollection =
+    collection(
+      db,
+      "reportSubmissions"
+    );
+
+  if (
+    organizationLevel ===
+    "enterprise"
+  ) {
+    return [
       query(
-        collection(
-          db,
-          "reportSubmissions"
+        reportCollection,
+        where(
+          "rootEnterpriseId",
+          "==",
+          organizationId
         ),
+        where(
+          "currentStageRole",
+          "==",
+          currentUserRole
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "region"
+  ) {
+    return [
+      query(
+        reportCollection,
+        where(
+          "ancestorIds",
+          "array-contains",
+          organizationId
+        ),
+        where(
+          "currentStageRole",
+          "==",
+          currentUserRole
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "branch"
+  ) {
+    return [
+      query(
+        reportCollection,
         where(
           "organizationId",
           "==",
@@ -356,68 +410,11 @@ const getReportReferences = (
           "==",
           currentUserRole
         )
-      )
-  );
-};
+      ),
+    ];
+  }
 
-/*
- * Reporting originates from the lowest organization in each visible branch of
- * the hierarchy. Old Enterprise/Region test tasks are ignored once children
- * exist, matching the reporting roll-up used by Overview and Reports.
- */
-const getOperationalOrganizationIds = (
-  organizations
-) => {
-  return new Set(
-    organizations
-      .filter((organization) => {
-        const organizationId =
-          getOrganizationId(
-            organization
-          );
-
-        if (!organizationId) {
-          return false;
-        }
-
-        const hasChild =
-          organizations.some(
-            (candidate) => {
-              const candidateId =
-                getOrganizationId(
-                  candidate
-                );
-
-              if (
-                !candidateId ||
-                candidateId ===
-                  organizationId
-              ) {
-                return false;
-              }
-
-              const ancestorIds =
-                Array.isArray(
-                  candidate?.ancestorIds
-                )
-                  ? candidate.ancestorIds
-                  : [];
-
-              return (
-                candidate?.parentId ===
-                  organizationId ||
-                ancestorIds.includes(
-                  organizationId
-                )
-              );
-            }
-          );
-
-        return !hasChild;
-      })
-      .map(getOrganizationId)
-      .filter(Boolean)
-  );
+  return [];
 };
 
 const getRegionOrganization = (
@@ -534,11 +531,7 @@ const isActionableForRole = (
   );
 
   if (
-    [
-      "rejected",
-      "submitted",
-      "submitted_late",
-    ].includes(status)
+    status === "rejected"
   ) {
     return false;
   }
@@ -747,28 +740,13 @@ const OperatorsReports = ({
                           )
                         );
 
-                      const operationalOrganizationIds =
-                        getOperationalOrganizationIds(
-                          scopedOrganizations
-                        );
-
-                      const operationalOrganizations =
-                        scopedOrganizations.filter(
-                          (scopedOrganization) =>
-                            operationalOrganizationIds.has(
-                              getOrganizationId(
-                                scopedOrganization
-                              )
-                            )
-                        );
-
                       unsubscribeReports();
 
                       unsubscribeReports =
                         subscribeToMergedReferences({
                           references:
                             getReportReferences(
-                              operationalOrganizations,
+                              organization,
                               role
                             ),
                           onData:

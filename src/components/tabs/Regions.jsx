@@ -1255,29 +1255,162 @@ const getScopedOrganizationReferences = (
   ];
 };
 
-const getScopedCollectionReferences = (
-  collectionName,
-  organizations
-) => {
-  const organizationIds = Array.from(
-    new Set(
-      organizations
-        .map(getOrganizationId)
-        .filter(Boolean)
-    )
-  );
+/*
+ * Operational collections use the same hierarchy fields enforced by the rules.
+ * Descendant IDs are never enumerated into separate organizationId queries.
+ */
+const getScopedReportReferences = (organization) => {
+  const organizationId =
+    getOrganizationId(organization);
+  const accountLevel =
+    getAccountLevel(organization);
 
-  return organizationIds.map(
-    (organizationId) =>
+  if (accountLevel === "ministry") {
+    const sector = String(
+      organization?.sector || ""
+    ).trim();
+
+    if (!sector) {
+      throw new Error(
+        "The Ministry organization is missing its sector."
+      );
+    }
+
+    return [
       query(
-        collection(db, collectionName),
+        collection(
+          db,
+          REPORT_SUBMISSIONS_COLLECTION
+        ),
+        where("sector", "==", sector)
+      ),
+    ];
+  }
+
+  if (accountLevel === "enterprise") {
+    return [
+      query(
+        collection(
+          db,
+          REPORT_SUBMISSIONS_COLLECTION
+        ),
+        where(
+          "rootEnterpriseId",
+          "==",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  if (accountLevel === "region") {
+    return [
+      query(
+        collection(
+          db,
+          REPORT_SUBMISSIONS_COLLECTION
+        ),
+        where(
+          "ancestorIds",
+          "array-contains",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  return [
+    query(
+      collection(
+        db,
+        REPORT_SUBMISSIONS_COLLECTION
+      ),
+      where(
+        "organizationId",
+        "==",
+        organizationId
+      )
+    ),
+  ];
+};
+
+const getScopedWorkforceReferences = (organization) => {
+  const organizationId =
+    getOrganizationId(organization);
+  const accountLevel =
+    getAccountLevel(organization);
+
+  if (accountLevel === "ministry") {
+    const sector = String(
+      organization?.sector || ""
+    ).trim();
+
+    if (!sector) {
+      throw new Error(
+        "The Ministry organization is missing its sector."
+      );
+    }
+
+    return [
+      query(
+        collection(db, WORKFORCE_COLLECTION),
+        where("sector", "==", sector)
+      ),
+    ];
+  }
+
+  if (accountLevel === "enterprise") {
+    return [
+      query(
+        collection(db, WORKFORCE_COLLECTION),
+        where(
+          "rootEnterpriseId",
+          "==",
+          organizationId
+        )
+      ),
+      query(
+        collection(db, WORKFORCE_COLLECTION),
         where(
           "organizationId",
           "==",
           organizationId
         )
+      ),
+    ];
+  }
+
+  if (accountLevel === "region") {
+    return [
+      query(
+        collection(db, WORKFORCE_COLLECTION),
+        where(
+          "organizationId",
+          "==",
+          organizationId
+        )
+      ),
+      query(
+        collection(db, WORKFORCE_COLLECTION),
+        where(
+          "ancestorIds",
+          "array-contains",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  return [
+    query(
+      collection(db, WORKFORCE_COLLECTION),
+      where(
+        "organizationId",
+        "==",
+        organizationId
       )
-  );
+    ),
+  ];
 };
 
 const getFuelPriceReferences = (
@@ -2285,7 +2418,7 @@ const Regions = ({
     }
   }, [currentOrganization, organizationLoaded]);
 
-  // Reports and workforce use the same proven organization scope.
+  // Reports and workforce use the same canonical hierarchy predicates as the rules.
   useEffect(() => {
     setDataLoaded(false);
     setReportSubmissions([]);
@@ -2322,9 +2455,8 @@ const Regions = ({
     const unsubscribeReports =
       subscribeToScopedReferences({
         references:
-          getScopedCollectionReferences(
-            REPORT_SUBMISSIONS_COLLECTION,
-            dataOrganizations
+          getScopedReportReferences(
+            currentOrganization
           ),
         onData: (records) => {
           setReportSubmissions(records);
@@ -2349,9 +2481,8 @@ const Regions = ({
     const unsubscribeWorkforce =
       subscribeToScopedReferences({
         references:
-          getScopedCollectionReferences(
-            WORKFORCE_COLLECTION,
-            dataOrganizations
+          getScopedWorkforceReferences(
+            currentOrganization
           ),
         onData: (records) => {
           setWorkforceRecords(records);
@@ -2400,7 +2531,11 @@ const Regions = ({
       unsubscribeWorkforce();
       unsubscribePrices();
     };
-  }, [organizations, scopeLoaded]);
+  }, [
+    currentOrganization,
+    organizations,
+    scopeLoaded,
+  ]);
 
   const loading = !(
     memberLoaded &&

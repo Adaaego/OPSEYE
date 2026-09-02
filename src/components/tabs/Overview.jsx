@@ -120,8 +120,6 @@ const EXCLUDED_COMPLIANCE_STATUSES = new Set([
   "withdrawn",
 ]);
 
-const FIRESTORE_IN_QUERY_LIMIT = 30;
-
 const normalizeValue = (value) =>
   String(value ?? "")
     .trim()
@@ -163,11 +161,7 @@ const getOrganizationId = (organization) =>
   organization?.organizationId || organization?.id || "";
 
 const getUserOrganizationId = (member) =>
-  member?.organizationId ||
-  member?.companyId ||
-  member?.enterpriseId ||
-  member?.branchId ||
-  "";
+  member?.organizationId || "";
 
 const getOrganizationCategory = (organization) =>
   normalizeStatus(
@@ -581,16 +575,6 @@ const getOrganizationName = (record) =>
   record?.companyName ||
   "Unnamed organization";
 
-const chunkValues = (values, size = FIRESTORE_IN_QUERY_LIMIT) => {
-  const chunks = [];
-
-  for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size));
-  }
-
-  return chunks;
-};
-
 const snapshotToDocuments = (snapshot) => {
   if (Array.isArray(snapshot?.docs)) {
     return snapshot.docs.map((documentSnapshot) => ({
@@ -704,17 +688,108 @@ const getScopedOrganizationReferences = (organization) => {
   return [doc(db, ORGANIZATIONS_COLLECTION, organizationId)];
 };
 
-const buildOrganizationScopedQueries = ({
-  collectionName,
-  organizationIds,
-}) =>
-  chunkValues(Array.from(new Set(organizationIds.filter(Boolean)))).map(
-    (organizationIdChunk) =>
+/*
+ * Operational collections use the same canonical hierarchy fields enforced by
+ * Firestore Security Rules. The browser never converts descendant organization
+ * IDs into an `in` query to prove access.
+ */
+const getScopedReportReferences = (organization) => {
+  const organizationId = getOrganizationId(organization);
+  const organizationLevel = getOrganizationLevel(organization);
+
+  if (isMinistryOrganization(organization)) {
+    const sector = String(organization.sector || "").trim();
+
+    if (!sector) {
+      throw new Error("The Ministry organization is missing its sector.");
+    }
+
+    return [
       query(
-        collection(db, collectionName),
-        where("organizationId", "in", organizationIdChunk)
-      )
-  );
+        collection(db, REPORT_SUBMISSIONS_COLLECTION),
+        where("sector", "==", sector)
+      ),
+    ];
+  }
+
+  if (organizationLevel === "enterprise") {
+    return [
+      query(
+        collection(db, REPORT_SUBMISSIONS_COLLECTION),
+        where("rootEnterpriseId", "==", organizationId)
+      ),
+    ];
+  }
+
+  if (organizationLevel === "region") {
+    return [
+      query(
+        collection(db, REPORT_SUBMISSIONS_COLLECTION),
+        where("ancestorIds", "array-contains", organizationId)
+      ),
+    ];
+  }
+
+  return [
+    query(
+      collection(db, REPORT_SUBMISSIONS_COLLECTION),
+      where("organizationId", "==", organizationId)
+    ),
+  ];
+};
+
+const getScopedWorkforceReferences = (organization) => {
+  const organizationId = getOrganizationId(organization);
+  const organizationLevel = getOrganizationLevel(organization);
+
+  if (isMinistryOrganization(organization)) {
+    const sector = String(organization.sector || "").trim();
+
+    if (!sector) {
+      throw new Error("The Ministry organization is missing its sector.");
+    }
+
+    return [
+      query(
+        collection(db, WORKFORCE_COLLECTION),
+        where("sector", "==", sector)
+      ),
+    ];
+  }
+
+  if (organizationLevel === "enterprise") {
+    return [
+      query(
+        collection(db, WORKFORCE_COLLECTION),
+        where("rootEnterpriseId", "==", organizationId)
+      ),
+      query(
+        collection(db, WORKFORCE_COLLECTION),
+        where("organizationId", "==", organizationId)
+      ),
+    ];
+  }
+
+  if (organizationLevel === "region") {
+    return [
+      query(
+        collection(db, WORKFORCE_COLLECTION),
+        where("organizationId", "==", organizationId)
+      ),
+      query(
+        collection(db, WORKFORCE_COLLECTION),
+        where("ancestorIds", "array-contains", organizationId)
+      ),
+    ];
+  }
+
+  return [
+    query(
+      collection(db, WORKFORCE_COLLECTION),
+      where("organizationId", "==", organizationId)
+    ),
+  ];
+};
 
 /*
  * Fuel price records remain a fallback for older reports that do not carry
@@ -1157,11 +1232,23 @@ const Overviews = () => {
   }, [currentMember]);
 
   /*
-   * Reports and workforce are queried only for organizations already proven to
-   * be inside the current user's hierarchy or Ministry sector.
+   * Operational data is queried with the same hierarchy predicates used by the
+   * rules: Ministry -> sector, Enterprise -> rootEnterpriseId,
+   * Region -> ancestorIds, Branch -> organizationId.
    */
   useEffect(() => {
     if (!currentMember || organizations.length === 0) {
+      return undefined;
+    }
+
+    const currentOrganization =
+      organizations.find(
+        (organization) =>
+          getOrganizationId(organization) ===
+          getUserOrganizationId(currentMember)
+      ) || null;
+
+    if (!currentOrganization) {
       return undefined;
     }
 
@@ -1169,59 +1256,53 @@ const Overviews = () => {
       (organization) => !isMinistryOrganization(organization)
     );
 
-    const organizationIds = dataOrganizations
-      .map(getOrganizationId)
-      .filter(Boolean);
-
     const unsubscribers = [];
 
-    const subscribeCollection = ({ collectionName, onData, onError }) => {
+    try {
       unsubscribers.push(
         subscribeToScopedReferences({
-          references: buildOrganizationScopedQueries({
-            collectionName,
-            organizationIds,
-          }),
-          onData,
-          onError,
+          references: getScopedReportReferences(currentOrganization),
+          onData: (records) => {
+            setReportSubmissions(records);
+            setLoading(false);
+            setLoadError("");
+          },
+          onError: (error) => {
+            console.error("Unable to load scoped report submissions:", error);
+            setLoadError(
+              error.message || "Report submissions could not be loaded."
+            );
+            setLoading(false);
+          },
         })
       );
-    };
 
-    subscribeCollection({
-      collectionName: REPORT_SUBMISSIONS_COLLECTION,
-      onData: (records) => {
-        setReportSubmissions(records);
-        setLoading(false);
-        setLoadError("");
-      },
-      onError: (error) => {
-        console.error("Unable to load scoped report submissions:", error);
-        setLoadError(
-          error.message || "Report submissions could not be loaded."
-        );
-        setLoading(false);
-      },
-    });
+      unsubscribers.push(
+        subscribeToScopedReferences({
+          references: getScopedWorkforceReferences(currentOrganization),
+          onData: setWorkforceRecords,
+          onError: (error) => {
+            console.error("Unable to load scoped workforce records:", error);
+            setLoadError(
+              error.message || "Workforce records could not be loaded."
+            );
+          },
+        })
+      );
 
-    subscribeCollection({
-      collectionName: WORKFORCE_COLLECTION,
-      onData: setWorkforceRecords,
-      onError: (error) => {
-        console.error("Unable to load scoped workforce records:", error);
-        setLoadError(error.message || "Workforce records could not be loaded.");
-      },
-    });
-
-    unsubscribers.push(
-      subscribeToScopedReferences({
-        references: getFuelPriceReferences(dataOrganizations),
-        onData: setCompanyFuelPrices,
-        onError: (error) => {
-          console.error("Unable to load scoped company fuel prices:", error);
-        },
-      })
-    );
+      unsubscribers.push(
+        subscribeToScopedReferences({
+          references: getFuelPriceReferences(dataOrganizations),
+          onData: setCompanyFuelPrices,
+          onError: (error) => {
+            console.error("Unable to load scoped company fuel prices:", error);
+          },
+        })
+      );
+    } catch (error) {
+      setLoadError(error.message || "Dashboard data scope could not be loaded.");
+      setLoading(false);
+    }
 
     return () => {
       unsubscribers.forEach((unsubscribe) => unsubscribe());
