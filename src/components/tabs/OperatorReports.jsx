@@ -324,8 +324,13 @@ const loadScopedOrganizations = async (
 };
 
 const getReportReferences = (
-  organizations
+  organizations,
+  currentUserRole
 ) => {
+  if (!currentUserRole) {
+    return [];
+  }
+
   const organizationIds = [
     ...new Set(
       organizations
@@ -345,6 +350,11 @@ const getReportReferences = (
           "organizationId",
           "==",
           organizationId
+        ),
+        where(
+          "currentStageRole",
+          "==",
+          currentUserRole
         )
       )
   );
@@ -742,27 +752,31 @@ const OperatorsReports = ({
                           scopedOrganizations
                         );
 
+                      const operationalOrganizations =
+                        scopedOrganizations.filter(
+                          (scopedOrganization) =>
+                            operationalOrganizationIds.has(
+                              getOrganizationId(
+                                scopedOrganization
+                              )
+                            )
+                        );
+
                       unsubscribeReports();
 
                       unsubscribeReports =
                         subscribeToMergedReferences({
                           references:
                             getReportReferences(
-                              scopedOrganizations
+                              operationalOrganizations,
+                              role
                             ),
                           onData:
                             (
                               scopedReports
                             ) => {
                               const enrichedReports =
-                                scopedReports
-                                  .filter(
-                                    (report) =>
-                                      operationalOrganizationIds.has(
-                                        report.organizationId
-                                      )
-                                  )
-                                  .map(
+                                scopedReports.map(
                                   (report) => {
                                     const reportOrganization =
                                       organizationMap.get(
