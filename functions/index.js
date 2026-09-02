@@ -38,20 +38,25 @@ const REPORT_SUBMISSIONS_COLLECTION =
 const ORGANIZATIONS_COLLECTION =
   "organizations";
 
-const USERS_COLLECTION =
-  "users";
-
 const INVITATIONS_COLLECTION =
   "organizationInvitations";
 
 const DEFAULT_TIMEZONE =
   "Africa/Accra";
 
+const REPORT_WORKFLOW_ROLES = [
+  "branch_admin",
+  "region_admin",
+  "enterprise_admin",
+  "ministry",
+];
+
+const REPORT_SUBMITTER_ROLE =
+  "branch_admin";
+
 const APPROVAL_ROLE_LABELS = {
-  employee: "Employee",
   branch_admin: "Branch Admin",
   region_admin: "Region Admin",
-  country_admin: "Country Admin",
   enterprise_admin: "Enterprise Admin",
   ministry: "Ministry",
 };
@@ -607,21 +612,13 @@ const calculateNextSendAt = ({
   );
 };
 
-const buildWorkflowStages = (
-  template
-) => {
-  const roles =
-    Array.isArray(
-      template
-        ?.approvalWorkflow
-        ?.roles
-    )
-      ? template
-          .approvalWorkflow
-          .roles
-      : [];
-
-  return roles.map(
+const buildWorkflowStages = () => {
+  /*
+   * Reporting ownership and approval follow the OPSEYE organization hierarchy.
+   * Templates may contain legacy workflow roles, but newly generated tasks use
+   * only the canonical Branch -> Region -> Enterprise -> Ministry path.
+   */
+  return REPORT_WORKFLOW_ROLES.map(
     (role, index) => ({
       id:
         `${index}-${role}`,
@@ -631,8 +628,7 @@ const buildWorkflowStages = (
       label:
         APPROVAL_ROLE_LABELS[
           role
-        ] ||
-        role,
+        ],
     })
   );
 };
@@ -653,39 +649,26 @@ const organizationMatchesTemplate = (
     );
 
   /*
-   * Scheduled report tasks are created only for active operator
-   * organizations. Ministries are the recipient of submitted data, not a
-   * reporting operator target.
+   * Report obligations belong to Branches.
    *
-   * Older records without a status remain usable during migration.
+   * Enterprise and Region organizations provide roll-up/read scope and review
+   * stages, but they do not receive their own duplicate operational report task.
    */
   if (
-    organizationStatus === "archived" ||
-    organizationStatus === "inactive" ||
-    organizationType === "ministry"
+    organizationType !== "branch"
   ) {
     return false;
   }
 
-  const targetAudience =
-    template?.targetAudience ||
-    {};
-
+  /*
+   * Archived/inactive Branches must not receive new reporting obligations.
+   * A missing status remains temporarily compatible with older active records.
+   */
   if (
-    targetAudience.type ===
-    "specific_organizations"
+    organizationStatus === "archived" ||
+    organizationStatus === "inactive"
   ) {
-    const targetIds =
-      Array.isArray(
-        targetAudience.organizationIds
-      )
-        ? targetAudience
-            .organizationIds
-        : [];
-
-    return targetIds.includes(
-      organization.id
-    );
+    return false;
   }
 
   const templateSector =
@@ -697,6 +680,14 @@ const organizationMatchesTemplate = (
     normalizeValue(
       organization?.sector
     );
+
+  if (
+    templateSector &&
+    organizationSector !==
+      templateSector
+  ) {
+    return false;
+  }
 
   const templateSegment =
     normalizeValue(
@@ -718,31 +709,99 @@ const organizationMatchesTemplate = (
     .map(normalizeValue)
     .filter(Boolean);
 
-  const sectorMatches =
-    !templateSector ||
-    !organizationSector ||
-    templateSector ===
-      organizationSector;
-
-  const segmentMatches =
-    !templateSegment ||
-    organizationSegments.includes(
+  if (
+    templateSegment &&
+    !organizationSegments.includes(
       templateSegment
-    );
+    )
+  ) {
+    return false;
+  }
 
+  const targetAudience =
+    template?.targetAudience ||
+    {};
+
+  if (
+    normalizeStatus(
+      targetAudience.type
+    ) !==
+    "specific_organizations"
+  ) {
+    return true;
+  }
+
+  const targetIds =
+    Array.isArray(
+      targetAudience.organizationIds
+    )
+      ? targetAudience
+          .organizationIds
+          .map((value) =>
+            String(value || "").trim()
+          )
+          .filter(Boolean)
+      : [];
+
+  if (!targetIds.length) {
+    return false;
+  }
+
+  const organizationId =
+    organization.organizationId ||
+    organization.id ||
+    "";
+
+  const ancestorIds =
+    Array.isArray(
+      organization.ancestorIds
+    )
+      ? organization.ancestorIds
+      : [];
+
+  /*
+   * A Ministry may target:
+   * - a Branch directly;
+   * - an Enterprise, which expands to all matching Branches below it;
+   * - a Region, which expands to all matching Branches below it.
+   *
+   * The generated report document itself is still always owned by the Branch.
+   */
   return (
-    sectorMatches &&
-    segmentMatches
+    targetIds.includes(
+      organizationId
+    ) ||
+    (
+      organization.rootEnterpriseId &&
+      targetIds.includes(
+        organization.rootEnterpriseId
+      )
+    ) ||
+    ancestorIds.some(
+      (ancestorId) =>
+        targetIds.includes(
+          ancestorId
+        )
+    )
   );
 };
 
 const getTargetOrganizations = async (
   template
 ) => {
+  /*
+   * The Admin SDK is not constrained by client Firestore rules, but the
+   * scheduler still queries only the canonical operational owner level.
+   */
   const snapshot =
     await db
       .collection(
         ORGANIZATIONS_COLLECTION
+      )
+      .where(
+        "type",
+        "==",
+        "branch"
       )
       .get();
 
@@ -761,82 +820,19 @@ const getTargetOrganizations = async (
     );
 };
 
-const getSubmitterUsers = async ({
-  organizationId,
-  submitterRole,
-}) => {
-  const snapshot =
-    await db
-      .collection(
-        USERS_COLLECTION
-      )
-      .where(
-        "organizationId",
-        "==",
-        organizationId
-      )
-      .get();
-
-  return snapshot.docs
-    .map((document) => ({
-      id:
-        document.id,
-
-      ...document.data(),
-    }))
-    .filter((user) => {
-      const userRole =
-        normalizeValue(
-          user.role ||
-          user.userRole
-        );
-
-      const userStatus =
-        normalizeStatus(
-          user.status
-        );
-
-      const userIsActive =
-        !userStatus ||
-        userStatus === "active";
-
-      return (
-        userRole ===
-          normalizeValue(
-            submitterRole
-          ) &&
-        userIsActive &&
-        user.onboardingCompleted !==
-          false
-      );
-    });
-};
-
 const buildReportTask = ({
   template,
   templateId,
   organization,
-  user,
   sendAt,
   deadlineAt,
   periodKey,
 }) => {
   const workflowStages =
-    buildWorkflowStages(
-      template
-    );
+    buildWorkflowStages();
 
   const submitterRole =
-    template
-      ?.approvalWorkflow
-      ?.submitterRole ||
-    workflowStages[0]?.role ||
-    "";
-
-  const userName =
-    user.fullName ||
-    user.name ||
-    "Unknown user";
+    REPORT_SUBMITTER_ROLE;
 
   return {
     formTemplateId:
@@ -856,6 +852,56 @@ const buildReportTask = ({
       )
         ? template.fields
         : [],
+
+    /*
+     * Preserve the reporting definition used when this obligation was created.
+     * Operators never need to reopen formTemplates to render an assigned task.
+     */
+    templateSnapshot: {
+      name:
+        template.name ||
+        "",
+
+      description:
+        template.description ||
+        "",
+
+      sector:
+        template.sector ||
+        "",
+
+      industrySegment:
+        template.industrySegment ||
+        "",
+
+      fields:
+        Array.isArray(
+          template.fields
+        )
+          ? template.fields
+          : [],
+
+      reportingFrequency:
+        template.reportingFrequency ||
+        {},
+
+      sendSchedule:
+        template.sendSchedule ||
+        {},
+
+      submissionDeadline:
+        template.submissionDeadline ||
+        {},
+
+      approvalWorkflow: {
+        enabled: true,
+        roles: [
+          ...REPORT_WORKFLOW_ROLES,
+        ],
+        submitterRole:
+          REPORT_SUBMITTER_ROLE,
+      },
+    },
 
     fieldValues: {},
 
@@ -972,7 +1018,6 @@ const buildReportTask = ({
 
     country:
       organization.country ||
-      user.country ||
       "",
 
     workflowStages,
@@ -985,18 +1030,24 @@ const buildReportTask = ({
     assignedRole:
       submitterRole,
 
+    /*
+     * Reporting Tasks are assigned to the current workflow role rather than to
+     * one specific person. This prevents duplicate obligations when a Branch
+     * has more than one Branch Admin and lets any authorized Branch Admin act.
+     */
     assignedUserId:
-      user.id,
+      "",
 
     assignedUserName:
-      userName,
+      "",
 
     assignedUserEmail:
-      user.email ||
       "",
 
     assignedTo:
-      userName,
+      APPROVAL_ROLE_LABELS[
+        submitterRole
+      ],
 
     status:
       "pending_submission",
@@ -1129,74 +1180,54 @@ const distributeTemplate = async ({
       template
     );
 
-  const submitterRole =
-    template
-      ?.approvalWorkflow
-      ?.submitterRole ||
-    template
-      ?.approvalWorkflow
-      ?.roles?.[0] ||
-    "";
-
   let createdCount = 0;
 
   for (
     const organization of
     organizations
   ) {
-    const submitterUsers =
-      await getSubmitterUsers({
-        organizationId:
-          organization.id,
-
-        submitterRole,
-      });
-
-    for (
-      const user of
-      submitterUsers
-    ) {
-      const reportId =
-        sanitizeDocumentId(
-          [
-            templateId,
-            organization.id,
-            user.id,
-            periodKey,
-          ].join("_")
-        );
-
-      const reportReference =
-        db
-          .collection(
-            REPORT_SUBMISSIONS_COLLECTION
-          )
-          .doc(reportId);
-
-      const reportSnapshot =
-        await reportReference.get();
-
-      if (
-        reportSnapshot.exists
-      ) {
-        continue;
-      }
-
-      await reportReference.set(
-        buildReportTask({
-          template,
+    /*
+     * One template + Branch + reporting period represents one reporting
+     * obligation. User IDs are deliberately excluded from the document ID.
+     */
+    const reportId =
+      sanitizeDocumentId(
+        [
           templateId,
-          organization,
-          user,
-          sendAt:
-            scheduledSendAt,
-          deadlineAt,
+          organization.id,
           periodKey,
-        })
+        ].join("_")
       );
 
-      createdCount += 1;
+    const reportReference =
+      db
+        .collection(
+          REPORT_SUBMISSIONS_COLLECTION
+        )
+        .doc(reportId);
+
+    const reportSnapshot =
+      await reportReference.get();
+
+    if (
+      reportSnapshot.exists
+    ) {
+      continue;
     }
+
+    await reportReference.set(
+      buildReportTask({
+        template,
+        templateId,
+        organization,
+        sendAt:
+          scheduledSendAt,
+        deadlineAt,
+        periodKey,
+      })
+    );
+
+    createdCount += 1;
   }
 
   const nextSendAt =
