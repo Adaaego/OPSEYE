@@ -8,7 +8,6 @@ import {
   Camera,
   ChevronRight,
   Clock3,
-  Globe,
   GripVertical,
   Landmark,
   ListPlus,
@@ -18,7 +17,6 @@ import {
   Send,
   Settings2,
   Trash2,
-  User,
   X,
 } from "lucide-react";
 
@@ -61,25 +59,17 @@ import {
  * These values are used by the circular workflow display.
  */
 const WORKFLOW_ROLE_DETAILS = {
-  enterprise_admin: {
-    label: "Enterprise Admin",
-    icon: Building2,
-  },
-  country_admin: {
-    label: "Country Admin",
-    icon: Globe,
+  branch_admin: {
+    label: "Branch Admin",
+    icon: Landmark,
   },
   region_admin: {
     label: "Region Admin",
     icon: MapPin,
   },
-  branch_admin: {
-    label: "Branch Admin",
-    icon: Landmark,
-  },
-  employee: {
-    label: "Employee",
-    icon: User,
+  enterprise_admin: {
+    label: "Enterprise Admin",
+    icon: Building2,
   },
   ministry: {
     label: "Ministry",
@@ -193,8 +183,12 @@ const FormBuilder = ({
         },
 
         approvalWorkflow: {
-          ...emptyForm.approvalWorkflow,
-          ...initialData.approvalWorkflow,
+          enabled: true,
+          roles: [
+            ...changes.DEFAULT_APPROVAL_WORKFLOW,
+          ],
+          submitterRole:
+            "branch_admin",
         },
 
         fields:
@@ -457,44 +451,12 @@ const FormBuilder = ({
     );
 
   /*
-   * Adds or removes a role from the workflow.
+   * Reporting follows one fixed organization workflow:
+   * Branch Admin → Region Admin → Enterprise Admin → Ministry.
    *
-   * The shared form handler automatically places selected roles
-   * in the correct employee-to-ministry hierarchy. Ministry is
-   * always retained as the final destination of the submission.
+   * The builder displays this sequence but does not allow a Ministry user to
+   * remove or reorder security-sensitive workflow stages.
    */
-  const handleWorkflowRoleToggle = (role) => {
-    if (role === "ministry") {
-      return;
-    }
-
-    const currentRoles =
-      formData.approvalWorkflow.roles || [];
-
-    const roleIsSelected =
-      currentRoles.includes(role);
-
-    const updatedRoles = roleIsSelected
-      ? currentRoles.filter(
-          (currentRole) =>
-            currentRole !== role
-        )
-      : [
-          ...currentRoles,
-          role,
-        ];
-
-    changes.setApprovalRoles(
-      [
-        ...updatedRoles.filter(
-          (currentRole) =>
-            currentRole !== "ministry"
-        ),
-        "ministry",
-      ],
-      setFormData
-    );
-  };
 
   /*
    * A field can only remain mapped while it is a number field.
@@ -1389,67 +1351,15 @@ const FormBuilder = ({
                 </h3>
 
                 <p className="mb-4 mt-1 text-xs text-slate-500">
-                  Select the roles the submission should pass through.
-                  Roles are automatically arranged from the person who
-                  fills the form up to the Ministry.
+                  Every operational report follows the same hierarchy. The
+                  Branch Admin fills and submits the report, the Region Admin
+                  reviews it, the Enterprise Admin completes the operator
+                  approval, and the Ministry receives the final report.
                 </p>
 
-                {/* Role selection */}
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {changes.FORM_SUBMISSION_ROLES.map(
-                    (role) => {
-                      const isSelected =
-                        formData.approvalWorkflow.roles.includes(
-                          role.value
-                        );
-
-                      const isMinistry =
-                        role.value === "ministry";
-
-                      return (
-                        <label
-                          key={role.value}
-                          className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 transition ${
-                            isSelected
-                              ? "border-navy-300 bg-navy-50"
-                              : "border-slate-200 bg-white hover:border-slate-300"
-                          } ${
-                            isMinistry
-                              ? "cursor-not-allowed"
-                              : "cursor-pointer"
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            disabled={isMinistry}
-                            onChange={() =>
-                              handleWorkflowRoleToggle(
-                                role.value
-                              )
-                            }
-                            className="h-4 w-4 rounded border-slate-300 text-navy-950 focus:ring-navy-300"
-                          />
-
-                          <span className="text-sm font-medium text-slate-700">
-                            {role.label}
-                          </span>
-
-                          {isMinistry && (
-                            <span className="ml-auto text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                              Required
-                            </span>
-                          )}
-                        </label>
-                      );
-                    }
-                  )}
-                </div>
-
-                {/* Circular approval flow */}
-                <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-5">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
                   <div className="flex flex-wrap items-start gap-2">
-                    {formData.approvalWorkflow.roles.map(
+                    {changes.DEFAULT_APPROVAL_WORKFLOW.map(
                       (role, index) => {
                         const roleDetails =
                           WORKFLOW_ROLE_DETAILS[role] || {
@@ -1461,7 +1371,10 @@ const FormBuilder = ({
                           roleDetails.icon;
 
                         const isSubmitter =
-                          index === 0;
+                          role === "branch_admin";
+
+                        const isMinistry =
+                          role === "ministry";
 
                         return (
                           <div
@@ -1488,11 +1401,16 @@ const FormBuilder = ({
                                   Fills and submits
                                 </span>
                               )}
+
+                              {isMinistry && (
+                                <span className="rounded-full bg-slate-200 px-2 py-1 text-center text-[10px] font-semibold text-slate-600">
+                                  Final recipient
+                                </span>
+                              )}
                             </div>
 
                             {index <
-                              formData.approvalWorkflow.roles
-                                .length -
+                              changes.DEFAULT_APPROVAL_WORKFLOW.length -
                                 1 && (
                               <ChevronRight className="mt-5 h-5 w-5 shrink-0 text-slate-400" />
                             )}
@@ -1501,13 +1419,6 @@ const FormBuilder = ({
                       }
                     )}
                   </div>
-
-                  {!formData.approvalWorkflow.roles
-                    .length && (
-                    <p className="text-center text-xs text-slate-400">
-                      Select at least one submitting role. Ministry will remain the final destination.
-                    </p>
-                  )}
                 </div>
               </section>
             </>

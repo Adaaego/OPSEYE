@@ -6,7 +6,6 @@ import {
   doc,
   getDoc,
   serverTimestamp,
-  setDoc,
   Timestamp,
   updateDoc,
 } from "firebase/firestore";
@@ -640,20 +639,12 @@ export const TARGET_AUDIENCE_TYPES = [
 
 export const FORM_SUBMISSION_ROLES = [
   {
-    value: "employee",
-    label: "Employee",
-  },
-  {
     value: "branch_admin",
     label: "Branch Admin",
   },
   {
     value: "region_admin",
     label: "Region Admin",
-  },
-  {
-    value: "country_admin",
-    label: "Country Admin",
   },
   {
     value: "enterprise_admin",
@@ -666,28 +657,21 @@ export const FORM_SUBMISSION_ROLES = [
 ];
 
 /*
- * This is the only valid workflow hierarchy.
+ * Reports are owned by the Branch throughout the workflow.
  *
- * Organization roles review and approve the report internally.
- * Ministry remains the final destination for submitted data,
- * but it does not approve the report.
+ * The Branch Admin fills and submits the report. The Region Admin reviews it,
+ * the Enterprise Admin performs the final operator approval/submission, and
+ * Ministry receives the completed report as the final read-only destination.
  */
 export const APPROVAL_ROLE_ORDER = [
-  "employee",
   "branch_admin",
   "region_admin",
-  "country_admin",
   "enterprise_admin",
   "ministry",
 ];
 
 export const DEFAULT_APPROVAL_WORKFLOW = [
-  "employee",
-  "branch_admin",
-  "region_admin",
-  "country_admin",
-  "enterprise_admin",
-  "ministry",
+  ...APPROVAL_ROLE_ORDER,
 ];
 
 export const FORM_FIELD_TYPES = [
@@ -813,7 +797,7 @@ export const createInitialFormData = () => ({
     roles: [
       ...DEFAULT_APPROVAL_WORKFLOW,
     ],
-    submitterRole: "employee",
+    submitterRole: "branch_admin",
   },
 
   fields: [
@@ -1342,45 +1326,35 @@ const validateFormTemplate = (
     );
   }
 
-  if (
-    !formData.approvalWorkflow
-      .roles.length
-  ) {
-    throw new Error(
-      "Please add at least one role to the submission workflow."
-    );
-  }
-
-  const orderedWorkflowRoles =
-    sortApprovalRoles(
+  const workflowRoles =
+    Array.isArray(
       formData.approvalWorkflow
-        .roles
-    );
+        ?.roles
+    )
+      ? formData.approvalWorkflow.roles
+      : [];
 
   const workflowIsInvalid =
-    orderedWorkflowRoles.length !==
-      formData.approvalWorkflow
-        .roles.length ||
-    orderedWorkflowRoles.some(
+    workflowRoles.length !==
+      DEFAULT_APPROVAL_WORKFLOW.length ||
+    DEFAULT_APPROVAL_WORKFLOW.some(
       (role, index) =>
-        role !==
-        formData.approvalWorkflow
-          .roles[index]
+        workflowRoles[index] !== role
     );
 
   if (workflowIsInvalid) {
     throw new Error(
-      "The approval workflow must follow the organization hierarchy."
+      "The reporting workflow must be Branch Admin → Region Admin → Enterprise Admin → Ministry."
     );
   }
 
   if (
     formData.approvalWorkflow
-      .submitterRole !==
-    orderedWorkflowRoles[0]
+      ?.submitterRole !==
+    "branch_admin"
   ) {
     throw new Error(
-      "The first role in the approval workflow must fill and submit the form."
+      "Branch Admin must be the report submitter."
     );
   }
 
@@ -1434,22 +1408,12 @@ const cleanFormData = (
         ?.trim() || "",
 
     approvalWorkflow: {
-      ...formData
-        .approvalWorkflow,
-
-      roles:
-        sortApprovalRoles(
-          formData
-            .approvalWorkflow
-            .roles
-        ),
-
+      enabled: true,
+      roles: [
+        ...DEFAULT_APPROVAL_WORKFLOW,
+      ],
       submitterRole:
-        getSubmitterRole(
-          formData
-            .approvalWorkflow
-            .roles
-        ),
+        "branch_admin",
     },
 
     fields:
@@ -1737,10 +1701,56 @@ const submitReportHandler = async ({
     );
   }
 
+  const submissionId =
+    report?.reportSubmissionId ||
+    report?.submissionId ||
+    (
+      report?.formTemplateId
+        ? report?.id
+        : ""
+    ) ||
+    "";
+
+  if (!submissionId) {
+    throw new Error(
+      "This report task was not created by the scheduler."
+    );
+  }
+
+  /*
+   * reportSubmissions are materialized reporting tasks created by the backend
+   * scheduler. The client may only advance an existing task; it must never
+   * create a new reportSubmissions document.
+   */
+  const submissionReference =
+    doc(
+      db,
+      REPORT_SUBMISSIONS_COLLECTION,
+      submissionId
+    );
+
+  const submissionSnapshot =
+    await getDoc(
+      submissionReference
+    );
+
+  if (!submissionSnapshot.exists()) {
+    throw new Error(
+      "The reporting task could not be found."
+    );
+  }
+
+  const storedReport = {
+    id: submissionSnapshot.id,
+    ...submissionSnapshot.data(),
+  };
+
   const formTemplateId =
+    storedReport.formTemplateId ||
+    storedReport.templateId ||
     report?.formTemplateId ||
     report?.templateId ||
-    report?.id;
+    "";
 
   if (!formTemplateId) {
     throw new Error(
@@ -1748,22 +1758,13 @@ const submitReportHandler = async ({
     );
   }
 
-  /*
-   * Resolve the organization from Firestore before writing the submission.
-   *
-   * The report object comes from the UI, so hierarchy/security metadata should
-   * not be trusted from that object alone. Reading the stored organization here
-   * gives every submission a consistent organizationId, parent/root hierarchy,
-   * sector and company context for later scoped queries and Firestore rules.
-   */
   const submissionOrganizationId =
-    report?.organizationId ||
-    userProfile?.organizationId ||
+    storedReport.organizationId ||
     "";
 
   if (!submissionOrganizationId) {
     throw new Error(
-      "The report is not linked to an organization."
+      "The report is not linked to a Branch organization."
     );
   }
 
@@ -1797,48 +1798,103 @@ const submitReportHandler = async ({
     );
   }
 
+  const storedOrganizationType =
+    normalizeStatusValue(
+      submissionOrganization.type ||
+        submissionOrganization.organizationType
+    );
+
+  if (
+    storedOrganizationType !==
+    "branch"
+  ) {
+    throw new Error(
+      "Operational reports must belong to a Branch organization."
+    );
+  }
+
   const workflowStages =
     Array.isArray(
-      report?.workflowStages
+      storedReport.workflowStages
     )
-      ? report.workflowStages
+      ? storedReport.workflowStages
       : [];
 
-  if (!workflowStages.length) {
+  const workflowRoles =
+    workflowStages.map(
+      (stage) =>
+        normalizeStatusValue(
+          stage?.role
+        )
+    );
+
+  const workflowIsInvalid =
+    workflowRoles.length !==
+      DEFAULT_APPROVAL_WORKFLOW.length ||
+    DEFAULT_APPROVAL_WORKFLOW.some(
+      (role, index) =>
+        workflowRoles[index] !== role
+    );
+
+  if (workflowIsInvalid) {
     throw new Error(
-      "This report does not have a valid workflow."
+      "This reporting task uses an invalid workflow. Expected Branch Admin → Region Admin → Enterprise Admin → Ministry."
     );
   }
 
   const currentStageIndex =
     Number.isInteger(
-      report?.currentStageIndex
+      storedReport.currentStageIndex
     )
-      ? report.currentStageIndex
+      ? storedReport.currentStageIndex
       : 0;
+
+  if (
+    currentStageIndex < 0 ||
+    currentStageIndex >=
+      workflowStages.length
+  ) {
+    throw new Error(
+      "This report has an invalid workflow stage."
+    );
+  }
 
   const currentStage =
     workflowStages[
       currentStageIndex
     ];
 
-  const currentUserRole =
-    String(
-      userProfile?.role ||
-        userProfile?.userRole ||
-        report?.assignedRole ||
-        ""
-    )
-      .trim()
-      .toLowerCase();
-
   const currentStageRole =
-    String(
+    normalizeStatusValue(
       currentStage?.role ||
-        ""
-    )
-      .trim()
-      .toLowerCase();
+      storedReport.currentStageRole
+    );
+
+  /*
+   * Ministry is the final read-only recipient. It never advances the operator
+   * workflow from the client.
+   */
+  if (
+    currentStageRole ===
+    "ministry"
+  ) {
+    throw new Error(
+      "This report has already reached the Ministry."
+    );
+  }
+
+  const currentUserRole =
+    normalizeStatusValue(
+      userProfile?.role ||
+      userProfile?.userRole ||
+      ""
+    );
+
+  const currentUserOrganizationId =
+    String(
+      userProfile?.organizationId ||
+      ""
+    ).trim();
 
   if (
     !currentUserRole ||
@@ -1846,20 +1902,72 @@ const submitReportHandler = async ({
       currentStageRole
   ) {
     throw new Error(
-      "You are not the person currently assigned to submit or review this report."
+      "Your role is not assigned to the current report stage."
+    );
+  }
+
+  if (!currentUserOrganizationId) {
+    throw new Error(
+      "Your account is not linked to an organization."
+    );
+  }
+
+  const branchOrganizationId =
+    submissionOrganizationId;
+
+  const regionOrganizationId =
+    String(
+      submissionOrganization.parentId ||
+      storedReport.parentOrganizationId ||
+      ""
+    ).trim();
+
+  const enterpriseOrganizationId =
+    String(
+      submissionOrganization.rootEnterpriseId ||
+      storedReport.rootEnterpriseId ||
+      ""
+    ).trim();
+
+  const actorHasStageScope =
+    (
+      currentStageRole ===
+        "branch_admin" &&
+      currentStageIndex === 0 &&
+      currentUserOrganizationId ===
+        branchOrganizationId
+    ) ||
+    (
+      currentStageRole ===
+        "region_admin" &&
+      currentStageIndex === 1 &&
+      currentUserOrganizationId ===
+        regionOrganizationId
+    ) ||
+    (
+      currentStageRole ===
+        "enterprise_admin" &&
+      currentStageIndex === 2 &&
+      currentUserOrganizationId ===
+        enterpriseOrganizationId
+    );
+
+  if (!actorHasStageScope) {
+    throw new Error(
+      "This report is outside your organization scope."
     );
   }
 
   if (
     isReportSubmissionClosed({
       status:
-        report?.status,
+        storedReport.status,
 
       submissionClosed:
-        report?.submissionClosed,
+        storedReport.submissionClosed,
 
       lateSubmissionAllowed:
-        report?.lateSubmissionAllowed,
+        storedReport.lateSubmissionAllowed,
     })
   ) {
     throw new Error(
@@ -1871,26 +1979,22 @@ const submitReportHandler = async ({
     Timestamp.now();
 
   const deadlineDate =
-    typeof report?.deadlineAt?.toDate ===
+    typeof storedReport
+      ?.deadlineAt
+      ?.toDate ===
     "function"
-      ? report.deadlineAt.toDate()
-      : report?.deadlineAt
+      ? storedReport.deadlineAt.toDate()
+      : storedReport?.deadlineAt
         ? new Date(
-            report.deadlineAt
+            storedReport.deadlineAt
           )
         : null;
 
   const currentReportStatus =
     normalizeStatusValue(
-      report?.status
+      storedReport.status
     );
 
-  /*
-   * Lateness is determined when the operator first submits the report.
-   *
-   * Later internal approvals preserve the original late flag instead of
-   * recalculating lateness from the reviewer's approval timestamp.
-   */
   const isInitialSubmission =
     currentStageIndex === 0;
 
@@ -1904,50 +2008,39 @@ const submitReportHandler = async ({
     );
 
   const wasSubmittedLate =
-    report?.wasSubmittedLate ===
+    storedReport.wasSubmittedLate ===
       true ||
     (
       isInitialSubmission &&
       deadlineWasMissed
     );
 
-  validateReportResponses(
-    report,
-    fieldValues
-  );
+  /*
+   * Only the Branch Admin may create or change report answers. Region and
+   * Enterprise stages approve the stored Branch submission without rewriting it.
+   */
+  let cleanedResponses =
+    storedReport.fieldValues &&
+    typeof storedReport.fieldValues ===
+      "object"
+      ? storedReport.fieldValues
+      : {};
 
-  const cleanedResponses =
-    cleanReportResponses(
-      report,
+  if (isInitialSubmission) {
+    validateReportResponses(
+      storedReport,
       fieldValues
     );
 
-  const ministryStageIndex =
-    workflowStages.findIndex(
-      (stage) =>
-        String(
-          stage?.role || ""
-        )
-          .trim()
-          .toLowerCase() ===
-        "ministry"
-    );
-
-  const lastOrganizationStageIndex =
-    ministryStageIndex > -1
-      ? ministryStageIndex - 1
-      : workflowStages.length - 1;
-
-  const isFinalOrganizationStage =
-    currentStageIndex >=
-    lastOrganizationStageIndex;
+    cleanedResponses =
+      cleanReportResponses(
+        storedReport,
+        fieldValues
+      );
+  }
 
   const nextStageIndex =
-    isFinalOrganizationStage
-      ? ministryStageIndex > -1
-        ? ministryStageIndex
-        : currentStageIndex
-      : currentStageIndex + 1;
+    currentStageIndex + 1;
 
   const nextStage =
     workflowStages[
@@ -1955,18 +2048,17 @@ const submitReportHandler = async ({
     ];
 
   const hasReachedMinistry =
-    isFinalOrganizationStage;
+    normalizeStatusValue(
+      nextStage?.role
+    ) === "ministry";
 
-  const submittedAt =
-    submissionMoment;
-
-  const submitterName =
+  const actorName =
     userProfile?.fullName ||
     userProfile?.name ||
     currentUser.displayName ||
     "Unknown user";
 
-  const submitterEmail =
+  const actorEmail =
     userProfile?.email ||
     currentUser.email ||
     "";
@@ -1977,7 +2069,7 @@ const submitReportHandler = async ({
         ? wasSubmittedLate
           ? "submitted_late_to_ministry"
           : "submitted_to_ministry"
-        : currentStageIndex === 0
+        : isInitialSubmission
           ? wasSubmittedLate
             ? "submitted_late"
             : "submitted"
@@ -1987,10 +2079,10 @@ const submitReportHandler = async ({
       currentUser.uid,
 
     userName:
-      submitterName,
+      actorName,
 
     userEmail:
-      submitterEmail,
+      actorEmail,
 
     role:
       currentUserRole,
@@ -2003,150 +2095,43 @@ const submitReportHandler = async ({
       currentStageRole,
 
     timestamp:
-      submittedAt,
+      submissionMoment,
   };
 
-  const submissionId =
-    report?.reportSubmissionId ||
-    report?.submissionId ||
-    "";
+  const originalSubmittedBy =
+    isInitialSubmission
+      ? currentUser.uid
+      : storedReport.submittedBy ||
+        "";
 
-  const submissionReference =
-    submissionId
-      ? doc(
-          db,
-          REPORT_SUBMISSIONS_COLLECTION,
-          submissionId
-        )
-      : doc(
-          collection(
-            db,
-            REPORT_SUBMISSIONS_COLLECTION
-          )
-        );
+  const originalSubmittedByName =
+    isInitialSubmission
+      ? actorName
+      : storedReport.submittedByName ||
+        "";
 
-  const storedAncestorIds =
-    Array.isArray(
-      submissionOrganization.ancestorIds
-    )
-      ? submissionOrganization.ancestorIds
-      : [];
+  const originalSubmittedByEmail =
+    isInitialSubmission
+      ? actorEmail
+      : storedReport.submittedByEmail ||
+        "";
 
-  const storedOrganizationType =
-    normalizeStatusValue(
-      submissionOrganization.type ||
-        submissionOrganization.organizationType
-    );
+  const originalSubmittedByRole =
+    isInitialSubmission
+      ? "branch_admin"
+      : storedReport.submittedByRole ||
+        "branch_admin";
 
-  const sharedSubmissionData = {
-    formTemplateId,
+  const originalSubmittedAt =
+    isInitialSubmission
+      ? submissionMoment
+      : storedReport.submittedAt ||
+        storedReport.submissionTime ||
+        submissionMoment;
 
-    reportName:
-      report?.reportName ||
-      report?.name ||
-      "",
-
-    description:
-      report?.description ||
-      "",
-
-    fields:
-      Array.isArray(
-        report?.fields
-      )
-        ? report.fields
-        : [],
-
+  const submissionUpdates = {
     fieldValues:
       cleanedResponses,
-
-    /*
-     * Hierarchy metadata is copied from the stored organization, not from
-     * editable UI state. This makes Ministry/Enterprise/Region/Branch reads
-     * queryable and gives the future security rules stable fields to verify.
-     */
-    organizationId:
-      submissionOrganizationId,
-
-    parentOrganizationId:
-      submissionOrganization.parentId ||
-      "",
-
-    rootEnterpriseId:
-      submissionOrganization.rootEnterpriseId ||
-      (
-        storedOrganizationType ===
-        "enterprise"
-          ? submissionOrganizationId
-          : ""
-      ),
-
-    ancestorIds:
-      storedAncestorIds,
-
-    companyId:
-      submissionOrganization.companyId ||
-      "",
-
-    regionId:
-      submissionOrganization.regionId ||
-      "",
-
-    sector:
-      submissionOrganization.sector ||
-      report?.sector ||
-      userProfile?.sector ||
-      "",
-
-    industrySegment:
-      submissionOrganization.industrySegment ||
-      report?.industrySegment ||
-      userProfile?.industrySegment ||
-      "",
-
-    organizationType:
-      submissionOrganization.type ||
-      submissionOrganization.organizationType ||
-      "",
-
-    operatorName:
-      report?.operatorName ||
-      report
-        ?.organizationName ||
-      "",
-
-    normalizedName:
-      report?.normalizedName ||
-      report
-        ?.companyNormalizedName ||
-      report
-        ?.organizationNormalizedName ||
-      "",
-
-    branchName:
-      report?.branchName ||
-      report?.branch ||
-      "",
-
-    regionName:
-      report?.regionName ||
-      report?.region ||
-      "",
-
-    country:
-      report?.country ||
-      userProfile?.country ||
-      "",
-
-    reportingDate:
-      report?.reportingDate ||
-      "",
-
-    dueTime:
-      report?.dueTime ||
-      "",
-
-    workflowStages,
 
     currentStageIndex:
       nextStageIndex,
@@ -2154,14 +2139,25 @@ const submitReportHandler = async ({
     currentStageRole:
       hasReachedMinistry
         ? "ministry"
-        : nextStage?.role ||
-          "",
+        : normalizeStatusValue(
+            nextStage?.role
+          ),
 
     assignedRole:
       hasReachedMinistry
         ? ""
-        : nextStage?.role ||
-          "",
+        : normalizeStatusValue(
+            nextStage?.role
+          ),
+
+    assignedUserId:
+      "",
+
+    assignedUserName:
+      "",
+
+    assignedUserEmail:
+      "",
 
     assignedTo:
       hasReachedMinistry
@@ -2177,10 +2173,6 @@ const submitReportHandler = async ({
           : REPORT_TASK_STATUSES.submitted
         : REPORT_TASK_STATUSES.underReview,
 
-    /*
-     * The deadline marks timeliness; it does not permanently close the
-     * report. Workflow status makes submitted reports read-only in the UI.
-     */
     submissionClosed:
       false,
 
@@ -2191,13 +2183,13 @@ const submitReportHandler = async ({
 
     lateSubmittedAt:
       wasSubmittedLate
-        ? report?.lateSubmittedAt ||
-          serverTimestamp()
+        ? storedReport.lateSubmittedAt ||
+          (
+            isInitialSubmission
+              ? submissionMoment
+              : null
+          )
         : null,
-
-    deadlineAt:
-      report?.deadlineAt ||
-      null,
 
     organizationApprovalCompleted:
       hasReachedMinistry,
@@ -2208,68 +2200,45 @@ const submitReportHandler = async ({
     availableToMinistry:
       hasReachedMinistry,
 
+    /*
+     * These fields always identify the original Branch submission. Reviewer
+     * identity is captured in workflowHistory and updatedBy instead.
+     */
     submittedBy:
-      currentUser.uid,
+      originalSubmittedBy,
 
     submittedByName:
-      submitterName,
+      originalSubmittedByName,
 
     submittedByEmail:
-      submitterEmail,
+      originalSubmittedByEmail,
 
     submittedByRole:
-      currentUserRole,
+      originalSubmittedByRole,
 
-    /*
-     * Preserve the operator's first submission timestamp while reviewers
-     * move the report through the remaining workflow stages.
-     */
     submittedAt:
-      report?.submittedAt ||
-      report?.submissionTime ||
-      serverTimestamp(),
+      originalSubmittedAt,
 
     updatedBy:
       currentUser.uid,
 
     updatedAt:
       serverTimestamp(),
+
+    workflowHistory:
+      arrayUnion(
+        historyEntry
+      ),
   };
 
-  if (submissionId) {
-    await updateDoc(
-      submissionReference,
-      {
-        ...sharedSubmissionData,
-
-        workflowHistory:
-          arrayUnion(
-            historyEntry
-          ),
-      }
-    );
-  } else {
-    await setDoc(
-      submissionReference,
-      {
-        ...sharedSubmissionData,
-
-        createdBy:
-          currentUser.uid,
-
-        createdAt:
-          serverTimestamp(),
-
-        workflowHistory: [
-          historyEntry,
-        ],
-      }
-    );
-  }
+  await updateDoc(
+    submissionReference,
+    submissionUpdates
+  );
 
   return {
-    ...report,
-    ...sharedSubmissionData,
+    ...storedReport,
+    ...submissionUpdates,
 
     id:
       submissionReference.id,
@@ -2282,9 +2251,9 @@ const submitReportHandler = async ({
 
     workflowHistory: [
       ...(Array.isArray(
-        report?.workflowHistory
+        storedReport.workflowHistory
       )
-        ? report.workflowHistory
+        ? storedReport.workflowHistory
         : []),
 
       historyEntry,
