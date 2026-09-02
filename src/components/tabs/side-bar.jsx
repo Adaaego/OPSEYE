@@ -18,6 +18,7 @@ import {
   X,
   ChevronLeft,
   Settings,
+  Store,
 } from "lucide-react";
 import { Button } from "../ui/Button";
 
@@ -273,6 +274,9 @@ const SideBar = ({
   const isMinistry =
     organizationCategory === "ministry";
 
+  const isRegion =
+    organizationType === "region";
+
   const isBranch =
     organizationType === "branch";
 
@@ -288,16 +292,31 @@ const SideBar = ({
     }
 
     /*
-     * A branch is the leaf organization level. Its own Operator Detail already
-     * provides the branch-level operational view, so Regions adds no useful
-     * navigation and is removed from both desktop and mobile menus.
+     * The same hierarchy page adapts to the signed-in level:
+     * - Ministry / Enterprise: Regions
+     * - Region: Branches
+     * - Branch: no child-hierarchy page
+     *
+     * Keep the route id as "regions" because the Regions component already
+     * renders Branch Performance for Region accounts.
      */
+    const hierarchyAwareItems =
+      BASE_NAV_ITEMS.map((item) =>
+        item.id === "regions" && isRegion
+          ? {
+              ...item,
+              label: "Branches",
+              icon: Store,
+            }
+          : item
+      );
+
     const baseNavigationItems =
       isBranch
-        ? BASE_NAV_ITEMS.filter(
+        ? hierarchyAwareItems.filter(
             (item) => item.id !== "regions"
           )
-        : BASE_NAV_ITEMS;
+        : hierarchyAwareItems;
 
     const accountSpecificItem =
       isMinistry
@@ -331,6 +350,7 @@ const SideBar = ({
   }, [
     isBranch,
     isMinistry,
+    isRegion,
     loadingOrganization,
   ]);
 

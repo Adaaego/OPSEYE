@@ -29,12 +29,12 @@ import {
 import { auth } from "../../firebase/firebase";
 import {
   getOrganizationDocument,
-  getOrganizationUsers,
   getUserDocument,
   updateUserDocument,
 } from "../../lib/functions";
 import {
   getOrganizationMember,
+  getOrganizationMembers,
   updateOrganizationMemberProfile,
 } from "../../lib/organization-member-functions";
 import { getOrganizationDescendants } from "../../lib/organization-functions";
@@ -841,23 +841,55 @@ const AccountSettings = ({ roles = [] }) => {
         throw new Error("We could not find the signed-in user.");
       }
 
-      const userDocument = await getUserDocument(currentUser.uid);
+      /*
+       * users/{uid} owns the signed-in person's private profile and security
+       * preferences. organizationMembers/{uid} is the source of truth for
+       * organization access, hierarchy and role.
+       */
+      const [userDocument, organizationMember] = await Promise.all([
+        getUserDocument(currentUser.uid),
+        getOrganizationMember(currentUser.uid),
+      ]);
 
       if (!userDocument) {
         throw new Error("Your user profile could not be found.");
       }
 
-      const loadedProfile = {
-        ...userDocument,
-        email: userDocument.email || currentUser.email || "",
-      };
+      if (!organizationMember) {
+        throw new Error("Your organization membership could not be found.");
+      }
 
-      if (!loadedProfile.organizationId) {
+      if (!organizationMember.organizationId) {
         throw new Error("Your account is not linked to an organization.");
       }
 
+      const loadedProfile = {
+        ...userDocument,
+        uid: userDocument.uid || currentUser.uid,
+        email:
+          userDocument.email ||
+          organizationMember.email ||
+          currentUser.email ||
+          "",
+        organizationId: organizationMember.organizationId,
+        role: organizationMember.role || "",
+        teamIds: Array.isArray(organizationMember.teamIds)
+          ? organizationMember.teamIds
+          : [],
+        rootEnterpriseId: organizationMember.rootEnterpriseId || "",
+        ancestorIds: Array.isArray(organizationMember.ancestorIds)
+          ? organizationMember.ancestorIds
+          : [],
+        regionId: organizationMember.regionId || "",
+        organizationType:
+          organizationMember.organizationType ||
+          organizationMember.organizationLevel ||
+          "",
+        status: organizationMember.status || "active",
+      };
+
       const currentOrganization = await getOrganizationDocument(
-        loadedProfile.organizationId
+        organizationMember.organizationId
       );
 
       if (!currentOrganization) {
@@ -908,11 +940,11 @@ const AccountSettings = ({ roles = [] }) => {
       }
 
       /*
-       * Users with the same organizationId share the organization dashboard.
-       * teamIds describe collaboration groups, while organizationId remains the
-       * source of dashboard access and data scope.
+       * Team and organization administration uses the hierarchy-readable
+       * organizationMembers directory. Other users' private users/{uid}
+       * documents are never loaded for team management.
        */
-      const organizationUsers = await getOrganizationUsers(
+      const organizationUsers = await getOrganizationMembers(
         normalizedOrganization.organizationId
       );
 
@@ -921,16 +953,6 @@ const AccountSettings = ({ roles = [] }) => {
         {
           includeArchived: true,
         }
-      );
-
-      const ancestorIds = Array.isArray(normalizedOrganization.ancestorIds)
-        ? normalizedOrganization.ancestorIds
-        : [];
-
-      const ancestorOrganizations = await Promise.all(
-        ancestorIds.map((organizationId) =>
-          getOrganizationDocument(organizationId)
-        )
       );
 
       /*
@@ -965,8 +987,12 @@ const AccountSettings = ({ roles = [] }) => {
 
       const hierarchyOrganizationMap = new Map();
 
+      /*
+       * Account Settings only needs the signed-in organization and organizations
+       * below it. Region accounts must not read Enterprise ancestors simply to
+       * render Branch administration.
+       */
       [
-        ...ancestorOrganizations.filter(Boolean),
         normalizedOrganization,
         ...descendants,
       ].forEach((organizationItem) => {
@@ -1102,7 +1128,10 @@ const AccountSettings = ({ roles = [] }) => {
       setTeamMembers(
         organizationUsers.map((member) => ({
           ...member,
-          hierarchyLevel: normalizedOrganization.type,
+          hierarchyLevel:
+            member.organizationType ||
+            member.organizationLevel ||
+            normalizedOrganization.type,
           status: member.status || "active",
         }))
       );
@@ -1188,7 +1217,9 @@ const AccountSettings = ({ roles = [] }) => {
 
   const organizationType = normalizeText(organization?.type);
 
-  const isMinistryContext = organizationType === "ministry";
+  const isMinistryContext =
+    organizationType === "ministry" ||
+    getOrganizationCategory(organization) === "ministry";
 
   const isEnterpriseContext = organizationType === "enterprise";
 
