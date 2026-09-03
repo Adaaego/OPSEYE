@@ -660,7 +660,7 @@ const loadScopedOrganizations = async (organizationId) => {
     }
     else if (organizationLevel ===
         "region") {
-        const descendantsSnapshot = await getDocs(query(collection(db, ORGANIZATIONS_COLLECTION), where("ancestorIds", "array-contains", organizationId)));
+        const descendantsSnapshot = await getDocs(query(collection(db, ORGANIZATIONS_COLLECTION), where("parentId", "==", organizationId)));
         scopedOrganizations =
             snapshotDocuments(descendantsSnapshot);
     }
@@ -696,7 +696,7 @@ const getScopedReportReferences = (organization) => {
     if (organizationLevel ===
         "region") {
         return [
-            query(collection(db, REPORT_SUBMISSIONS_COLLECTION), where("ancestorIds", "array-contains", organizationId)),
+            query(collection(db, REPORT_SUBMISSIONS_COLLECTION), where("parentOrganizationId", "==", organizationId)),
         ];
     }
     return [
@@ -727,7 +727,7 @@ const getScopedWorkforceReferences = (organization) => {
         "region") {
         return [
             query(collection(db, WORKFORCE_COLLECTION), where("organizationId", "==", organizationId)),
-            query(collection(db, WORKFORCE_COLLECTION), where("ancestorIds", "array-contains", organizationId)),
+            query(collection(db, WORKFORCE_COLLECTION), where("parentId", "==", organizationId)),
         ];
     }
     return [
