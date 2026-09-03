@@ -680,7 +680,7 @@ const getScopedOrganizationReferences = (organization) => {
       doc(db, ORGANIZATIONS_COLLECTION, organizationId),
       query(
         collection(db, ORGANIZATIONS_COLLECTION),
-        where("ancestorIds", "array-contains", organizationId)
+        where("parentId", "==", organizationId)
       ),
     ];
   }
@@ -725,7 +725,7 @@ const getScopedReportReferences = (organization) => {
     return [
       query(
         collection(db, REPORT_SUBMISSIONS_COLLECTION),
-        where("ancestorIds", "array-contains", organizationId)
+        where("parentOrganizationId", "==", organizationId)
       ),
     ];
   }
@@ -778,7 +778,7 @@ const getScopedWorkforceReferences = (organization) => {
       ),
       query(
         collection(db, WORKFORCE_COLLECTION),
-        where("ancestorIds", "array-contains", organizationId)
+        where("parentId", "==", organizationId)
       ),
     ];
   }
@@ -1192,8 +1192,8 @@ const Overviews = () => {
             }
 
             /*
-             * Keep the current organization in memory even when the scoped query
-             * does not return it, such as a Region using ancestorIds for children.
+             * Keep the current organization in memory even when a scoped collection
+             * query returns only the organizations below the current account.
              */
             setOrganizations(
               mergeDocumentLists([
@@ -1234,7 +1234,7 @@ const Overviews = () => {
   /*
    * Operational data is queried with the same hierarchy predicates used by the
    * rules: Ministry -> sector, Enterprise -> rootEnterpriseId,
-   * Region -> ancestorIds, Branch -> organizationId.
+   * Region -> direct parent relationship, Branch -> organizationId.
    */
   useEffect(() => {
     if (!currentMember || organizations.length === 0) {
