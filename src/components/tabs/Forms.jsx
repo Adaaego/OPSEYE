@@ -46,10 +46,15 @@ import { Button } from "../ui/Button";
 
 import {
   collection,
+  doc,
   onSnapshot,
-  orderBy,
   query,
+  where,
 } from "firebase/firestore";
+
+import {
+  onAuthStateChanged,
+} from "firebase/auth";
 
 import {
   auth,
@@ -273,27 +278,47 @@ const Forms = ({
   const [formsLoadError, setFormsLoadError] =
     useState("");
 
+  const [ministrySector, setMinistrySector] =
+    useState("");
+
   /*
-   * Forms are loaded directly from Firestore so the table
-   * always reflects the backend after a refresh.
+   * Forms are Ministry-owned configuration.
    *
-   * onSnapshot also keeps the page updated when a form is
-   * created or edited elsewhere.
+   * Firestore rules are not filters, so the Forms page must query the exact
+   * Ministry sector instead of reading every formTemplates document and
+   * filtering in React.
    */
   useEffect(() => {
-    const formsQuery = query(
-      collection(
-        db,
-        "formTemplates"
-      ),
-      orderBy(
-        "updatedAt",
-        "desc"
-      )
-    );
+    let unsubscribeMember = () => {};
+    let unsubscribeOrganization = () => {};
+    let unsubscribeForms = () => {};
 
-    const unsubscribe =
-      onSnapshot(
+    const stopScopedListeners = () => {
+      unsubscribeMember();
+      unsubscribeOrganization();
+      unsubscribeForms();
+
+      unsubscribeMember = () => {};
+      unsubscribeOrganization = () => {};
+      unsubscribeForms = () => {};
+    };
+
+    const subscribeToForms = (sector) => {
+      unsubscribeForms();
+
+      const formsQuery = query(
+        collection(
+          db,
+          "formTemplates"
+        ),
+        where(
+          "sector",
+          "==",
+          sector
+        )
+      );
+
+      unsubscribeForms = onSnapshot(
         formsQuery,
         (snapshot) => {
           const backendForms =
@@ -327,6 +352,7 @@ const Forms = ({
             error
           );
 
+          setForms([]);
           setFormsLoading(false);
           setFormsLoadError(
             error.message ||
@@ -334,9 +360,171 @@ const Forms = ({
           );
         }
       );
+    };
+
+    const unsubscribeAuth =
+      onAuthStateChanged(
+        auth,
+        (currentUser) => {
+          stopScopedListeners();
+
+          if (!currentUser?.uid) {
+            setForms([]);
+            setMinistrySector("");
+            setFormsLoading(false);
+            setFormsLoadError(
+              "Please sign in to manage forms."
+            );
+            return;
+          }
+
+          setFormsLoading(true);
+          setFormsLoadError("");
+
+          unsubscribeMember =
+            onSnapshot(
+              doc(
+                db,
+                "organizationMembers",
+                currentUser.uid
+              ),
+              (memberSnapshot) => {
+                if (!memberSnapshot.exists()) {
+                  setForms([]);
+                  setMinistrySector("");
+                  setFormsLoading(false);
+                  setFormsLoadError(
+                    "Your organization membership could not be found."
+                  );
+                  return;
+                }
+
+                const member =
+                  memberSnapshot.data();
+
+                const organizationId =
+                  member.organizationId ||
+                  "";
+
+                if (!organizationId) {
+                  setForms([]);
+                  setMinistrySector("");
+                  setFormsLoading(false);
+                  setFormsLoadError(
+                    "Your account is not linked to a Ministry organization."
+                  );
+                  return;
+                }
+
+                unsubscribeOrganization();
+
+                unsubscribeOrganization =
+                  onSnapshot(
+                    doc(
+                      db,
+                      "organizations",
+                      organizationId
+                    ),
+                    (organizationSnapshot) => {
+                      if (!organizationSnapshot.exists()) {
+                        setForms([]);
+                        setMinistrySector("");
+                        setFormsLoading(false);
+                        setFormsLoadError(
+                          "Your Ministry organization could not be found."
+                        );
+                        return;
+                      }
+
+                      const organization =
+                        organizationSnapshot.data();
+
+                      const organizationType =
+                        normalizeStatus(
+                          organization.type ||
+                            organization.organizationType
+                        );
+
+                      const organizationCategory =
+                        normalizeStatus(
+                          organization.organizationCategory ||
+                            organization.category
+                        );
+
+                      if (
+                        organizationType !== "ministry" &&
+                        organizationCategory !== "ministry"
+                      ) {
+                        setForms([]);
+                        setMinistrySector("");
+                        setFormsLoading(false);
+                        setFormsLoadError(
+                          "Forms can only be managed from a Ministry account."
+                        );
+                        return;
+                      }
+
+                      const sector =
+                        String(
+                          organization.sector ||
+                            ""
+                        ).trim();
+
+                      if (!sector) {
+                        setForms([]);
+                        setMinistrySector("");
+                        setFormsLoading(false);
+                        setFormsLoadError(
+                          "Your Ministry organization is missing its sector."
+                        );
+                        return;
+                      }
+
+                      setMinistrySector(
+                        sector
+                      );
+
+                      subscribeToForms(
+                        sector
+                      );
+                    },
+                    (error) => {
+                      console.error(
+                        "Unable to load Ministry organization:",
+                        error
+                      );
+
+                      setForms([]);
+                      setMinistrySector("");
+                      setFormsLoading(false);
+                      setFormsLoadError(
+                        error.message ||
+                          "Your Ministry organization could not be loaded."
+                      );
+                    }
+                  );
+              },
+              (error) => {
+                console.error(
+                  "Unable to load organization membership:",
+                  error
+                );
+
+                setForms([]);
+                setMinistrySector("");
+                setFormsLoading(false);
+                setFormsLoadError(
+                  error.message ||
+                    "Your organization membership could not be loaded."
+                );
+              }
+            );
+        }
+      );
 
     return () => {
-      unsubscribe();
+      unsubscribeAuth();
+      stopScopedListeners();
     };
   }, []);
 
@@ -566,7 +754,10 @@ const Forms = ({
   };
 
   const openNewForm = () => {
-    setEditingForm(null);
+    setEditingForm({
+      sector:
+        ministrySector,
+    });
     setBuilderOpen(true);
   };
 
@@ -997,8 +1188,7 @@ const Forms = ({
 
                     <SortHeader
                       label="Target Audience"
-                      column="targetAudience"
-                      sortKey={sortKey}
+                      column="targetAudience"sortKey={sortKey}
                       sortDirection={
                         sortDirection
                       }

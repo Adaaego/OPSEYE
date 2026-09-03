@@ -323,6 +323,14 @@ const loadScopedOrganizations = async (
   return [organization];
 };
 
+/*
+ * Reporting tasks are Branch-owned throughout the approval workflow.
+ *
+ * Each task carries the Branch hierarchy snapshot written by the scheduler:
+ * parentOrganizationId for Region scope and rootEnterpriseId for Enterprise
+ * scope. Queries use those fields directly so Firestore can prove access from
+ * the same hierarchy metadata enforced by the security rules.
+ */
 const getReportReferences = (
   organization,
   currentUserRole
@@ -353,13 +361,13 @@ const getReportReferences = (
 
   if (
     organizationLevel ===
-    "enterprise"
+    "branch"
   ) {
     return [
       query(
         reportCollection,
         where(
-          "rootEnterpriseId",
+          "organizationId",
           "==",
           organizationId
         ),
@@ -395,13 +403,13 @@ const getReportReferences = (
 
   if (
     organizationLevel ===
-    "branch"
+    "enterprise"
   ) {
     return [
       query(
         reportCollection,
         where(
-          "organizationId",
+          "rootEnterpriseId",
           "==",
           organizationId
         ),

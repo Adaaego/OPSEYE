@@ -44,6 +44,9 @@ const INVITATIONS_COLLECTION =
 const DEFAULT_TIMEZONE =
   "Africa/Accra";
 
+const SCHEDULER_VERSION =
+  "report-hierarchy-2026-09-03-v1";
+
 const REPORT_WORKFLOW_ROLES = [
   "branch_admin",
   "region_admin",
@@ -1310,6 +1313,14 @@ exports.sendScheduledForms =
       timeoutSeconds: 540,
     },
     async () => {
+      logger.info(
+        "sendScheduledForms running",
+        {
+          version:
+            SCHEDULER_VERSION,
+        }
+      );
+
       const now =
         new Date();
 

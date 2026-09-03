@@ -119,6 +119,18 @@ const SUBMITTED_REPORT_STATUSES =
     "passed",
   ]);
 
+/*
+ * A Branch submission is "received" for timeliness/compliance as soon as the
+ * Branch submits it, but it is not a completed Submitted Report until the
+ * operator approval workflow has finished.
+ */
+const FINAL_REPORT_STATUSES =
+  new Set([
+    "approved",
+    "closed",
+    "passed",
+  ]);
+
 const EXCLUDED_COMPLIANCE_STATUSES =
   new Set([
     "cancelled",
@@ -2040,6 +2052,53 @@ const isReportSubmitted = (
   );
 };
 
+/*
+ * Submitted Reports are final operator submissions only.
+ *
+ * submittedAt records the Branch's original submission time and therefore
+ * remains useful for timeliness/compliance while Region and Enterprise review
+ * are still in progress. Do not use submittedAt alone to populate this page.
+ */
+const isReportFinalized = (
+  report
+) => {
+  const status =
+    normalizeStatus(
+      report?.status
+    );
+
+  const stageRole =
+    normalizeStatus(
+      report?.currentStageRole ||
+        report?.assignedRole ||
+        ""
+    );
+
+  return (
+    (
+      report
+        ?.organizationApprovalCompleted ===
+        true &&
+      report
+        ?.availableToMinistry ===
+        true
+    ) ||
+    (
+      stageRole ===
+        "ministry" &&
+      [
+        "submitted",
+        "submitted_late",
+      ].includes(
+        status
+      )
+    ) ||
+    FINAL_REPORT_STATUSES.has(
+      status
+    )
+  );
+};
+
 const isReportSubmittedLate = (
   report
 ) => {
@@ -3693,14 +3752,11 @@ const getScopedOrganizationReferences = (
 };
 
 /*
- * Operational collections use the same canonical hierarchy fields enforced by
- * Firestore Rules. The browser never enumerates descendant organization IDs to
- * manufacture an access scope.
+ * Reports remain Branch-owned from initial submission through final approval.
  *
- * Ministry   -> sector
- * Enterprise -> rootEnterpriseId
- * Region     -> parentOrganizationId
- * Branch     -> organizationId
+ * Ministry scopes by sector and Branch scopes by its own organizationId.
+ * Regional and Enterprise accounts use the hierarchy snapshot stored directly
+ * on each report so Firestore can prove the parent/descendant relationship.
  */
 const getScopedReportReferences = (
   organization
@@ -3755,7 +3811,7 @@ const getScopedReportReferences = (
 
   if (
     organizationLevel ===
-    "enterprise"
+    "branch"
   ) {
     return [
       query(
@@ -3764,7 +3820,7 @@ const getScopedReportReferences = (
           REPORT_SUBMISSIONS_COLLECTION
         ),
         where(
-          "rootEnterpriseId",
+          "organizationId",
           "==",
           organizationId
         )
@@ -3791,19 +3847,26 @@ const getScopedReportReferences = (
     ];
   }
 
-  return [
-    query(
-      collection(
-        db,
-        REPORT_SUBMISSIONS_COLLECTION
+  if (
+    organizationLevel ===
+    "enterprise"
+  ) {
+    return [
+      query(
+        collection(
+          db,
+          REPORT_SUBMISSIONS_COLLECTION
+        ),
+        where(
+          "rootEnterpriseId",
+          "==",
+          organizationId
+        )
       ),
-      where(
-        "organizationId",
-        "==",
-        organizationId
-      )
-    ),
-  ];
+    ];
+  }
+
+  return [];
 };
 
 /*
@@ -4900,7 +4963,7 @@ const Reports = ({
   const submittedReports =
     useMemo(() => {
       return scopedReports.filter(
-        isReportSubmitted
+        isReportFinalized
       );
     }, [scopedReports]);
 
@@ -5413,9 +5476,9 @@ const Reports = ({
   /*
    * The current breakdown answers what needs attention now.
    *
-   * Submitted includes both on-time and late submissions because the report
-   * has been received. Overdue contains unsubmitted obligations whose
-   * deadline has passed. Pending contains open obligations that are not due.
+   * Submitted means the full Branch -> Region -> Enterprise workflow is
+   * complete. Reports still at Region or Enterprise review remain Pending even
+   * when the Branch submission deadline has already passed.
    */
   const currentSubmissionBreakdown =
     useMemo(() => {
@@ -5444,11 +5507,24 @@ const Reports = ({
           }
 
           if (
-            isReportSubmitted(
+            isReportFinalized(
               report
             )
           ) {
             totals.submitted +=
+              1;
+            return;
+          }
+
+          if (
+            [
+              "under_review",
+              "pending_review",
+            ].includes(
+              status
+            )
+          ) {
+            totals.pending +=
               1;
             return;
           }

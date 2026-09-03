@@ -242,11 +242,26 @@ export const createDefaultOrganizationTeam = async ({
   requireValue(createdBy, "The user creating the default team is required.");
 
   const deterministicTeamId = `team-${normalizeIdentifier(organizationId)}`;
-  const teamReference = doc(db, TEAMS_COLLECTION, deterministicTeamId);
-  const existingTeam = await getDoc(teamReference);
 
-  if (existingTeam.exists()) {
-    return getDocumentData(existingTeam);
+  /*
+   * Query the organization's teams instead of getDoc() on a possibly missing
+   * deterministic document. A missing document has no resource.data for rules
+   * to inspect and can otherwise surface as permission-denied before creation.
+   */
+  const organizationTeams = await getOrganizationTeams(
+    organizationId,
+    {
+      includeArchived: true,
+    }
+  );
+
+  const existingTeam = organizationTeams.find(
+    (team) =>
+      (team.teamId || team.id) === deterministicTeamId
+  );
+
+  if (existingTeam) {
+    return existingTeam;
   }
 
   return createTeam({
