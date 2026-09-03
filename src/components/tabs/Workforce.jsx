@@ -654,30 +654,39 @@ const getOrganizationLogo = (
 };
 
 /*
- * Uses one canonical company key across filters, insights and charts.
+ * Workforce company roll-ups use the Enterprise organization ID, never
+ * companyId or a display name.
  *
- * Older organisation records may use different Firestore document IDs while
- * still belonging to the same configured company. companyId or normalizedName
- * therefore takes priority over the enterprise document ID.
+ * companyId remains branding metadata only. rootEnterpriseId is the canonical
+ * relationship that guarantees Enterprise direct + Region direct + Branch
+ * workforce all contribute to one operator total.
  */
 const getCompanyScopeKey = (
   enterprise,
   organization = null
 ) => {
-  return normalizeText(
-    enterprise?.companyId ||
-      organization?.companyId ||
-      enterprise?.normalizedName ||
-      organization?.normalizedName ||
-      enterprise?.name ||
-      organization?.name ||
-      getOrganizationId(
-        enterprise
-      ) ||
-      getOrganizationId(
+  const enterpriseId =
+    getOrganizationId(
+      enterprise
+    );
+
+  if (enterpriseId) {
+    return enterpriseId;
+  }
+
+  if (
+    organization?.rootEnterpriseId
+  ) {
+    return organization.rootEnterpriseId;
+  }
+
+  return isEnterpriseOrganization(
+    organization
+  )
+    ? getOrganizationId(
         organization
       )
-  );
+    : "";
 };
 
 /*
@@ -4499,8 +4508,8 @@ const getScopedOrganizationReferences = (
           ORGANIZATIONS_COLLECTION
         ),
         where(
-          "ancestorIds",
-          "array-contains",
+          "parentId",
+          "==",
           organizationId
         )
       ),
@@ -4534,6 +4543,19 @@ const getScopedWorkforceReferences = (
       organization
     );
 
+  if (!organizationId) {
+    return [];
+  }
+
+  /*
+   * Firestore rules are not filters, so every workforce query uses the same
+   * hierarchy field that authorizes that account type.
+   *
+   * Ministry   -> sector
+   * Enterprise -> rootEnterpriseId
+   * Region     -> own organizationId + direct Branch parentId
+   * Branch     -> own organizationId
+   */
   if (
     organizationCategory ===
       "ministry" ||
@@ -4578,6 +4600,17 @@ const getScopedWorkforceReferences = (
           WORKFORCE_COLLECTION
         ),
         where(
+          "organizationId",
+          "==",
+          organizationId
+        )
+      ),
+      query(
+        collection(
+          db,
+          WORKFORCE_COLLECTION
+        ),
+        where(
           "rootEnterpriseId",
           "==",
           organizationId
@@ -4608,8 +4641,8 @@ const getScopedWorkforceReferences = (
           WORKFORCE_COLLECTION
         ),
         where(
-          "ancestorIds",
-          "array-contains",
+          "parentId",
+          "==",
           organizationId
         )
       ),
