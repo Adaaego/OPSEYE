@@ -26,7 +26,19 @@ import {
   X,
 } from "lucide-react";
 
-import { auth } from "../../firebase/firebase";
+import {
+  auth,
+  db,
+} from "../../firebase/firebase";
+
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+} from "firebase/firestore";
 import {
   getOrganizationDocument,
   getUserDocument,
@@ -34,15 +46,11 @@ import {
 } from "../../lib/functions";
 import {
   getOrganizationMember,
-  getOrganizationMembers,
   updateOrganizationMemberProfile,
 } from "../../lib/organization-member-functions";
-import { getOrganizationDescendants } from "../../lib/organization-functions";
 import {
   createDefaultOrganizationTeam,
-  getOrganizationTeams,
 } from "../../lib/team-functions";
-import { getPendingInvitations } from "../../lib/invitation-links";
 import {
   createBranchAndAssignExistingAdministrator,
   createBranchAndInviteAdministrator,
@@ -107,6 +115,443 @@ const getOrganizationCategory = (organization) => {
     organization?.organizationCategory ||
       organization?.category ||
       organization?.orgType
+  );
+};
+
+const getOrganizationLevel = (organization) => {
+  return normalizeText(
+    organization?.type ||
+      organization?.organizationType ||
+      organization?.level
+  );
+};
+
+/*
+ * Account Settings must use the same hierarchy query shape as Firestore rules.
+ *
+ * Enterprise -> rootEnterpriseId
+ * Region     -> parentId
+ * Branch     -> no descendants
+ * Ministry   -> no operator descendants (oversight is not administration)
+ */
+const getSettingsDescendants = async (organization) => {
+  const organizationId = getOrganizationId(organization);
+  const organizationLevel = getOrganizationLevel(organization);
+
+  if (!organizationId) {
+    return [];
+  }
+
+  let descendantsQuery = null;
+
+  if (organizationLevel === "enterprise") {
+    descendantsQuery = query(
+      collection(db, "organizations"),
+      where(
+        "rootEnterpriseId",
+        "==",
+        organizationId
+      )
+    );
+  } else if (organizationLevel === "region") {
+    descendantsQuery = query(
+      collection(db, "organizations"),
+      where(
+        "parentId",
+        "==",
+        organizationId
+      )
+    );
+  } else {
+    return [];
+  }
+
+  const snapshot = await getDocs(descendantsQuery);
+
+  return snapshot.docs
+    .map((documentSnapshot) => ({
+      id: documentSnapshot.id,
+      ...documentSnapshot.data(),
+    }))
+    .filter(
+      (item) =>
+        getOrganizationId(item) !==
+        organizationId
+    );
+};
+
+/*
+ * Resolve a user's own organization team without depending on one query shape.
+ *
+ * Existing memberships may already carry the exact teamId. Prefer that direct
+ * document read first, then fall back to organizationId for older top-level
+ * administrator memberships that predate the default-team workflow.
+ */
+const getSettingsOrganizationTeams = async ({
+  organizationId,
+}) => {
+  if (!organizationId) {
+    return [];
+  }
+
+  const snapshot = await getDocs(
+    query(
+      collection(
+        db,
+        "teams"
+      ),
+      where(
+        "organizationId",
+        "==",
+        organizationId
+      )
+    )
+  );
+
+  return snapshot.docs.map((documentSnapshot) => ({
+    id: documentSnapshot.id,
+    ...documentSnapshot.data(),
+  }));
+};
+
+/*
+ * Account Settings reads the safe organization member directory by the exact
+ * owning organization. This query shape matches the organizationMembers rules:
+ * own organization for every account, plus managed descendants for Enterprise
+ * and Regional administrators.
+ */
+const getSettingsOrganizationMembers = async (organizationId) => {
+  if (!organizationId) {
+    return [];
+  }
+
+  const snapshot = await getDocs(
+    query(
+      collection(
+        db,
+        "organizationMembers"
+      ),
+      where(
+        "organizationId",
+        "==",
+        organizationId
+      )
+    )
+  );
+
+  return snapshot.docs.map((documentSnapshot) => ({
+    id: documentSnapshot.id,
+    uid:
+      documentSnapshot.data()?.uid ||
+      documentSnapshot.id,
+    ...documentSnapshot.data(),
+  }));
+};
+
+/*
+ * Enterprise hierarchy directory.
+ *
+ * Every Region/Branch membership snapshots the Enterprise root. Querying this
+ * field directly gives Firestore a provable Enterprise boundary and avoids
+ * asking the rules to resolve each child organization during a list query.
+ */
+const getSettingsEnterpriseMembers = async (enterpriseId) => {
+  if (!enterpriseId) {
+    return [];
+  }
+
+  const snapshot = await getDocs(
+    query(
+      collection(
+        db,
+        "organizationMembers"
+      ),
+      where(
+        "rootEnterpriseId",
+        "==",
+        enterpriseId
+      )
+    )
+  );
+
+  return snapshot.docs.map((documentSnapshot) => ({
+    id: documentSnapshot.id,
+    uid:
+      documentSnapshot.data()?.uid ||
+      documentSnapshot.id,
+    ...documentSnapshot.data(),
+  }));
+};
+
+/*
+ * Regional Organizations tab:
+ * every Branch organization member snapshots the direct Regional parent in
+ * parentId. Read those Branch members once, then match each Branch card by
+ * organizationId and role.
+ */
+const getSettingsRegionalMembers = async (regionId) => {
+  if (!regionId) {
+    return [];
+  }
+
+  const snapshot = await getDocs(
+    query(
+      collection(
+        db,
+        "organizationMembers"
+      ),
+      where(
+        "parentId",
+        "==",
+        regionId
+      )
+    )
+  );
+
+  return snapshot.docs.map((documentSnapshot) => ({
+    id: documentSnapshot.id,
+    uid:
+      documentSnapshot.data()?.uid ||
+      documentSnapshot.id,
+    ...documentSnapshot.data(),
+  }));
+};
+
+/*
+ * Firestore rules are not filters. Account Settings therefore reads
+ * invitations through the exact organizationId that the signed-in admin owns
+ * or manages, then applies pending-status filtering in memory.
+ */
+const getSettingsPendingInvitations = async (organizationId) => {
+  if (!organizationId) {
+    return [];
+  }
+
+  const snapshot = await getDocs(
+    query(
+      collection(
+        db,
+        "organizationInvitations"
+      ),
+      where(
+        "organizationId",
+        "==",
+        organizationId
+      )
+    )
+  );
+
+  return snapshot.docs
+    .map((documentSnapshot) => ({
+      id: documentSnapshot.id,
+      invitationId:
+        documentSnapshot.data()?.invitationId ||
+        documentSnapshot.id,
+      ...documentSnapshot.data(),
+    }))
+    .filter(
+      (invitation) =>
+        normalizeText(
+          invitation.status
+        ) === "pending"
+    );
+};
+
+/*
+ * Parent-admin invitation reload.
+ *
+ * Region/Branch administrator invitations always store invitedBy. Reading by
+ * the current admin UID is query-provable and works for child organizations
+ * without depending on a rules-time organization lookup.
+ */
+const getSettingsPendingInvitationsCreatedBy = async (userId) => {
+  if (!userId) {
+    return [];
+  }
+
+  const snapshot = await getDocs(
+    query(
+      collection(
+        db,
+        "organizationInvitations"
+      ),
+      where(
+        "invitedBy",
+        "==",
+        userId
+      )
+    )
+  );
+
+  return snapshot.docs
+    .map((documentSnapshot) => ({
+      id: documentSnapshot.id,
+      invitationId:
+        documentSnapshot.data()?.invitationId ||
+        documentSnapshot.id,
+      ...documentSnapshot.data(),
+    }))
+    .filter(
+      (invitation) =>
+        normalizeText(
+          invitation.status
+        ) === "pending"
+    );
+};
+
+/*
+ * Regional Organizations tab only:
+ * resolve a Branch administrator through the administrator UID already stored
+ * on the Branch organization, then read that exact organizationMembers/{uid}
+ * document. This avoids descendant collection queries entirely.
+ */
+const getSettingsAdministratorByStoredId = async (
+  organization,
+  expectedRole
+) => {
+  const organizationId =
+    getOrganizationId(
+      organization
+    );
+
+  if (
+    !organizationId ||
+    !expectedRole
+  ) {
+    return null;
+  }
+
+  const administratorIds =
+    Array.from(
+      new Set(
+        [
+          organization.primaryAdminUserId,
+          ...(Array.isArray(
+            organization.adminIds
+          )
+            ? organization.adminIds
+            : []),
+        ]
+          .map((value) =>
+            String(
+              value ||
+                ""
+            ).trim()
+          )
+          .filter(Boolean)
+      )
+    );
+
+  for (const administratorId of administratorIds) {
+    try {
+      const administratorSnapshot =
+        await getDoc(
+          doc(
+            db,
+            "organizationMembers",
+            administratorId
+          )
+        );
+
+      if (!administratorSnapshot.exists()) {
+        continue;
+      }
+
+      const administrator = {
+        id:
+          administratorSnapshot.id,
+        uid:
+          administratorSnapshot.data()?.uid ||
+          administratorSnapshot.id,
+        ...administratorSnapshot.data(),
+      };
+
+      if (
+        administrator.organizationId ===
+          organizationId &&
+        normalizeRoleCode(
+          administrator.role
+        ) === expectedRole &&
+        normalizeText(
+          administrator.status ||
+            "active"
+        ) !== "inactive"
+      ) {
+        return administrator;
+      }
+    } catch (error) {
+      console.error(
+        "Unable to load stored organization administrator:",
+        error
+      );
+    }
+  }
+
+  return null;
+};
+
+
+/*
+ * Resolve the administrator attached to one child organization.
+ *
+ * The organization document's primaryAdminUserId/adminIds is the strongest
+ * relationship because organizationMembers documents are keyed by user UID.
+ * Older organizations may not have those fields, so fall back to the safe
+ * organization member directory and match the expected hierarchy-admin role.
+ */
+const getSettingsOrganizationAdministrator = async (organization) => {
+  const organizationId =
+    getOrganizationId(
+      organization
+    );
+
+  if (!organizationId) {
+    return null;
+  }
+
+  const expectedRole =
+    getExpectedAdministratorRole(
+      organization
+    );
+
+  if (!expectedRole) {
+    return null;
+  }
+
+  /*
+   * Read the safe member directory for exactly one managed organization.
+   * Role matching happens after Firestore returns the already-authorized
+   * organization-scoped documents.
+   */
+  const organizationMembers =
+    await getSettingsOrganizationMembers(
+      organizationId
+    );
+
+  return (
+    organizationMembers.find(
+      (member) =>
+        normalizeRoleCode(
+          member.role
+        ) === expectedRole &&
+        normalizeText(
+          member.status ||
+            "active"
+        ) !== "inactive"
+    ) ||
+    organizationMembers.find(
+      (member) =>
+        DEFAULT_TEAM_IMPLICIT_ADMIN_ROLES.has(
+          normalizeRoleCode(
+            member.role
+          )
+        ) &&
+        normalizeText(
+          member.status ||
+            "active"
+        ) !== "inactive"
+    ) ||
+    null
   );
 };
 
@@ -199,13 +644,34 @@ const getTimestampMilliseconds = (value) => {
  * default team. Only organization administrators may create that missing team
  * while Account Settings is loading.
  */
-const DEFAULT_TEAM_CREATOR_ROLES = new Set([
+const DEFAULT_TEAM_IMPLICIT_ADMIN_ROLES = new Set([
   "ministry_admin",
   "enterprise_admin",
   "region_admin",
   "branch_admin",
   "organization_admin",
+  "org_admin",
+  "admin",
 ]);
+
+const getExpectedAdministratorRole = (organization) => {
+  switch (getOrganizationLevel(organization)) {
+    case "enterprise":
+      return "enterprise_admin";
+
+    case "region":
+      return "region_admin";
+
+    case "branch":
+      return "branch_admin";
+
+    case "ministry":
+      return "ministry_admin";
+
+    default:
+      return "";
+  }
+};
 
 const getOrganizationDisplayName = (organization, brandMetadata) => {
   const configuredName =
@@ -807,6 +1273,7 @@ const AccountSettings = ({ roles = [] }) => {
 
   const [loadingPage, setLoadingPage] = useState(true);
   const [pageError, setPageError] = useState("");
+  const [teamLoadError, setTeamLoadError] = useState("");
   const [pageNotice, setPageNotice] = useState(null);
 
   const [isEditing, setIsEditing] = useState(false);
@@ -833,6 +1300,7 @@ const AccountSettings = ({ roles = [] }) => {
     }
 
     setPageError("");
+    setTeamLoadError("");
 
     try {
       const currentUser = auth.currentUser;
@@ -842,9 +1310,9 @@ const AccountSettings = ({ roles = [] }) => {
       }
 
       /*
-       * users/{uid} owns the signed-in person's private profile and security
-       * preferences. organizationMembers/{uid} is the source of truth for
-       * organization access, hierarchy and role.
+       * Account profile data is private to the signed-in user. Commit it as soon
+       * as users/{uid} and organizationMembers/{uid} resolve so a later Team or
+       * hierarchy permission issue can never make the Account tab look unreadable.
        */
       const [userDocument, organizationMember] = await Promise.all([
         getUserDocument(currentUser.uid),
@@ -866,6 +1334,8 @@ const AccountSettings = ({ roles = [] }) => {
       const loadedProfile = {
         ...userDocument,
         uid: userDocument.uid || currentUser.uid,
+        fullName: userDocument.fullName || "",
+        jobTitle: userDocument.jobTitle || "",
         email:
           userDocument.email ||
           organizationMember.email ||
@@ -887,6 +1357,9 @@ const AccountSettings = ({ roles = [] }) => {
           "",
         status: organizationMember.status || "active",
       };
+
+      setProfile(loadedProfile);
+      setFormData(createProfileForm(loadedProfile));
 
       const currentOrganization = await getOrganizationDocument(
         organizationMember.organizationId
@@ -911,87 +1384,354 @@ const AccountSettings = ({ roles = [] }) => {
         brandMetadata?.logo ||
         "";
 
+      setOrganization(normalizedOrganization);
+      setOrganizationMetadata(brandMetadata || null);
+      setOrganizationLogo(resolvedOrganizationLogo);
+
       /*
-       * Public enterprise onboarding did not originally create default teams.
-       * Create the deterministic default team once for eligible administrators
-       * so existing organizations can use the new invitation workflow.
+       * Team lookup:
+       * 1. organizationMembers/{uid}.organizationId identifies the organization.
+       * 2. teams.organizationId resolves that organization's default team.
+       * 3. the resolved teamId is matched against organizationMembers.teamIds.
+       *
+       * A Team-tab failure is isolated from Account profile loading.
        */
-      let organizationTeams = await getOrganizationTeams(
-        normalizedOrganization.organizationId
-      );
+      let resolvedDefaultTeam = null;
+      let organizationUsers = [];
 
-      let resolvedDefaultTeam =
-        organizationTeams.find((team) => team.isDefault) ||
-        organizationTeams.find(
-          (team) => normalizeText(team.status) === "active"
-        ) ||
-        null;
+      try {
+        const currentOrganizationLevel =
+          getOrganizationLevel(
+            normalizedOrganization
+          );
 
-      if (
-        !resolvedDefaultTeam &&
-        DEFAULT_TEAM_CREATOR_ROLES.has(normalizeRoleCode(loadedProfile.role))
-      ) {
-        resolvedDefaultTeam = await createDefaultOrganizationTeam({
-          organization: normalizedOrganization,
-          createdBy: currentUser.uid,
-        });
+        const currentOrganizationCategory =
+          getOrganizationCategory(
+            normalizedOrganization
+          );
 
-        organizationTeams = [resolvedDefaultTeam];
+        const useMembershipTeamId =
+          currentOrganizationLevel ===
+            "enterprise" ||
+          currentOrganizationLevel ===
+            "ministry" ||
+          currentOrganizationCategory ===
+            "ministry";
+
+        let organizationTeams = [];
+
+        /*
+         * Enterprise and Ministry:
+         * organizationMembers.teamIds is the canonical relationship. Resolve
+         * the signed-in member's actual Team first instead of assuming the
+         * organization's default Team is the one they belong to.
+         */
+        if (
+          useMembershipTeamId &&
+          loadedProfile.teamIds.length > 0
+        ) {
+          const teamSnapshots =
+            await Promise.all(
+              loadedProfile.teamIds.map(
+                (teamId) =>
+                  getDoc(
+                    doc(
+                      db,
+                      "teams",
+                      teamId
+                    )
+                  )
+              )
+            );
+
+          organizationTeams =
+            teamSnapshots
+              .filter(
+                (teamSnapshot) =>
+                  teamSnapshot.exists() &&
+                  teamSnapshot.data()
+                    ?.organizationId ===
+                    normalizedOrganization.organizationId
+              )
+              .map(
+                (teamSnapshot) => ({
+                  id:
+                    teamSnapshot.id,
+                  ...teamSnapshot.data(),
+                })
+              );
+        }
+
+        /*
+         * Regional and Branch behavior remains unchanged. Enterprise/Ministry
+         * also use this as a compatibility fallback only when their membership
+         * has no usable Team document.
+         */
+        if (
+          organizationTeams.length === 0
+        ) {
+          organizationTeams =
+            await getSettingsOrganizationTeams({
+              organizationId:
+                normalizedOrganization.organizationId,
+            });
+        }
+
+        const membershipTeamId =
+          useMembershipTeamId
+            ? loadedProfile.teamIds.find(
+                (teamId) =>
+                  organizationTeams.some(
+                    (team) =>
+                      (
+                        team.teamId ||
+                        team.id
+                      ) === teamId
+                  )
+              ) ||
+              ""
+            : "";
+
+        resolvedDefaultTeam =
+          organizationTeams.find(
+            (team) =>
+              (
+                team.teamId ||
+                team.id
+              ) === membershipTeamId
+          ) ||
+          organizationTeams.find(
+            (team) =>
+              team.isDefault === true
+          ) ||
+          organizationTeams.find(
+            (team) =>
+              normalizeText(
+                team.status
+              ) === "active"
+          ) ||
+          null;
+
+        /*
+         * Preserve the existing legacy top-level organization behavior.
+         */
+        if (
+          !resolvedDefaultTeam &&
+          DEFAULT_TEAM_IMPLICIT_ADMIN_ROLES.has(
+            normalizeRoleCode(
+              loadedProfile.role
+            )
+          )
+        ) {
+          resolvedDefaultTeam =
+            await createDefaultOrganizationTeam({
+              organization:
+                normalizedOrganization,
+              createdBy:
+                currentUser.uid,
+            });
+
+          organizationTeams = [
+            resolvedDefaultTeam,
+          ];
+        }
+
+        organizationUsers =
+          await getSettingsOrganizationMembers(
+            normalizedOrganization.organizationId
+          );
+
+        const resolvedTeamId =
+          membershipTeamId ||
+          resolvedDefaultTeam?.teamId ||
+          resolvedDefaultTeam?.id ||
+          "";
+
+        const resolvedTeamMembers =
+          resolvedTeamId
+            ? organizationUsers.filter(
+                (member) => {
+                  const memberTeamIds =
+                    Array.isArray(
+                      member.teamIds
+                    )
+                      ? member.teamIds
+                      : [];
+
+                  const isExplicitTeamMember =
+                    memberTeamIds.includes(
+                      resolvedTeamId
+                    );
+
+                  /*
+                   * Keep the existing legacy-admin compatibility behavior only
+                   * when the membership has no Team metadata.
+                   */
+                  const isLegacyOwnOrganizationAdmin =
+                    member.organizationId ===
+                      normalizedOrganization.organizationId &&
+                    memberTeamIds.length ===
+                      0 &&
+                    Boolean(
+                      resolvedDefaultTeam?.isDefault
+                    ) &&
+                    DEFAULT_TEAM_IMPLICIT_ADMIN_ROLES.has(
+                      normalizeRoleCode(
+                        member.role
+                      )
+                    );
+
+                  return (
+                    isExplicitTeamMember ||
+                    isLegacyOwnOrganizationAdmin
+                  );
+                }
+              )
+            : [];
+
+        setDefaultTeam(resolvedDefaultTeam);
+        setTeamMembers(
+          resolvedTeamMembers.map((member) => ({
+            ...member,
+            hierarchyLevel:
+              member.organizationType ||
+              member.organizationLevel ||
+              normalizedOrganization.type,
+            status: member.status || "active",
+          }))
+        );
+      } catch (teamError) {
+        console.error("Unable to load the organization team:", teamError);
+
+        setDefaultTeam(null);
+        setTeamMembers([]);
+        setTeamLoadError(
+          teamError?.message ||
+            "The team could not be loaded for this organization."
+        );
       }
 
       /*
-       * Team and organization administration uses the hierarchy-readable
-       * organizationMembers directory. Other users' private users/{uid}
-       * documents are never loaded for team management.
+       * Organization hierarchy is secondary to the Account and Team tabs. Keep
+       * hierarchy-only read failures from blanking the signed-in user's profile.
        */
-      const organizationUsers = await getOrganizationMembers(
-        normalizedOrganization.organizationId
-      );
+      let descendants = [];
 
-      const descendants = await getOrganizationDescendants(
-        normalizedOrganization.organizationId,
-        {
-          includeArchived: true,
-        }
-      );
+      try {
+        descendants = await getSettingsDescendants(
+          normalizedOrganization
+        );
+      } catch (hierarchyError) {
+        console.error(
+          "Unable to load organization descendants:",
+          hierarchyError
+        );
+      }
 
       /*
-       * Invitations are loaded for the current organization and every
-       * descendant. Enterprise Admins can therefore see pending regional-admin
-       * invitations as well as invitations for their own default team.
+       * Always load the current organization's invitations independently.
+       * Descendant invitation failures are tolerated so the Team tab can still
+       * show its own pending invitations.
        */
-      const invitationOrganizationIds = Array.from(
-        new Set(
-          [
-            normalizedOrganization.organizationId,
-            ...descendants.map(getOrganizationId),
-          ].filter(Boolean)
-        )
-      );
+      let ownInvitations = [];
 
-      const invitationGroups = await Promise.all(
-        invitationOrganizationIds.map((organizationId) =>
-          getPendingInvitations({
-            organizationId,
-          })
-        )
-      );
-
-      const loadedInvitations = invitationGroups
-        .flat()
-        .sort(
-          (first, second) =>
-            getTimestampMilliseconds(second.createdAt) -
-            getTimestampMilliseconds(first.createdAt)
+      try {
+        ownInvitations =
+          await getSettingsPendingInvitations(
+            normalizedOrganization.organizationId
+          );
+      } catch (invitationError) {
+        console.error(
+          "Unable to load organization invitations:",
+          invitationError
         );
+      }
+
+      const directChildOrganizations =
+        descendants.filter(
+          (organizationItem) =>
+            organizationItem.parentId ===
+            normalizedOrganization.organizationId
+        );
+
+      let descendantInvitationGroups = [];
+
+      if (
+        [
+          "enterprise",
+          "region",
+        ].includes(
+          getOrganizationLevel(
+            normalizedOrganization
+          )
+        )
+      ) {
+        try {
+          const directChildOrganizationIds =
+            new Set(
+              directChildOrganizations
+                .map(
+                  getOrganizationId
+                )
+                .filter(Boolean)
+            );
+
+          const createdInvitations =
+            await getSettingsPendingInvitationsCreatedBy(
+              currentUser.uid
+            );
+
+          descendantInvitationGroups = [
+            createdInvitations.filter(
+              (invitation) =>
+                directChildOrganizationIds.has(
+                  invitation.organizationId
+                )
+            ),
+          ];
+        } catch (invitationError) {
+          console.error(
+            "Unable to load descendant invitations:",
+            invitationError
+          );
+        }
+      } else {
+        descendantInvitationGroups =
+          await Promise.all(
+            directChildOrganizations.map(
+              async (
+                organizationItem
+              ) => {
+                try {
+                  return await getSettingsPendingInvitations(
+                    getOrganizationId(
+                      organizationItem
+                    )
+                  );
+                } catch (invitationError) {
+                  console.error(
+                    "Unable to load descendant invitations:",
+                    invitationError
+                  );
+
+                  return [];
+                }
+              }
+            )
+          );
+      }
+
+      const loadedInvitations = [
+        ...ownInvitations,
+        ...descendantInvitationGroups.flat(),
+      ].sort(
+        (first, second) =>
+          getTimestampMilliseconds(second.createdAt) -
+          getTimestampMilliseconds(first.createdAt)
+      );
 
       const hierarchyOrganizationMap = new Map();
 
-      /*
-       * Account Settings only needs the signed-in organization and organizations
-       * below it. Region accounts must not read Enterprise ancestors simply to
-       * render Branch administration.
-       */
       [
         normalizedOrganization,
         ...descendants,
@@ -1013,11 +1753,15 @@ const AccountSettings = ({ roles = [] }) => {
       const pendingAdminInvitationByOrganization = new Map();
 
       loadedInvitations.forEach((invitation) => {
-        const invitationType = normalizeRoleCode(invitation.invitationType);
+        const invitationType = normalizeRoleCode(
+          invitation.invitationType
+        );
 
         if (
           ["region_admin", "branch_admin"].includes(invitationType) &&
-          !pendingAdminInvitationByOrganization.has(invitation.organizationId)
+          !pendingAdminInvitationByOrganization.has(
+            invitation.organizationId
+          )
         ) {
           pendingAdminInvitationByOrganization.set(
             invitation.organizationId,
@@ -1026,31 +1770,171 @@ const AccountSettings = ({ roles = [] }) => {
         }
       });
 
-      const administratorIds = Array.from(
-        new Set(
-          hierarchyOrganizations
-            .flatMap((organizationItem) => [
-              organizationItem.primaryAdminUserId,
-              ...(Array.isArray(organizationItem.adminIds)
-                ? organizationItem.adminIds
-                : []),
-            ])
-            .filter(Boolean)
-        )
-      );
+      /*
+       * Resolve each child administrator from the hierarchy metadata first and
+       * organizationMembers second. This avoids depending on private users/{uid}
+       * documents for another person's name/email.
+       */
+      let administratorEntries = [];
 
-      const administratorDocuments = await Promise.all(
-        administratorIds.map((userId) => getOrganizationMember(userId))
-      );
+      if (
+        getOrganizationLevel(
+          normalizedOrganization
+        ) === "enterprise"
+      ) {
+        try {
+          const enterpriseMembers =
+            await getSettingsEnterpriseMembers(
+              normalizedOrganization.organizationId
+            );
 
-      const administratorMap = new Map(
-        administratorDocuments
-          .filter(Boolean)
-          .map((administrator) => [
-            administrator.uid || administrator.id,
-            administrator,
-          ])
-      );
+          administratorEntries =
+            await Promise.all(
+              directChildOrganizations.map(
+                async (
+                  organizationItem
+                ) => {
+                  const childOrganizationId =
+                    getOrganizationId(
+                      organizationItem
+                    );
+
+                  let administrator =
+                    enterpriseMembers.find(
+                      (member) =>
+                        member.organizationId ===
+                          childOrganizationId &&
+                        normalizeRoleCode(
+                          member.role
+                        ) ===
+                          "region_admin" &&
+                        normalizeText(
+                          member.status ||
+                            "active"
+                        ) !==
+                          "inactive"
+                    ) ||
+                    null;
+
+                  if (!administrator) {
+                    administrator =
+                      await getSettingsAdministratorByStoredId(
+                        organizationItem,
+                        "region_admin"
+                      );
+                  }
+
+                  return [
+                    childOrganizationId,
+                    administrator,
+                  ];
+                }
+              )
+            );
+        } catch (memberError) {
+          console.error(
+            "Unable to load child organization administrator:",
+            memberError
+          );
+        }
+      } else if (
+        getOrganizationLevel(
+          normalizedOrganization
+        ) === "region"
+      ) {
+        try {
+          /*
+           * Region -> Branch administrator directory.
+           *
+           * Branch organizationMembers documents already carry
+           * parentId = current Region ID. Load those records once, then match
+           * the Branch card by organizationId and role = branch_admin.
+           */
+          const regionalMembers =
+            await getSettingsRegionalMembers(
+              normalizedOrganization.organizationId
+            );
+
+          administratorEntries =
+            directChildOrganizations.map(
+              (
+                organizationItem
+              ) => {
+                const childOrganizationId =
+                  getOrganizationId(
+                    organizationItem
+                  );
+
+                const administrator =
+                  regionalMembers.find(
+                    (member) =>
+                      member.organizationId ===
+                        childOrganizationId &&
+                      normalizeRoleCode(
+                        member.role
+                      ) ===
+                        "branch_admin" &&
+                      normalizeText(
+                        member.status ||
+                          "active"
+                      ) !==
+                        "inactive"
+                  ) ||
+                  null;
+
+                return [
+                  childOrganizationId,
+                  administrator,
+                ];
+              }
+            );
+        } catch (memberError) {
+          console.error(
+            "Unable to load Branch administrators:",
+            memberError
+          );
+        }
+      } else {
+        administratorEntries =
+          await Promise.all(
+            directChildOrganizations.map(
+              async (
+                organizationItem
+              ) => {
+                try {
+                  const administrator =
+                    await getSettingsOrganizationAdministrator(
+                      organizationItem
+                    );
+
+                  return [
+                    getOrganizationId(
+                      organizationItem
+                    ),
+                    administrator,
+                  ];
+                } catch (memberError) {
+                  console.error(
+                    "Unable to load child organization administrator:",
+                    memberError
+                  );
+
+                  return [
+                    getOrganizationId(
+                      organizationItem
+                    ),
+                    null,
+                  ];
+                }
+              }
+            )
+          );
+      }
+
+      const administratorByOrganizationId =
+        new Map(
+          administratorEntries
+        );
 
       const hierarchyWithAdmins = hierarchyOrganizations.map(
         (organizationItem) => {
@@ -1059,25 +1943,43 @@ const AccountSettings = ({ roles = [] }) => {
             organizationItem.parentId
           );
 
-          const primaryAdminId =
-            organizationItem.primaryAdminUserId ||
-            organizationItem.adminIds?.[0] ||
-            "";
+          const expectedAdministratorRole =
+            getExpectedAdministratorRole(
+              organizationItem
+            );
 
-          const administrator = administratorMap.get(primaryAdminId) || null;
+          const administrator =
+            administratorByOrganizationId.get(
+              organizationId
+            ) ||
+            null;
+
           const pendingInvitation =
-            pendingAdminInvitationByOrganization.get(organizationId) || null;
+            pendingAdminInvitationByOrganization.get(
+              organizationId
+            ) ||
+            null;
 
           let invitationStatus = "unassigned";
 
-          if (administrator) {
+          if (
+            administrator ||
+            normalizeRoleCode(
+              organizationItem.adminStatus
+            ) === "active" ||
+            normalizeRoleCode(
+              organizationItem.adminAssignmentStatus
+            ) === "assigned"
+          ) {
             invitationStatus = "accepted";
           } else if (
             pendingInvitation ||
-            normalizeRoleCode(organizationItem.adminAssignmentStatus) ===
-              "pending" ||
-            normalizeRoleCode(organizationItem.adminStatus) ===
-              "invitation_pending"
+            normalizeRoleCode(
+              organizationItem.adminAssignmentStatus
+            ) === "pending" ||
+            normalizeRoleCode(
+              organizationItem.adminStatus
+            ) === "invitation_pending"
           ) {
             invitationStatus = "pending";
           }
@@ -1091,19 +1993,27 @@ const AccountSettings = ({ roles = [] }) => {
             parent: parentOrganization?.name || "",
             parentId: organizationItem.parentId || "",
             rootEnterpriseId:
-              organizationItem.rootEnterpriseId || organizationId,
+              organizationItem.rootEnterpriseId ||
+              organizationId,
             ancestorIds: organizationItem.ancestorIds || [],
             regionId: organizationItem.regionId || "",
             adminName:
               administrator?.fullName ||
+              administrator?.displayName ||
               administrator?.email ||
+              organizationItem.primaryAdminName ||
+              organizationItem.adminName ||
+              organizationItem.administratorName ||
+              organizationItem.adminEmail ||
               pendingInvitation?.email ||
               "",
             adminRole: administrator
               ? formatRole(administrator.role)
-              : pendingInvitation
-              ? formatRole(pendingInvitation.role)
-              : "",
+              : expectedAdministratorRole
+                ? formatRole(expectedAdministratorRole)
+                : pendingInvitation
+                  ? formatRole(pendingInvitation.role)
+                  : "",
             status: organizationItem.status || "active",
             invitationStatus,
             invitationId: pendingInvitation
@@ -1112,36 +2022,23 @@ const AccountSettings = ({ roles = [] }) => {
             logo:
               organizationItem.logoUrl ||
               organizationItem.logo ||
-              getOrganizationBrandMetadata(organizationItem)?.logo ||
+              getOrganizationBrandMetadata(
+                organizationItem
+              )?.logo ||
               brandMetadata?.logo ||
               "",
           };
         }
       );
 
-      setProfile(loadedProfile);
-      setFormData(createProfileForm(loadedProfile));
-      setOrganization(normalizedOrganization);
-      setOrganizationMetadata(brandMetadata || null);
-      setOrganizationLogo(resolvedOrganizationLogo);
-      setDefaultTeam(resolvedDefaultTeam);
-      setTeamMembers(
-        organizationUsers.map((member) => ({
-          ...member,
-          hierarchyLevel:
-            member.organizationType ||
-            member.organizationLevel ||
-            normalizedOrganization.type,
-          status: member.status || "active",
-        }))
-      );
       setPendingInvites(loadedInvitations);
       setHierarchyLevels(hierarchyWithAdmins);
     } catch (error) {
       console.error("Unable to load account settings:", error);
 
       setPageError(
-        error.message || "We could not load your account information."
+        error.message ||
+          "We could not load your account information."
       );
     } finally {
       if (showLoading) {
@@ -1149,7 +2046,6 @@ const AccountSettings = ({ roles = [] }) => {
       }
     }
   }, []);
-
   useEffect(() => {
     loadAccountData();
   }, [loadAccountData]);
@@ -1316,10 +2212,7 @@ const AccountSettings = ({ roles = [] }) => {
       return [];
     }
 
-    return teamMembers.filter(
-      (member) =>
-        Array.isArray(member.teamIds) && member.teamIds.includes(teamId)
-    );
+    return teamMembers;
   }, [teamId, teamMembers]);
 
   const teamPendingInvites = useMemo(() => {
@@ -1899,6 +2792,12 @@ const AccountSettings = ({ roles = [] }) => {
 
       {activeTab === "team" && (
         <div className="space-y-6">
+          {teamLoadError && (
+            <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <p>{teamLoadError}</p>
+            </div>
+          )}
           <Card className="overflow-hidden">
             <div
               className="flex flex-col gap-5 px-6 py-6 text-white lg:flex-row lg:items-center lg:justify-between"
