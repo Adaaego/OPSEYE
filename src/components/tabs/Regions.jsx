@@ -3849,7 +3849,7 @@ const getScopedOrganizationReferences = (
     organizationLevel ===
     "enterprise"
   ) {
-    const references = [
+    return [
       doc(
         db,
         ORGANIZATIONS_COLLECTION,
@@ -3867,24 +3867,6 @@ const getScopedOrganizationReferences = (
         )
       ),
     ];
-
-    if (organization.companyId) {
-      references.push(
-        query(
-          collection(
-            db,
-            ORGANIZATIONS_COLLECTION
-          ),
-          where(
-            "companyId",
-            "==",
-            organization.companyId
-          )
-        )
-      );
-    }
-
-    return references;
   }
 
   if (
@@ -3978,6 +3960,30 @@ const getScopedReportReferences = ({
 
   if (
     organizationLevel ===
+    "enterprise"
+  ) {
+    /*
+     * Branches are currently the only source of daily operational reports.
+     * The Enterprise query loads its hierarchy by rootEnterpriseId; Branch-only
+     * filtering is applied after the authorized data reaches the client.
+     */
+    return [
+      query(
+        collection(
+          db,
+          REPORT_SUBMISSIONS_COLLECTION
+        ),
+        where(
+          "rootEnterpriseId",
+          "==",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
     "region"
   ) {
     /*
@@ -4042,41 +4048,6 @@ const getScopedReportReferences = ({
         )
     );
 
-  if (
-    organizationLevel ===
-    "enterprise"
-  ) {
-    references.push(
-      query(
-        collection(
-          db,
-          REPORT_SUBMISSIONS_COLLECTION
-        ),
-        where(
-          "rootEnterpriseId",
-          "==",
-          organizationId
-        )
-      )
-    );
-
-    if (organization.companyId) {
-      references.push(
-        query(
-          collection(
-            db,
-            REPORT_SUBMISSIONS_COLLECTION
-          ),
-          where(
-            "companyId",
-            "==",
-            organization.companyId
-          )
-        )
-      );
-    }
-  }
-
   return references;
 };
 
@@ -4099,10 +4070,32 @@ const getFuelPriceReferences = (
                   organization
                 );
 
-              if (
+              const organizationLevel =
                 getOrganizationLevel(
                   organization
-                ) ===
+                );
+
+              const organizationCategory =
+                getOrganizationCategory(
+                  organization
+                );
+
+              /*
+               * Ministry organizations do not own fuel-price documents. Excluding
+               * them prevents one denied/non-enterprise price reference from
+               * invalidating the Ministry's complete price subscription.
+               */
+              if (
+                organizationCategory ===
+                  "ministry" ||
+                organizationLevel ===
+                  "ministry"
+              ) {
+                return "";
+              }
+
+              if (
+                organizationLevel ===
                 "enterprise"
               ) {
                 return organizationId;
@@ -4824,42 +4817,54 @@ const Regions = ({
         return "";
       }
 
-      const enterprise =
-        organizationMap.get(
-          getEnterpriseIdForOrganization(
-            organization
-          )
+      const organizationLevel =
+        getOrganizationLevel(
+          organization
         );
 
       /*
-       * Firestore remains the source of truth. companies.js is used only as
-       * a compatibility fallback for older organization records that do not
-       * yet contain regionId.
+       * Regional attribution is hierarchy-driven.
+       *
+       * Branch reports belong to the Branch's own regionId or, when that is
+       * absent, to the direct parent Regional organization. Enterprise/company
+       * metadata must never place an operator into a region because Enterprises
+       * do not submit the daily operational report.
        */
-      const organizationCompany =
-        getCompanyById(
-          organization.companyId
-        ) ||
-        getCompanyByNormalizedName(
-          organization.normalizedName ||
-            organization.name
-        );
+      if (
+        isBranchOrganization(
+          organization
+        )
+      ) {
+        const parentOrganization =
+          organizationMap.get(
+            organization.parentId ||
+              organization.parentOrganizationId ||
+              ""
+          );
 
-      const enterpriseCompany =
-        getCompanyById(
-          enterprise?.companyId
-        ) ||
-        getCompanyByNormalizedName(
-          enterprise?.normalizedName ||
-            enterprise?.name
+        return normalizeRegionId(
+          organization.regionId ||
+            (
+              getOrganizationLevel(
+                parentOrganization
+              ) === "region"
+                ? parentOrganization
+                    ?.regionId
+                : ""
+            )
         );
+      }
 
-      return normalizeRegionId(
-        organization.regionId ||
-          enterprise?.regionId ||
-          organizationCompany?.regionId ||
-          enterpriseCompany?.regionId
-      );
+      if (
+        organizationLevel ===
+        "region"
+      ) {
+        return normalizeRegionId(
+          organization.regionId
+        );
+      }
+
+      return "";
     };
 
   const visibleOrganizations =
@@ -5056,62 +5061,40 @@ const Regions = ({
         return [];
       }
 
-      if (
-        isMinistryUser
-      ) {
-        return reportSubmissions.filter(
-          (report) =>
-            visibleOrganizationIds.has(
-              report.organizationId
-            )
-        );
-      }
-
-      if (
-        !currentOrganization
-      ) {
-        return [];
-      }
-
-      const userIsEnterprise =
-        isEnterpriseOrganization(
-          currentOrganization
-        );
-
-      const userCompanyId =
-        normalizeValue(
-          currentOrganization
-            .companyId ||
-          currentUserProfile
-            .companyId
-        );
-
+      /*
+       * Branch submissions are currently the only operational source of truth.
+       *
+       * Ministry   -> all Branch reports inside its sector
+       * Enterprise -> all Branch reports under that Enterprise
+       * Region     -> direct Branch reports under that Region
+       * Branch     -> its own Branch reports
+       *
+       * Enterprise- and Region-owned report records remain outside dashboard
+       * production, revenue, compliance and workforce calculations.
+       */
       return reportSubmissions.filter(
         (report) => {
-          if (
+          const reportOrganization =
+            organizationMap.get(
+              report.organizationId
+            );
+
+          return (
+            Boolean(
+              reportOrganization
+            ) &&
+            isBranchOrganization(
+              reportOrganization
+            ) &&
             visibleOrganizationIds.has(
               report.organizationId
             )
-          ) {
-            return true;
-          }
-
-          return (
-            userIsEnterprise &&
-            Boolean(
-              userCompanyId
-            ) &&
-            normalizeValue(
-              report.companyId
-            ) ===
-              userCompanyId
           );
         }
       );
     }, [
-      currentOrganization,
       currentUserProfile,
-      isMinistryUser,
+      organizationMap,
       reportSubmissions,
       visibleOrganizationIds,
     ]);
@@ -5517,6 +5500,9 @@ const Regions = ({
       const regionIds =
         new Set(
           filteredOrganizations
+            .filter(
+              isBranchOrganization
+            )
             .map(
               getOrganizationRegionId
             )
@@ -5543,10 +5529,13 @@ const Regions = ({
             const regionOrganizations =
               filteredOrganizations.filter(
                 (organization) =>
+                  isBranchOrganization(
+                    organization
+                  ) &&
                   getOrganizationRegionId(
                     organization
                   ) ===
-                  regionId
+                    regionId
               );
 
             const regionReports =
