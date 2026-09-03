@@ -305,8 +305,8 @@ const loadScopedOrganizations = async (
         query(
           collection(db, "organizations"),
           where(
-            "ancestorIds",
-            "array-contains",
+            "parentId",
+            "==",
             organizationId
           )
         )
@@ -380,8 +380,8 @@ const getReportReferences = (
       query(
         reportCollection,
         where(
-          "ancestorIds",
-          "array-contains",
+          "parentOrganizationId",
+          "==",
           organizationId
         ),
         where(

@@ -3675,8 +3675,8 @@ const getScopedOrganizationReferences = (
           ORGANIZATIONS_COLLECTION
         ),
         where(
-          "ancestorIds",
-          "array-contains",
+          "parentId",
+          "==",
           organizationId
         )
       ),
@@ -3699,7 +3699,7 @@ const getScopedOrganizationReferences = (
  *
  * Ministry   -> sector
  * Enterprise -> rootEnterpriseId
- * Region     -> ancestorIds
+ * Region     -> parentOrganizationId
  * Branch     -> organizationId
  */
 const getScopedReportReferences = (
@@ -3783,8 +3783,8 @@ const getScopedReportReferences = (
           REPORT_SUBMISSIONS_COLLECTION
         ),
         where(
-          "ancestorIds",
-          "array-contains",
+          "parentOrganizationId",
+          "==",
           organizationId
         )
       ),
