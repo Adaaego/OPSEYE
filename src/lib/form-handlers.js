@@ -2130,9 +2130,6 @@ const submitReportHandler = async ({
         submissionMoment;
 
   const submissionUpdates = {
-    fieldValues:
-      cleanedResponses,
-
     currentStageIndex:
       nextStageIndex,
 
@@ -2173,51 +2170,11 @@ const submitReportHandler = async ({
           : REPORT_TASK_STATUSES.submitted
         : REPORT_TASK_STATUSES.underReview,
 
-    submissionClosed:
-      false,
-
-    lateSubmissionAllowed:
-      true,
-
-    wasSubmittedLate,
-
-    lateSubmittedAt:
-      wasSubmittedLate
-        ? storedReport.lateSubmittedAt ||
-          (
-            isInitialSubmission
-              ? submissionMoment
-              : null
-          )
-        : null,
-
     organizationApprovalCompleted:
       hasReachedMinistry,
 
-    ministryApprovalRequired:
-      false,
-
     availableToMinistry:
       hasReachedMinistry,
-
-    /*
-     * These fields always identify the original Branch submission. Reviewer
-     * identity is captured in workflowHistory and updatedBy instead.
-     */
-    submittedBy:
-      originalSubmittedBy,
-
-    submittedByName:
-      originalSubmittedByName,
-
-    submittedByEmail:
-      originalSubmittedByEmail,
-
-    submittedByRole:
-      originalSubmittedByRole,
-
-    submittedAt:
-      originalSubmittedAt,
 
     updatedBy:
       currentUser.uid,
@@ -2231,10 +2188,303 @@ const submitReportHandler = async ({
       ),
   };
 
-  await updateDoc(
-    submissionReference,
-    submissionUpdates
+  if (isInitialSubmission) {
+    submissionUpdates.fieldValues =
+      cleanedResponses;
+
+    submissionUpdates.submissionClosed =
+      false;
+
+    submissionUpdates.lateSubmissionAllowed =
+      true;
+
+    submissionUpdates.wasSubmittedLate =
+      wasSubmittedLate;
+
+    submissionUpdates.lateSubmittedAt =
+      wasSubmittedLate
+        ? storedReport.lateSubmittedAt ||
+          submissionMoment
+        : null;
+
+    submissionUpdates.ministryApprovalRequired =
+      false;
+
+    /*
+     * These fields always identify the original Branch submission. Reviewer
+     * identity is captured in workflowHistory and updatedBy instead.
+     */
+    submissionUpdates.submittedBy =
+      originalSubmittedBy;
+
+    submissionUpdates.submittedByName =
+      originalSubmittedByName;
+
+    submissionUpdates.submittedByEmail =
+      originalSubmittedByEmail;
+
+    submissionUpdates.submittedByRole =
+      originalSubmittedByRole;
+
+    submissionUpdates.submittedAt =
+      originalSubmittedAt;
+  }
+
+  const ruleMemberSnapshot =
+    await getDoc(
+      doc(
+        db,
+        "organizationMembers",
+        currentUser.uid
+      )
+    );
+
+  const ruleMember =
+    ruleMemberSnapshot.exists()
+      ? ruleMemberSnapshot.data()
+      : null;
+
+  const ruleResolvedParentOrganizationId =
+    String(
+      (
+        typeof storedReport.parentOrganizationId ===
+          "string" &&
+        storedReport.parentOrganizationId.trim()
+      )
+        ? storedReport.parentOrganizationId
+        : (
+              typeof storedReport.parentId ===
+                "string" &&
+              storedReport.parentId.trim()
+            )
+          ? storedReport.parentId
+          : submissionOrganization.parentId || ""
+    ).trim();
+
+  const ruleResolvedRootEnterpriseId =
+    String(
+      (
+        typeof storedReport.rootEnterpriseId ===
+          "string" &&
+        storedReport.rootEnterpriseId.trim()
+      )
+        ? storedReport.rootEnterpriseId
+        : (
+              typeof storedReport.enterpriseId ===
+                "string" &&
+              storedReport.enterpriseId.trim()
+            )
+          ? storedReport.enterpriseId
+          : submissionOrganization.rootEnterpriseId ||
+            ""
+    ).trim();
+
+  const reviewerAllowedUpdateKeys = [
+    "currentStageIndex",
+    "currentStageRole",
+    "assignedRole",
+    "assignedUserId",
+    "assignedUserName",
+    "assignedUserEmail",
+    "assignedTo",
+    "status",
+    "organizationApprovalCompleted",
+    "availableToMinistry",
+    "updatedBy",
+    "updatedAt",
+    "workflowHistory",
+  ];
+
+  const actualUpdateKeys =
+    Object.keys(submissionUpdates);
+
+  const approvalDebug = {
+    auth: {
+      uid: currentUser.uid,
+      email: currentUser.email || "",
+      emailVerified:
+        currentUser.emailVerified === true,
+    },
+
+    passedUserProfile: {
+      role: currentUserRole,
+      organizationId:
+        currentUserOrganizationId,
+    },
+
+    firestoreOrganizationMember: {
+      exists:
+        ruleMemberSnapshot.exists(),
+      role: ruleMember?.role || "",
+      organizationId:
+        ruleMember?.organizationId || "",
+      organizationType:
+        ruleMember?.organizationType || "",
+      rootEnterpriseId:
+        ruleMember?.rootEnterpriseId || "",
+      parentId:
+        ruleMember?.parentId || "",
+    },
+
+    reportOwnership: {
+      reportId:
+        submissionReference.id,
+      organizationId:
+        storedReport.organizationId || "",
+      organizationType:
+        storedReport.organizationType || "",
+      parentOrganizationId:
+        storedReport.parentOrganizationId || "",
+      parentId:
+        storedReport.parentId || "",
+      rootEnterpriseId:
+        storedReport.rootEnterpriseId || "",
+      enterpriseId:
+        storedReport.enterpriseId || "",
+    },
+
+    liveBranchOrganization: {
+      id: submissionOrganizationId,
+      type:
+        submissionOrganization.type ||
+        submissionOrganization.organizationType ||
+        "",
+      parentId:
+        submissionOrganization.parentId || "",
+      rootEnterpriseId:
+        submissionOrganization.rootEnterpriseId ||
+        "",
+    },
+
+    firestoreRuleResolvedHierarchy: {
+      parentOrganizationId:
+        ruleResolvedParentOrganizationId,
+      rootEnterpriseId:
+        ruleResolvedRootEnterpriseId,
+      regionMatches:
+        ruleResolvedParentOrganizationId ===
+        String(
+          ruleMember?.organizationId || ""
+        ).trim(),
+      enterpriseMatches:
+        ruleResolvedRootEnterpriseId ===
+        String(
+          ruleMember?.organizationId || ""
+        ).trim(),
+    },
+
+    existingWorkflowState: {
+      currentStageIndex:
+        storedReport.currentStageIndex,
+      currentStageRole:
+        storedReport.currentStageRole || "",
+      status:
+        normalizeStatusValue(
+          storedReport.status
+        ),
+      assignedRole:
+        storedReport.assignedRole || "",
+    },
+
+    requestedWorkflowState: {
+      currentStageIndex:
+        submissionUpdates.currentStageIndex,
+      currentStageRole:
+        submissionUpdates.currentStageRole,
+      status:
+        submissionUpdates.status,
+      assignedRole:
+        submissionUpdates.assignedRole,
+      organizationApprovalCompleted:
+        submissionUpdates.organizationApprovalCompleted,
+      availableToMinistry:
+        submissionUpdates.availableToMinistry,
+      updatedBy:
+        submissionUpdates.updatedBy,
+    },
+
+    immutableReportFields: {
+      fieldValuesExists:
+        "fieldValues" in storedReport,
+      submittedByExists:
+        "submittedBy" in storedReport,
+      submittedByNameExists:
+        "submittedByName" in storedReport,
+      submittedByEmailExists:
+        "submittedByEmail" in storedReport,
+      submittedByRoleExists:
+        "submittedByRole" in storedReport,
+      submittedAtExists:
+        "submittedAt" in storedReport,
+      wasSubmittedLateExists:
+        "wasSubmittedLate" in storedReport,
+    },
+
+    updateKeys: {
+      actual:
+        actualUpdateKeys,
+      reviewerAllowed:
+        reviewerAllowedUpdateKeys,
+      hasUnexpectedKey:
+        actualUpdateKeys.some(
+          (key) =>
+            !reviewerAllowedUpdateKeys.includes(
+              key
+            )
+        ),
+      unexpectedKeys:
+        actualUpdateKeys.filter(
+          (key) =>
+            !reviewerAllowedUpdateKeys.includes(
+              key
+            )
+        ),
+    },
+
+    stageScopeChecks: {
+      handlerRegionMatch:
+        currentUserOrganizationId ===
+        regionOrganizationId,
+      handlerEnterpriseMatch:
+        currentUserOrganizationId ===
+        enterpriseOrganizationId,
+      ruleRegionMatch:
+        ruleResolvedParentOrganizationId ===
+        String(
+          ruleMember?.organizationId || ""
+        ).trim(),
+      ruleEnterpriseMatch:
+        ruleResolvedRootEnterpriseId ===
+        String(
+          ruleMember?.organizationId || ""
+        ).trim(),
+    },
+  };
+
+  console.log(
+    "REPORT APPROVAL FIRESTORE DEBUG",
+    approvalDebug
   );
+
+  try {
+    await updateDoc(
+      submissionReference,
+      submissionUpdates
+    );
+  } catch (error) {
+    console.error(
+      "REPORT APPROVAL FIRESTORE WRITE FAILED",
+      {
+        ...approvalDebug,
+        firestoreError: {
+          code: error?.code || "",
+          message: error?.message || "",
+        },
+      }
+    );
+
+    throw error;
+  }
 
   return {
     ...storedReport,

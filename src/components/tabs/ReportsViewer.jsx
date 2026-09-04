@@ -480,6 +480,33 @@ const ReportViewer = ({
     setSubmitError("");
 
     try {
+      /*
+       * Firestore evaluates email verification from the current Firebase Auth token.
+       * Refresh the signed-in user and ID token before workflow updates so a verified
+       * account does not submit with a stale authentication claim.
+       */
+      if (!auth.currentUser) {
+        throw new Error(
+          "A signed-in user is required."
+        );
+      }
+
+      await auth.currentUser.reload();
+
+      const tokenResult =
+        await auth.currentUser.getIdTokenResult(
+          true
+        );
+
+      if (
+        tokenResult.claims
+          .email_verified !== true
+      ) {
+        throw new Error(
+          "Your verified email is not present in the current Firebase Auth token."
+        );
+      }
+
       const updatedReport =
         await changes.submitReportHandler({
           report,
