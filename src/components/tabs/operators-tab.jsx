@@ -1025,14 +1025,26 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
         const hierarchyOrganizations = allOrganizations.filter((candidate) => isOrganizationOrDescendant(candidate, organizationId));
         const directChildOrganizations = allOrganizations.filter((child) => child.parentId ===
             organizationId);
-        const hierarchyOrganizationIds = new Set(hierarchyOrganizations
+        const organizationLevel = getOrganizationLevel(organization);
+        /*
+         * Reporting obligations are Branch-owned.
+         *
+         * Enterprise and Region profiles therefore aggregate submitted reporting
+         * data from Branch descendants only. This deliberately excludes any older
+         * Enterprise- or Region-owned test submissions from parent totals.
+         *
+         * A Branch profile remains own-only.
+         */
+        const reportingOrganizationIds = new Set((organizationLevel ===
+            "branch"
+            ? [
+                organization,
+            ]
+            : hierarchyOrganizations.filter((candidate) => getOrganizationLevel(candidate) ===
+                "branch"))
             .map(getOrganizationId)
             .filter(Boolean));
-        /*
-         * Reports belong to the organization that received the reporting task.
-         * Parent views roll up their own reports and every descendant report.
-         */
-        const scopedReports = enrichedReports.filter((report) => hierarchyOrganizationIds.has(report.organizationId));
+        const scopedReports = enrichedReports.filter((report) => reportingOrganizationIds.has(report.organizationId));
         const today = new Date();
         const expectedToday = scopedReports.filter((report) => report.reportDate &&
             isSameDay(report.reportDate, today));
@@ -1045,11 +1057,11 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
             toNumber(report.calculatedMetrics
                 .estimated_daily_revenue), 0);
         /*
-         * Cumulative compliance is calculated across every report that was due
-         * for this operator and its child organizations.
+         * Parent compliance is calculated from Branch reporting obligations only.
+         * A Branch profile calculates compliance from its own obligations.
          *
          * One missed report therefore causes a proportional reduction instead
-         * of resetting the operator's score to zero for the latest day.
+         * of resetting the score to zero for the latest day.
          */
         const complianceEligibleReports = scopedReports.filter((report) => isReportEligibleForCompliance(report, today));
         const complianceSubmittedReports = complianceEligibleReports.filter(isReportSubmitted);

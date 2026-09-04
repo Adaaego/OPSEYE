@@ -1377,8 +1377,9 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
     const dieselVolumeToday = filteredSummary.dieselVolume;
     const estimatedDailyRevenue = filteredSummary.revenue;
     /*
-     * Reporting performance is cumulative across this operator and all
-     * child organizations.
+     * Reporting performance uses the reporting scope prepared by OperatorsTab:
+     * Branch-owned reports for Enterprise/Region profiles, or the Branch's own
+     * reports for a Branch profile.
      *
      * Submission completion measures whether the ministry eventually
      * received the data. On-time compliance measures whether it arrived
