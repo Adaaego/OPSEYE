@@ -527,58 +527,6 @@ const buildProfileCompletionRoute = (token) => {
 };
 
 /*
- * Loads and validates the organization and optional team referenced by a
- * pending invitation.
- */
-const loadInvitationAccessContext = async ({
-  invitation,
-}) => {
-  const organizationReference =
-    getOrganizationReference(
-      invitation.organizationId
-    );
-
-  const teamReference = invitation.teamId
-    ? getTeamReference(invitation.teamId)
-    : null;
-
-  const [
-    organizationSnapshot,
-    teamSnapshot,
-  ] = await Promise.all([
-    getDoc(organizationReference),
-
-    teamReference
-      ? getDoc(teamReference)
-      : Promise.resolve(null),
-  ]);
-
-  const organization =
-    getSnapshotData(organizationSnapshot);
-
-  const team = teamSnapshot
-    ? getSnapshotData(teamSnapshot)
-    : null;
-
-  validateOrganization({
-    organization,
-    invitation,
-  });
-
-  validateTeam({
-    team,
-    teamId: invitation.teamId || "",
-    organizationId:
-      invitation.organizationId,
-  });
-
-  return {
-    organization,
-    team,
-  };
-};
-
-/*
  * Links a validated invitation to a Firebase Authentication user.
  *
  * This function may be called immediately after account creation. It prepares
@@ -627,12 +575,6 @@ export const linkInvitationToAuthenticatedUser =
     validateInvitationRoleAssignment(
       invitation
     );
-    const {
-      organization,
-      team,
-    } = await loadInvitationAccessContext({
-      invitation,
-    });
 
     const userReference =
       getUserReference(
@@ -748,13 +690,7 @@ export const linkInvitationToAuthenticatedUser =
       ...existingUser,
       ...userData,
 
-      /*
-       * Return the loaded context so the invitation page can display the
-       * organization and team without performing another Firestore read.
-       */
       invitation,
-      organization,
-      team,
     };
   };
 
