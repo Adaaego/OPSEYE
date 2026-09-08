@@ -464,7 +464,7 @@ const getExistingAdministratorCandidate =
   };
 
 /*
- * Creates a region, its default team and its administrator invitation.
+ * Creates a region and its administrator invitation.
  *
  * The organization is created before the invited person has an OPSEYE account.
  * The invitation later links that person to the existing organization.
@@ -478,6 +478,19 @@ export const createRegionAndInviteAdministrator =
     currentUser,
     expiresInHours = 72,
   }) => {
+    console.log("OPSEYE REGION WORKFLOW: START", {
+      parentOrganizationId:
+        getOrganizationId(
+          parentOrganization
+        ),
+      regionId,
+      organizationName,
+      administratorEmail,
+      currentUserId:
+        getUserId(currentUser),
+      currentUserRole:
+        currentUser?.role || "",
+    });
     const currentUserId =
       validateRegionCreationPermission({
         currentUser,
@@ -508,11 +521,21 @@ export const createRegionAndInviteAdministrator =
       parentOrganization.rootEnterpriseId ||
       parentOrganizationId;
 
+    console.log("OPSEYE REGION WORKFLOW: CHECK REGION EXISTS", {
+      rootEnterpriseId,
+      regionId,
+    });
+
     const existingRegion =
       await checkRegionExists({
         rootEnterpriseId,
         regionId,
       });
+
+    console.log("OPSEYE REGION WORKFLOW: CHECK REGION EXISTS OK", {
+      foundExistingRegion:
+        Boolean(existingRegion),
+    });
 
     if (existingRegion) {
       throw new Error(
@@ -524,6 +547,8 @@ export const createRegionAndInviteAdministrator =
      * The region hierarchy is established immediately. The new administrator
      * does not create or select the organization during onboarding.
      */
+    console.log("OPSEYE REGION WORKFLOW: CREATE ORGANIZATION");
+
     const organization =
       await createRegionOrganization({
         parentOrganization,
@@ -532,14 +557,27 @@ export const createRegionAndInviteAdministrator =
         createdBy: currentUserId,
       });
 
-    const defaultTeam =
-      await createDefaultOrganizationTeam({
-        organization,
-        createdBy: currentUserId,
-      });
+    console.log("OPSEYE REGION WORKFLOW: CREATE ORGANIZATION OK", {
+      organizationId:
+        getOrganizationId(
+          organization
+        ),
+    });
 
     const invitationToken =
       generateInvitationToken();
+
+    console.log("OPSEYE REGION WORKFLOW: CREATE INVITATION RECORD", {
+      collection:
+        "organizationInvitations",
+      organizationId:
+        getOrganizationId(
+          organization
+        ),
+      invitationType:
+        REGION_ADMIN_INVITATION_TYPE,
+      recipientEmail,
+    });
 
     const invitation =
       await createInvitation({
@@ -561,8 +599,6 @@ export const createRegionAndInviteAdministrator =
         role:
           REGION_ADMIN_ROLE,
 
-        teamId:
-          getTeamId(defaultTeam),
 
         invitedBy:
           currentUserId,
@@ -585,15 +621,25 @@ export const createRegionAndInviteAdministrator =
           source:
             "settings_create_region",
 
-          defaultTeamId:
-            getTeamId(defaultTeam),
         },
       });
+
+    console.log("OPSEYE REGION WORKFLOW: CREATE INVITATION RECORD OK", {
+      invitationId:
+        invitation?.invitationId ||
+        invitation?.id ||
+        "",
+    });
 
     const invitationUrl =
       buildInvitationUrl({
         token: invitationToken,
       });
+
+    console.log("OPSEYE REGION WORKFLOW: INVITATION URL READY", {
+      hasInvitationUrl:
+        Boolean(invitationUrl),
+    });
 
     /*
      * If EmailJS fails, the region and pending invitation remain available.
@@ -617,7 +663,7 @@ export const createRegionAndInviteAdministrator =
           "region_admin",
     
         teamName:
-          defaultTeam.name,
+          organization.name,
     
         invitationUrl,
     
@@ -647,7 +693,7 @@ export const createRegionAndInviteAdministrator =
           : "region_created_email_failed",
 
       organization,
-      defaultTeam,
+      defaultTeam: null,
       invitation,
       invitationUrl,
       emailDelivery,
@@ -795,6 +841,18 @@ export const createBranchAndInviteAdministrator =
     currentUser,
     expiresInHours = 72,
   }) => {
+    console.log("OPSEYE BRANCH WORKFLOW: START", {
+      parentOrganizationId:
+        getOrganizationId(
+          parentOrganization
+        ),
+      organizationName,
+      administratorEmail,
+      currentUserId:
+        getUserId(currentUser),
+      currentUserRole:
+        currentUser?.role || "",
+    });
     const currentUserId =
       validateBranchCreationPermission({
         currentUser,
@@ -816,6 +874,11 @@ export const createBranchAndInviteAdministrator =
         parentOrganization
       );
 
+    console.log("OPSEYE BRANCH WORKFLOW: CHECK BRANCH EXISTS", {
+      parentOrganizationId,
+      organizationName,
+    });
+
     const existingBranch =
       await checkBranchExists({
         parentOrganizationId,
@@ -823,11 +886,18 @@ export const createBranchAndInviteAdministrator =
           organizationName,
       });
 
+    console.log("OPSEYE BRANCH WORKFLOW: CHECK BRANCH EXISTS OK", {
+      foundExistingBranch:
+        Boolean(existingBranch),
+    });
+
     if (existingBranch) {
       throw new Error(
         `${existingBranch.name || "The selected branch"} already exists under this region.`
       );
     }
+
+    console.log("OPSEYE BRANCH WORKFLOW: CREATE ORGANIZATION");
 
     const organization =
       await createBranchOrganization({
@@ -837,15 +907,27 @@ export const createBranchAndInviteAdministrator =
           currentUserId,
       });
 
-    const defaultTeam =
-      await createDefaultOrganizationTeam({
-        organization,
-        createdBy:
-          currentUserId,
-      });
+    console.log("OPSEYE BRANCH WORKFLOW: CREATE ORGANIZATION OK", {
+      organizationId:
+        getOrganizationId(
+          organization
+        ),
+    });
 
     const invitationToken =
       generateInvitationToken();
+
+    console.log("OPSEYE BRANCH WORKFLOW: CREATE INVITATION RECORD", {
+      collection:
+        "organizationInvitations",
+      organizationId:
+        getOrganizationId(
+          organization
+        ),
+      invitationType:
+        BRANCH_ADMIN_INVITATION_TYPE,
+      recipientEmail,
+    });
 
     const invitation =
       await createInvitation({
@@ -869,10 +951,6 @@ export const createBranchAndInviteAdministrator =
         role:
           BRANCH_ADMIN_ROLE,
 
-        teamId:
-          getTeamId(
-            defaultTeam
-          ),
 
         invitedBy:
           currentUserId,
@@ -895,18 +973,26 @@ export const createBranchAndInviteAdministrator =
           source:
             "settings_create_branch",
 
-          defaultTeamId:
-            getTeamId(
-              defaultTeam
-            ),
         },
       });
+
+    console.log("OPSEYE BRANCH WORKFLOW: CREATE INVITATION RECORD OK", {
+      invitationId:
+        invitation?.invitationId ||
+        invitation?.id ||
+        "",
+    });
 
     const invitationUrl =
       buildInvitationUrl({
         token:
           invitationToken,
       });
+
+    console.log("OPSEYE BRANCH WORKFLOW: INVITATION URL READY", {
+      hasInvitationUrl:
+        Boolean(invitationUrl),
+    });
 
     let emailDelivery;
 
@@ -928,7 +1014,7 @@ export const createBranchAndInviteAdministrator =
             BRANCH_ADMIN_ROLE,
 
           teamName:
-            defaultTeam.name,
+            organization.name,
 
           invitationUrl,
 
@@ -959,7 +1045,7 @@ export const createBranchAndInviteAdministrator =
           : "branch_created_email_failed",
 
       organization,
-      defaultTeam,
+      defaultTeam: null,
       invitation,
       invitationUrl,
       emailDelivery,
@@ -1096,6 +1182,20 @@ export const inviteOrganizationTeamMember =
     currentUser,
     expiresInHours = 72,
   }) => {
+    console.log("OPSEYE TEAM INVITE WORKFLOW: START", {
+      organizationId:
+        getOrganizationId(
+          organization
+        ),
+      teamId:
+        getTeamId(team),
+      memberEmail,
+      role,
+      currentUserId:
+        getUserId(currentUser),
+      currentUserRole:
+        currentUser?.role || "",
+    });
     const currentUserId =
       validateOrganizationManagementPermission({
         currentUser,
@@ -1147,10 +1247,19 @@ export const inviteOrganizationTeamMember =
      * Existing organization users should be added through the member list
      * rather than receiving another account-creation invitation.
      */
+    console.log("OPSEYE TEAM INVITE WORKFLOW: LOAD ORGANIZATION USERS", {
+      organizationId,
+    });
+
     const organizationUsers =
       await getOrganizationUsers(
         organizationId
       );
+
+    console.log("OPSEYE TEAM INVITE WORKFLOW: LOAD ORGANIZATION USERS OK", {
+      count:
+        organizationUsers.length,
+    });
 
     const existingUser =
       organizationUsers.find(
@@ -1165,6 +1274,10 @@ export const inviteOrganizationTeamMember =
       );
     }
 
+    console.log("OPSEYE TEAM INVITE WORKFLOW: LOAD ORGANIZATION TEAMS", {
+      organizationId,
+    });
+
     const availableTeams =
       await getOrganizationTeams(
         organizationId,
@@ -1172,6 +1285,11 @@ export const inviteOrganizationTeamMember =
           includeArchived: true,
         }
       );
+
+    console.log("OPSEYE TEAM INVITE WORKFLOW: LOAD ORGANIZATION TEAMS OK", {
+      count:
+        availableTeams.length,
+    });
 
     const storedTeam =
       availableTeams.find(
@@ -1189,6 +1307,16 @@ export const inviteOrganizationTeamMember =
 
     const invitationToken =
       generateInvitationToken();
+
+    console.log("OPSEYE TEAM INVITE WORKFLOW: CREATE INVITATION RECORD", {
+      collection:
+        "organizationInvitations",
+      organizationId,
+      teamId,
+      recipientEmail,
+      invitationType:
+        TEAM_MEMBER_INVITATION_TYPE,
+    });
 
     const invitation =
       await createInvitation({
@@ -1248,11 +1376,23 @@ export const inviteOrganizationTeamMember =
         },
       });
 
+    console.log("OPSEYE TEAM INVITE WORKFLOW: CREATE INVITATION RECORD OK", {
+      invitationId:
+        invitation?.invitationId ||
+        invitation?.id ||
+        "",
+    });
+
     const invitationUrl =
       buildInvitationUrl({
         token:
           invitationToken,
       });
+
+    console.log("OPSEYE TEAM INVITE WORKFLOW: INVITATION URL READY", {
+      hasInvitationUrl:
+        Boolean(invitationUrl),
+    });
 
     let emailDelivery;
 

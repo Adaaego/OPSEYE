@@ -330,39 +330,11 @@ const createUniqueChildOrganizationId =
     sector,
     country,
   }) => {
-    const maximumAttempts = 5;
-
-    for (
-      let attempt = 1;
-      attempt <= maximumAttempts;
-      attempt += 1
-    ) {
-      const organizationId =
-        generateOrganizationId({
-          type,
-          sector,
-          country,
-        });
-
-      const organizationReference = doc(
-        db,
-        ORGANIZATIONS_COLLECTION,
-        organizationId
-      );
-
-      const existingOrganization =
-        await getDoc(
-          organizationReference
-        );
-
-      if (!existingOrganization.exists()) {
-        return organizationId;
-      }
-    }
-
-    throw new Error(
-      "We could not generate a unique organization ID. Please try again."
-    );
+    return generateOrganizationId({
+      type,
+      sector,
+      country,
+    });
   };
 
 /*
@@ -443,15 +415,6 @@ export const createRegionOrganization = async ({
     ORGANIZATIONS_COLLECTION,
     resolvedOrganizationId
   );
-
-  const existingIdDocument =
-    await getDoc(organizationReference);
-
-  if (existingIdDocument.exists()) {
-    throw new Error(
-      "An organization already exists with the generated organization ID."
-    );
-  }
 
   const hierarchyMetadata =
     buildChildOrganizationMetadata({
@@ -632,17 +595,6 @@ export const createBranchOrganization = async ({
     ORGANIZATIONS_COLLECTION,
     resolvedOrganizationId
   );
-
-  const existingIdDocument =
-    await getDoc(
-      organizationReference
-    );
-
-  if (existingIdDocument.exists()) {
-    throw new Error(
-      "An organization already exists with the generated organization ID."
-    );
-  }
 
   const hierarchyMetadata =
     buildChildOrganizationMetadata({

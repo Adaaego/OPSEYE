@@ -3,7 +3,6 @@ import {
   doc,
   getDoc,
   getDocs,
-  limit,
   query,
   runTransaction,
   serverTimestamp,
@@ -114,9 +113,37 @@ const getAuthenticatedActor = ({
 };
 
 const getStoredUserProfile = async (uid) => {
-  const snapshot = await getDoc(
-    doc(db, USERS_COLLECTION, uid)
-  );
+  console.log("OPSEYE INVITATION: READ ACTOR PROFILE", {
+    collection:
+      USERS_COLLECTION,
+    uid,
+  });
+
+  let snapshot;
+
+  try {
+    snapshot = await getDoc(
+      doc(db, USERS_COLLECTION, uid)
+    );
+  } catch (error) {
+    console.error("OPSEYE INVITATION: READ ACTOR PROFILE FAILED", {
+      collection:
+        USERS_COLLECTION,
+      uid,
+      code:
+        error?.code || "",
+      message:
+        error?.message || "",
+      error,
+    });
+
+    throw error;
+  }
+
+  console.log("OPSEYE INVITATION: READ ACTOR PROFILE OK", {
+    exists:
+      snapshot.exists(),
+  });
 
   if (!snapshot.exists()) {
     throw new Error(
@@ -133,13 +160,41 @@ const getStoredUserProfile = async (uid) => {
 const getStoredOrganization = async (
   organizationId
 ) => {
-  const snapshot = await getDoc(
-    doc(
-      db,
+  console.log("OPSEYE INVITATION: READ TARGET ORGANIZATION", {
+    collection:
       ORGANIZATIONS_COLLECTION,
-      organizationId
-    )
-  );
+    organizationId,
+  });
+
+  let snapshot;
+
+  try {
+    snapshot = await getDoc(
+      doc(
+        db,
+        ORGANIZATIONS_COLLECTION,
+        organizationId
+      )
+    );
+  } catch (error) {
+    console.error("OPSEYE INVITATION: READ TARGET ORGANIZATION FAILED", {
+      collection:
+        ORGANIZATIONS_COLLECTION,
+      organizationId,
+      code:
+        error?.code || "",
+      message:
+        error?.message || "",
+      error,
+    });
+
+    throw error;
+  }
+
+  console.log("OPSEYE INVITATION: READ TARGET ORGANIZATION OK", {
+    exists:
+      snapshot.exists(),
+  });
 
   if (!snapshot.exists()) {
     throw new Error(
@@ -432,92 +487,14 @@ export const createInvitation = async ({
   requireValue(role, "An invitation role is required.");
   requireValue(invitedBy, "The inviting user ID is required.");
 
-  const actor =
-    getAuthenticatedActor({
-      expectedUserId: invitedBy,
-    });
-
-  const [
-    actorProfile,
-    storedOrganization,
-  ] = await Promise.all([
-    getStoredUserProfile(actor.uid),
-    getStoredOrganization(
-      organizationId
-    ),
-  ]);
-
-  validateManagementScope({
-    actorProfile,
-    organization:
-      storedOrganization,
+  const actor = getAuthenticatedActor({
+    expectedUserId: invitedBy,
   });
 
   validateInvitationRoleAssignment({
     invitationType,
     role,
   });
-
-  const storedOrganizationStatus =
-    normalizeStatus(
-      storedOrganization.status
-    );
-
-  if (
-    storedOrganizationStatus &&
-    storedOrganizationStatus !==
-      "active"
-  ) {
-    throw new Error(
-      "Invitations cannot be created for an inactive organization."
-    );
-  }
-
-  const normalizedInvitationType =
-    normalizeStatus(
-      invitationType
-    );
-
-  const actorRole =
-    normalizeStatus(
-      actorProfile.role
-    );
-
-  if (
-    normalizedInvitationType ===
-      "region_admin" &&
-    (
-      actorRole !==
-        "enterprise_admin" ||
-      normalizeStatus(
-        storedOrganization.type
-      ) !== "region" ||
-      storedOrganization.parentId !==
-        actorProfile.organizationId
-    )
-  ) {
-    throw new Error(
-      "Only the parent Enterprise Administrator can invite this Regional Administrator."
-    );
-  }
-
-  if (
-    normalizedInvitationType ===
-      "branch_admin" &&
-    (
-      actorRole !==
-        "region_admin" ||
-      normalizeStatus(
-        storedOrganization.type
-      ) !== "branch" ||
-      storedOrganization.parentId !==
-        actorProfile.organizationId
-    )
-  ) {
-    throw new Error(
-      "Only the parent Regional Administrator can invite this Branch Administrator."
-    );
-  }
 
   const emailLower = normalizeEmail(email);
 
@@ -527,126 +504,36 @@ export const createInvitation = async ({
 
   const invitationId = await hashInvitationToken(token);
   const invitationReference = getInvitationReference(invitationId);
-  const existingInvitation = await getDoc(invitationReference);
-
-  if (existingInvitation.exists()) {
-    throw new Error("This invitation token has already been used.");
-  }
-
-  /*
-   * Prevent two active invitations from granting the same email access to the
-   * same organization. A revoked, expired or accepted invitation does not block
-   * a new invitation.
-   */
-  const duplicateQuery = query(
-    collection(db, INVITATIONS_COLLECTION),
-    where("organizationId", "==", organizationId),
-    where("emailLower", "==", emailLower),
-    where("status", "==", "pending"),
-    limit(1)
-  );
-
-  const duplicateSnapshot = await getDocs(duplicateQuery);
-
-  if (!duplicateSnapshot.empty) {
-    throw new Error(
-      "A pending invitation already exists for this email and organization."
-    );
-  }
-
-  if (teamId) {
-    const teamSnapshot = await getDoc(
-      doc(
-        db,
-        TEAMS_COLLECTION,
-        teamId
-      )
-    );
-
-    if (!teamSnapshot.exists()) {
-      throw new Error(
-        "The selected invitation team could not be found."
-      );
-    }
-
-    const storedTeam =
-      teamSnapshot.data();
-
-    if (
-      storedTeam.organizationId !==
-      organizationId
-    ) {
-      throw new Error(
-        "The selected invitation team does not belong to this organization."
-      );
-    }
-
-    if (
-      normalizeStatus(
-        storedTeam.status
-      ) === "archived"
-    ) {
-      throw new Error(
-        "Users cannot be invited to an archived team."
-      );
-    }
-  }
-
   const expiresAtDate = getExpiryDate(expiresInHours);
 
   /*
-   * Hierarchy metadata is copied from the stored organization rather than
-   * trusted from caller arguments. This prevents stale or malformed client
-   * state from becoming part of the access-granting invitation record.
+   * The child organization has already been created by the organization
+   * workflow. Invitation creation therefore performs one Firestore write only.
+   * Firestore rules validate that the signed-in administrator is allowed to
+   * create the requested administrator invitation for that organization.
    */
-  const storedOrganizationId =
-    storedOrganization.organizationId ||
-    storedOrganization.id;
-
   const payload = {
     invitationId,
-    invitationType:
-      normalizedInvitationType,
+    invitationType: normalizeStatus(invitationType),
     email: emailLower,
     emailLower,
-    organizationId:
-      storedOrganizationId,
-    organizationName:
-      String(
-        storedOrganization.name ||
-        organizationName ||
-        ""
-      ).trim(),
-    role:
-      normalizeStatus(role),
-    invitedBy:
-      actor.uid,
+    organizationId: String(organizationId).trim(),
+    organizationName: String(organizationName || "").trim(),
+    role: normalizeStatus(role),
+    invitedBy: actor.uid,
     status: "pending",
     expiresAt: Timestamp.fromDate(expiresAtDate),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-
-    ancestorIds:
-      Array.isArray(
-        storedOrganization.ancestorIds
-      )
-        ? Array.from(
-            new Set(
-              storedOrganization.ancestorIds.filter(
-                Boolean
-              )
-            )
-          )
-        : [],
-
+    ancestorIds: Array.isArray(ancestorIds)
+      ? Array.from(new Set(ancestorIds.filter(Boolean)))
+      : [],
     metadata:
-      metadata &&
-      typeof metadata === "object"
+      metadata && typeof metadata === "object"
         ? metadata
         : {},
   };
 
-  // Team invitations use teamId, while region-admin invitations may not.
   if (teamId) {
     payload.teamId = teamId;
   }
@@ -820,7 +707,54 @@ export const getPendingInvitations = async ({
     ...constraints
   );
 
-  const invitationSnapshot = await getDocs(invitationQuery);
+  console.log("OPSEYE PENDING INVITATIONS: QUERY START", {
+    collection:
+      INVITATIONS_COLLECTION,
+    organizationId,
+    teamId,
+    email:
+      emailLower,
+    status:
+      "pending",
+  });
+
+  let invitationSnapshot;
+
+  try {
+    invitationSnapshot =
+      await getDocs(
+        invitationQuery
+      );
+  } catch (error) {
+    console.error("OPSEYE PENDING INVITATIONS: QUERY FAILED", {
+      operation:
+        "organizationInvitations.getDocs",
+      collection:
+        INVITATIONS_COLLECTION,
+      organizationId,
+      teamId,
+      email:
+        emailLower,
+      status:
+        "pending",
+      code:
+        error?.code || "",
+      message:
+        error?.message || "",
+      error,
+    });
+
+    throw error;
+  }
+
+  console.log("OPSEYE PENDING INVITATIONS: QUERY OK", {
+    organizationId,
+    teamId,
+    email:
+      emailLower,
+    returnedDocuments:
+      invitationSnapshot.size,
+  });
 
   return invitationSnapshot.docs
     .map((invitationDocument) => ({

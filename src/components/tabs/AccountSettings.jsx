@@ -318,53 +318,12 @@ const getSettingsRegionalMembers = async (regionId) => {
 };
 
 /*
- * Firestore rules are not filters. Account Settings therefore reads
- * invitations through the exact organizationId that the signed-in admin owns
- * or manages, then applies pending-status filtering in memory.
+ * Account Settings needs only the invitations created by the signed-in admin.
+ * The same query covers team invitations and child-organization administrator
+ * invitations. Pending status is filtered in memory so no composite index is
+ * required.
  */
-const getSettingsPendingInvitations = async (organizationId) => {
-  if (!organizationId) {
-    return [];
-  }
-
-  const snapshot = await getDocs(
-    query(
-      collection(
-        db,
-        "organizationInvitations"
-      ),
-      where(
-        "organizationId",
-        "==",
-        organizationId
-      )
-    )
-  );
-
-  return snapshot.docs
-    .map((documentSnapshot) => ({
-      id: documentSnapshot.id,
-      invitationId:
-        documentSnapshot.data()?.invitationId ||
-        documentSnapshot.id,
-      ...documentSnapshot.data(),
-    }))
-    .filter(
-      (invitation) =>
-        normalizeText(
-          invitation.status
-        ) === "pending"
-    );
-};
-
-/*
- * Parent-admin invitation reload.
- *
- * Region/Branch administrator invitations always store invitedBy. Reading by
- * the current admin UID is query-provable and works for child organizations
- * without depending on a rules-time organization lookup.
- */
-const getSettingsPendingInvitationsCreatedBy = async (userId) => {
+const getSettingsPendingInvitations = async (userId) => {
   if (!userId) {
     return [];
   }
@@ -1629,20 +1588,20 @@ const AccountSettings = ({ roles = [] }) => {
       }
 
       /*
-       * Always load the current organization's invitations independently.
-       * Descendant invitation failures are tolerated so the Team tab can still
-       * show its own pending invitations.
+       * Load pending invitations created by the signed-in administrator. A
+       * single invitedBy query covers both Team invitations and administrator
+       * invitations for newly created child organizations.
        */
-      let ownInvitations = [];
+      let loadedInvitations = [];
 
       try {
-        ownInvitations =
+        loadedInvitations =
           await getSettingsPendingInvitations(
-            normalizedOrganization.organizationId
+            currentUser.uid
           );
       } catch (invitationError) {
         console.error(
-          "Unable to load organization invitations:",
+          "Unable to load pending invitations:",
           invitationError
         );
       }
@@ -1654,77 +1613,7 @@ const AccountSettings = ({ roles = [] }) => {
             normalizedOrganization.organizationId
         );
 
-      let descendantInvitationGroups = [];
-
-      if (
-        [
-          "enterprise",
-          "region",
-        ].includes(
-          getOrganizationLevel(
-            normalizedOrganization
-          )
-        )
-      ) {
-        try {
-          const directChildOrganizationIds =
-            new Set(
-              directChildOrganizations
-                .map(
-                  getOrganizationId
-                )
-                .filter(Boolean)
-            );
-
-          const createdInvitations =
-            await getSettingsPendingInvitationsCreatedBy(
-              currentUser.uid
-            );
-
-          descendantInvitationGroups = [
-            createdInvitations.filter(
-              (invitation) =>
-                directChildOrganizationIds.has(
-                  invitation.organizationId
-                )
-            ),
-          ];
-        } catch (invitationError) {
-          console.error(
-            "Unable to load descendant invitations:",
-            invitationError
-          );
-        }
-      } else {
-        descendantInvitationGroups =
-          await Promise.all(
-            directChildOrganizations.map(
-              async (
-                organizationItem
-              ) => {
-                try {
-                  return await getSettingsPendingInvitations(
-                    getOrganizationId(
-                      organizationItem
-                    )
-                  );
-                } catch (invitationError) {
-                  console.error(
-                    "Unable to load descendant invitations:",
-                    invitationError
-                  );
-
-                  return [];
-                }
-              }
-            )
-          );
-      }
-
-      const loadedInvitations = [
-        ...ownInvitations,
-        ...descendantInvitationGroups.flat(),
-      ].sort(
+      loadedInvitations.sort(
         (first, second) =>
           getTimestampMilliseconds(second.createdAt) -
           getTimestampMilliseconds(first.createdAt)
@@ -2399,7 +2288,7 @@ const AccountSettings = ({ roles = [] }) => {
       throw new Error("The parent organization could not be resolved.");
     }
 
-    if (!defaultTeam) {
+    if (assignmentMode === "existing" && !defaultTeam) {
       throw new Error(
         "The parent organization's default team is not available."
       );
@@ -3037,13 +2926,7 @@ const AccountSettings = ({ roles = [] }) => {
           <Card className="overflow-hidden">
             {teamMembers.length > 0 ? (
               <Table
-                headers={[
-                  "Member",
-                  "Job Title",
-                  "Role",
-                  "Organization Level",
-                  "Status",
-                ]}
+                headers={["Member"]}
                 rows={teamMembers}
                 renderRow={(member) => {
                   const memberName = member.fullName || member.email || "";
@@ -3074,24 +2957,6 @@ const AccountSettings = ({ roles = [] }) => {
                             </p>
                           </div>
                         </div>
-                      </td>
-
-                      <td className="whitespace-nowrap px-5 py-4 font-medium text-slate-700">
-                        <EmptyCell value={member.jobTitle} />
-                      </td>
-
-                      <td className="whitespace-nowrap px-5 py-4 font-medium text-slate-700">
-                        <EmptyCell value={formatRole(member.role)} />
-                      </td>
-
-                      <td className="whitespace-nowrap px-5 py-4 font-medium capitalize text-slate-700">
-                        <EmptyCell value={member.hierarchyLevel} />
-                      </td>
-
-                      <td className="whitespace-nowrap px-5 py-4">
-                        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-                          {member.status || "active"}
-                        </span>
                       </td>
                     </>
                   );
