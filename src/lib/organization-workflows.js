@@ -56,6 +56,14 @@ const ORGANIZATION_ADMIN_ROLE =
 const TEAM_MEMBER_INVITATION_TYPE =
   "team_member";
 
+const TEAM_ASSIGNABLE_ROLES =
+  new Set([
+    "organization_admin",
+    "reporting_officer",
+    "contributor",
+    "viewer",
+  ]);
+
 const REGION_ADMIN_INVITATION_TYPE =
   "region_admin";
 
@@ -243,11 +251,11 @@ const validateBranchCreationPermission = ({
 };
 
 /*
- * Checks whether a user may manage members of the target organization.
+ * Checks whether a user may invite members to their own organization.
  *
- * Ministry and branch administrators manage only their own teams.
- * Enterprise and regional administrators retain their existing descendant
- * management scope.
+ * Child-organization administrator assignment uses the dedicated Region/Branch
+ * workflows. A normal team-member invitation stays inside the inviter's primary
+ * organization and Team.
  */
 const validateOrganizationManagementPermission =
   ({
@@ -286,61 +294,24 @@ const validateOrganizationManagementPermission =
       currentUser.role
     );
 
-    const targetAncestorIds =
-      Array.isArray(
-        organization.ancestorIds
-      )
-        ? organization.ancestorIds
-        : [];
+    const permittedRoles = [
+      MINISTRY_ADMIN_ROLE,
+      ENTERPRISE_ADMIN_ROLE,
+      REGION_ADMIN_ROLE,
+      BRANCH_ADMIN_ROLE,
+      ORGANIZATION_ADMIN_ROLE,
+    ];
 
-    const targetRootEnterpriseId =
-      normalizeText(
-        organization.rootEnterpriseId
-      );
-
-    const managesOwnOrganization =
+    if (
       targetOrganizationId ===
-      currentOrganizationId;
-
-    const managesDescendant =
-      targetAncestorIds.includes(
-        currentOrganizationId
-      );
-
-    if (
-      managesOwnOrganization &&
-      [
-        MINISTRY_ADMIN_ROLE,
-        BRANCH_ADMIN_ROLE,
-        ORGANIZATION_ADMIN_ROLE,
-      ].includes(role)
-    ) {
-      return currentUserId;
-    }
-
-    if (
-      role === ENTERPRISE_ADMIN_ROLE &&
-      (
-        managesOwnOrganization ||
-        targetRootEnterpriseId ===
-          currentOrganizationId
-      )
-    ) {
-      return currentUserId;
-    }
-
-    if (
-      role === REGION_ADMIN_ROLE &&
-      (
-        managesOwnOrganization ||
-        managesDescendant
-      )
+        currentOrganizationId &&
+      permittedRoles.includes(role)
     ) {
       return currentUserId;
     }
 
     throw new Error(
-      "You do not have permission to manage users for this organization."
+      "You can only invite team members to your own organization."
     );
   };
 
@@ -564,6 +535,17 @@ export const createRegionAndInviteAdministrator =
         ),
     });
 
+    /*
+     * The team belongs to the organization, so it is prepared by the Enterprise
+     * Administrator before the invited Regional Administrator creates an account.
+     */
+    const defaultTeam =
+      await createDefaultOrganizationTeam({
+        organization,
+        createdBy:
+          currentUserId,
+      });
+
     const invitationToken =
       generateInvitationToken();
 
@@ -599,6 +581,10 @@ export const createRegionAndInviteAdministrator =
         role:
           REGION_ADMIN_ROLE,
 
+        teamId:
+          getTeamId(
+            defaultTeam
+          ),
 
         invitedBy:
           currentUserId,
@@ -663,6 +649,7 @@ export const createRegionAndInviteAdministrator =
           "region_admin",
     
         teamName:
+          defaultTeam.name ||
           organization.name,
     
         invitationUrl,
@@ -693,7 +680,7 @@ export const createRegionAndInviteAdministrator =
           : "region_created_email_failed",
 
       organization,
-      defaultTeam: null,
+      defaultTeam,
       invitation,
       invitationUrl,
       emailDelivery,
@@ -914,6 +901,17 @@ export const createBranchAndInviteAdministrator =
         ),
     });
 
+    /*
+     * The branch team is prepared before the invitation is sent so the invited
+     * administrator can be linked to it during the same onboarding flow.
+     */
+    const defaultTeam =
+      await createDefaultOrganizationTeam({
+        organization,
+        createdBy:
+          currentUserId,
+      });
+
     const invitationToken =
       generateInvitationToken();
 
@@ -951,6 +949,10 @@ export const createBranchAndInviteAdministrator =
         role:
           BRANCH_ADMIN_ROLE,
 
+        teamId:
+          getTeamId(
+            defaultTeam
+          ),
 
         invitedBy:
           currentUserId,
@@ -1014,6 +1016,7 @@ export const createBranchAndInviteAdministrator =
             BRANCH_ADMIN_ROLE,
 
           teamName:
+            defaultTeam.name ||
             organization.name,
 
           invitationUrl,
@@ -1045,7 +1048,7 @@ export const createBranchAndInviteAdministrator =
           : "branch_created_email_failed",
 
       organization,
-      defaultTeam: null,
+      defaultTeam,
       invitation,
       invitationUrl,
       emailDelivery,
@@ -1220,6 +1223,19 @@ export const inviteOrganizationTeamMember =
       "Select the invited user's role."
     );
 
+    const normalizedRole =
+      normalizeStatus(role);
+
+    if (
+      !TEAM_ASSIGNABLE_ROLES.has(
+        normalizedRole
+      )
+    ) {
+      throw new Error(
+        "Select a valid team-member role."
+      );
+    }
+
     if (
       team.organizationId !==
       organizationId
@@ -1229,12 +1245,17 @@ export const inviteOrganizationTeamMember =
       );
     }
 
+    const selectedTeamStatus =
+      normalizeStatus(
+        team.status
+      );
+
     if (
-      normalizeStatus(team.status) ===
-      "archived"
+      selectedTeamStatus &&
+      selectedTeamStatus !== "active"
     ) {
       throw new Error(
-        "Users cannot be invited to an archived team."
+        "Users can only be invited to an active team."
       );
     }
 
@@ -1305,6 +1326,20 @@ export const inviteOrganizationTeamMember =
       );
     }
 
+    const storedTeamStatus =
+      normalizeStatus(
+        storedTeam.status
+      );
+
+    if (
+      storedTeamStatus &&
+      storedTeamStatus !== "active"
+    ) {
+      throw new Error(
+        "Users can only be invited to an active team."
+      );
+    }
+
     const invitationToken =
       generateInvitationToken();
 
@@ -1335,7 +1370,7 @@ export const inviteOrganizationTeamMember =
           organization.name,
 
         role:
-          normalizeStatus(role),
+          normalizedRole,
 
         teamId,
 
@@ -1411,7 +1446,7 @@ export const inviteOrganizationTeamMember =
             organization.name,
 
           role:
-            normalizeStatus(role),
+            normalizedRole,
 
           teamName:
             storedTeam.name,

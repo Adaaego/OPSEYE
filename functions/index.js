@@ -41,6 +41,26 @@ const ORGANIZATIONS_COLLECTION =
 const INVITATIONS_COLLECTION =
   "organizationInvitations";
 
+const USERS_COLLECTION =
+  "users";
+
+const ORGANIZATION_MEMBERS_COLLECTION =
+  "organizationMembers";
+
+const TEAMS_COLLECTION =
+  "teams";
+
+const INVITED_PROFILE_ONBOARDING_STEP =
+  4;
+
+const HIERARCHY_ADMIN_ROLES =
+  new Set([
+    "ministry_admin",
+    "enterprise_admin",
+    "region_admin",
+    "branch_admin",
+  ]);
+
 const DEFAULT_TIMEZONE =
   "Africa/Accra";
 
@@ -258,6 +278,1074 @@ exports.validatePublicInvitation =
         invitation:
           safeInvitation,
       };
+    }
+  );
+
+
+const normalizeEmail = (value) => {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+};
+
+const normalizeText = (value) => {
+  return String(value ?? "").trim();
+};
+
+const cleanStringArray = (value) => {
+  return Array.from(
+    new Set(
+      (Array.isArray(value)
+        ? value
+        : []
+      )
+        .map((item) =>
+          normalizeText(item)
+        )
+        .filter(Boolean)
+    )
+  );
+};
+
+const invitationValueToDate = (value) => {
+  if (!value) {
+    return null;
+  }
+
+  if (
+    typeof value?.toDate ===
+    "function"
+  ) {
+    return value.toDate();
+  }
+
+  const parsedDate =
+    new Date(value);
+
+  return Number.isNaN(
+    parsedDate.getTime()
+  )
+    ? null
+    : parsedDate;
+};
+
+const validateInvitationRole = (
+  invitation
+) => {
+  const invitationType =
+    normalizeStatus(
+      invitation?.invitationType
+    );
+
+  const role =
+    normalizeStatus(
+      invitation?.role
+    );
+
+  if (!role) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The invitation does not contain a valid role."
+    );
+  }
+
+  if (
+    invitationType ===
+      "region_admin" &&
+    role !== "region_admin"
+  ) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The Regional Administrator invitation has an invalid role."
+    );
+  }
+
+  if (
+    invitationType ===
+      "branch_admin" &&
+    role !== "branch_admin"
+  ) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The Branch Administrator invitation has an invalid role."
+    );
+  }
+
+  if (
+    invitationType ===
+      "team_member" &&
+    HIERARCHY_ADMIN_ROLES.has(
+      role
+    )
+  ) {
+    throw new HttpsError(
+      "failed-precondition",
+      "A team-member invitation cannot grant a hierarchy administrator role."
+    );
+  }
+
+  return role;
+};
+
+const isAdministratorInvitation = (
+  invitationType
+) => {
+  return [
+    "region_admin",
+    "branch_admin",
+  ].includes(
+    normalizeStatus(
+      invitationType
+    )
+  );
+};
+
+const getDashboardRoute = (
+  organization
+) => {
+  const sector =
+    normalizeText(
+      organization?.sector
+    ).toLowerCase();
+
+  if (sector === "energy") {
+    return "/energy-dashboard";
+  }
+
+  return "/coming-soon";
+};
+
+const buildOrganizationMemberData = ({
+  userId,
+  authenticatedEmail,
+  fullName,
+  jobTitle,
+  department,
+  role,
+  organization,
+  teamIds,
+  existingMember,
+}) => {
+  const organizationId =
+    organization.organizationId ||
+    organization.id ||
+    "";
+
+  const organizationType =
+    normalizeStatus(
+      organization.type ||
+      organization.organizationType ||
+      organization.level
+    );
+
+  const rootEnterpriseId =
+    organizationType ===
+      "enterprise"
+      ? organizationId
+      : normalizeText(
+          organization.rootEnterpriseId
+        );
+
+  const payload = {
+    uid:
+      userId,
+
+    fullName,
+
+    displayName:
+      fullName,
+
+    email:
+      authenticatedEmail,
+
+    emailLower:
+      authenticatedEmail,
+
+    jobTitle,
+
+    department:
+      normalizeText(
+        department
+      ),
+
+    role,
+
+    organizationId,
+
+    organizationName:
+      normalizeText(
+        organization.name
+      ),
+
+    organizationType,
+
+    organizationCategory:
+      normalizeStatus(
+        organization.organizationCategory ||
+        organization.category
+      ),
+
+    parentId:
+      normalizeText(
+        organization.parentId
+      ),
+
+    rootEnterpriseId,
+
+    ancestorIds:
+      cleanStringArray(
+        organization.ancestorIds
+      ),
+
+    companyId:
+      normalizeText(
+        organization.companyId
+      ),
+
+    regionId:
+      normalizeText(
+        organization.regionId
+      )
+        .toLowerCase()
+        .replace(/[\s_]+/g, "-"),
+
+    sector:
+      normalizeText(
+        organization.sector
+      ),
+
+    industrySegment:
+      normalizeText(
+        organization.industrySegment
+      ),
+
+    country:
+      normalizeText(
+        organization.country
+      ),
+
+    teamIds:
+      cleanStringArray(
+        teamIds
+      ),
+
+    status:
+      "active",
+
+    source:
+      "organization_member",
+
+    updatedBy:
+      userId,
+
+    updatedAt:
+      FieldValue.serverTimestamp(),
+  };
+
+  if (!existingMember) {
+    payload.createdAt =
+      FieldValue.serverTimestamp();
+  }
+
+  return payload;
+};
+
+/*
+ * Completes an invited account after Firebase confirms the signed-in email.
+ *
+ * The invitation remains the source of truth for organization, role and team
+ * access. Personal profile fields come from the user completing onboarding.
+ *
+ * All access writes are committed together so the account cannot be left in a
+ * partially activated state.
+ */
+exports.completeInvitation =
+  onCall(
+    {
+      region:
+        "europe-west1",
+
+      timeoutSeconds:
+        30,
+    },
+    async (request) => {
+      const authenticatedUserId =
+        request.auth?.uid ||
+        "";
+
+      const authenticatedEmail =
+        normalizeEmail(
+          request.auth?.token?.email
+        );
+
+      const emailVerified =
+        request.auth?.token
+          ?.email_verified === true;
+
+      if (!authenticatedUserId) {
+        throw new HttpsError(
+          "unauthenticated",
+          "Sign in before completing this invitation."
+        );
+      }
+
+      if (
+        !authenticatedEmail ||
+        !emailVerified
+      ) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Verify your email address before completing this invitation."
+        );
+      }
+
+      const token =
+        normalizeText(
+          request.data?.token
+        );
+
+      const fullName =
+        normalizeText(
+          request.data?.fullName
+        );
+
+      const jobTitle =
+        normalizeText(
+          request.data?.jobTitle
+        );
+
+      const phoneNumber =
+        normalizeText(
+          request.data?.phoneNumber
+        );
+
+      const department =
+        normalizeText(
+          request.data?.department
+        );
+
+      const country =
+        normalizeText(
+          request.data?.country
+        );
+
+      if (
+        token.length < 16 ||
+        token.length > 512
+      ) {
+        throw new HttpsError(
+          "invalid-argument",
+          "A valid invitation token is required."
+        );
+      }
+
+      if (!fullName) {
+        throw new HttpsError(
+          "invalid-argument",
+          "Please enter your full name."
+        );
+      }
+
+      if (!jobTitle) {
+        throw new HttpsError(
+          "invalid-argument",
+          "Please enter your job title."
+        );
+      }
+
+      const invitationId =
+        hashInvitationToken(
+          token
+        );
+
+      const invitationReference =
+        db
+          .collection(
+            INVITATIONS_COLLECTION
+          )
+          .doc(
+            invitationId
+          );
+
+      const userReference =
+        db
+          .collection(
+            USERS_COLLECTION
+          )
+          .doc(
+            authenticatedUserId
+          );
+
+      const memberReference =
+        db
+          .collection(
+            ORGANIZATION_MEMBERS_COLLECTION
+          )
+          .doc(
+            authenticatedUserId
+          );
+
+      const result =
+        await db.runTransaction(
+          async (transaction) => {
+            const invitationSnapshot =
+              await transaction.get(
+                invitationReference
+              );
+
+            if (
+              !invitationSnapshot.exists
+            ) {
+              throw new HttpsError(
+                "not-found",
+                "This invitation could not be found."
+              );
+            }
+
+            const invitation = {
+              id:
+                invitationSnapshot.id,
+
+              invitationId:
+                invitationSnapshot.id,
+
+              ...invitationSnapshot.data(),
+            };
+
+            const invitationStatus =
+              normalizeStatus(
+                invitation.status
+              );
+
+            if (
+              invitationStatus ===
+                "accepted" &&
+              invitation.acceptedBy !==
+                authenticatedUserId
+            ) {
+              throw new HttpsError(
+                "failed-precondition",
+                "This invitation has already been accepted by another user."
+              );
+            }
+
+            if (
+              ![
+                "pending",
+                "accepted",
+              ].includes(
+                invitationStatus
+              )
+            ) {
+              throw new HttpsError(
+                "failed-precondition",
+                "This invitation is no longer available."
+              );
+            }
+
+            if (
+              invitationStatus ===
+              "pending"
+            ) {
+              const expiryDate =
+                invitationValueToDate(
+                  invitation.expiresAt
+                );
+
+              if (
+                !expiryDate ||
+                expiryDate.getTime() <=
+                  Date.now()
+              ) {
+                throw new HttpsError(
+                  "deadline-exceeded",
+                  "This invitation has expired."
+                );
+              }
+            }
+
+            const invitationEmail =
+              normalizeEmail(
+                invitation.emailLower ||
+                invitation.email
+              );
+
+            if (
+              !invitationEmail ||
+              invitationEmail !==
+                authenticatedEmail
+            ) {
+              throw new HttpsError(
+                "permission-denied",
+                "This invitation belongs to a different email address."
+              );
+            }
+
+            const role =
+              validateInvitationRole(
+                invitation
+              );
+
+            const organizationId =
+              normalizeText(
+                invitation.organizationId
+              );
+
+            if (!organizationId) {
+              throw new HttpsError(
+                "failed-precondition",
+                "The invitation does not contain a valid organization."
+              );
+            }
+
+            const organizationReference =
+              db
+                .collection(
+                  ORGANIZATIONS_COLLECTION
+                )
+                .doc(
+                  organizationId
+                );
+
+            const teamId =
+              normalizeText(
+                invitation.teamId
+              );
+
+            const teamReference =
+              teamId
+                ? db
+                    .collection(
+                      TEAMS_COLLECTION
+                    )
+                    .doc(
+                      teamId
+                    )
+                : null;
+
+            /*
+             * Transaction reads are completed before any access document is written.
+             */
+            const userSnapshot =
+              await transaction.get(
+                userReference
+              );
+
+            const memberSnapshot =
+              await transaction.get(
+                memberReference
+              );
+
+            const organizationSnapshot =
+              await transaction.get(
+                organizationReference
+              );
+
+            const teamSnapshot =
+              teamReference
+                ? await transaction.get(
+                    teamReference
+                  )
+                : null;
+
+            if (
+              !organizationSnapshot.exists
+            ) {
+              throw new HttpsError(
+                "not-found",
+                "The organization linked to this invitation could not be found."
+              );
+            }
+
+            const organization = {
+              id:
+                organizationSnapshot.id,
+
+              ...organizationSnapshot.data(),
+            };
+
+            const storedOrganizationId =
+              organization.organizationId ||
+              organization.id ||
+              "";
+
+            if (
+              storedOrganizationId !==
+              organizationId
+            ) {
+              throw new HttpsError(
+                "failed-precondition",
+                "The invitation organization does not match the stored organization."
+              );
+            }
+
+            const organizationStatus =
+              normalizeStatus(
+                organization.status
+              );
+
+            if (
+              organizationStatus &&
+              organizationStatus !==
+                "active"
+            ) {
+              throw new HttpsError(
+                "failed-precondition",
+                "The organization linked to this invitation is not active."
+              );
+            }
+
+            if (teamId) {
+              if (
+                !teamSnapshot ||
+                !teamSnapshot.exists
+              ) {
+                throw new HttpsError(
+                  "not-found",
+                  "The team linked to this invitation could not be found."
+                );
+              }
+
+              const team = {
+                id:
+                  teamSnapshot.id,
+
+                ...teamSnapshot.data(),
+              };
+
+              const storedTeamId =
+                team.teamId ||
+                team.id ||
+                "";
+
+              if (
+                storedTeamId !==
+                teamId
+              ) {
+                throw new HttpsError(
+                  "failed-precondition",
+                  "The invitation team does not match the stored team."
+                );
+              }
+
+              if (
+                team.organizationId !==
+                organizationId
+              ) {
+                throw new HttpsError(
+                  "failed-precondition",
+                  "The invitation team does not belong to the invited organization."
+                );
+              }
+
+              const teamStatus =
+                normalizeStatus(
+                  team.status
+                );
+
+              if (
+                teamStatus &&
+                teamStatus !==
+                  "active"
+              ) {
+                throw new HttpsError(
+                  "failed-precondition",
+                  "The team linked to this invitation is not active."
+                );
+              }
+            }
+
+            const existingUser =
+              userSnapshot.exists
+                ? userSnapshot.data()
+                : null;
+
+            const existingMember =
+              memberSnapshot.exists
+                ? memberSnapshot.data()
+                : null;
+
+            if (existingUser) {
+              const existingEmail =
+                normalizeEmail(
+                  existingUser.emailLower ||
+                  existingUser.email
+                );
+
+              if (
+                existingEmail &&
+                existingEmail !==
+                  authenticatedEmail
+              ) {
+                throw new HttpsError(
+                  "permission-denied",
+                  "The existing OPSEYE user profile belongs to another email address."
+                );
+              }
+
+              if (
+                existingUser.organizationId &&
+                existingUser.organizationId !==
+                  organizationId
+              ) {
+                throw new HttpsError(
+                  "failed-precondition",
+                  "This account is already linked to another organization."
+                );
+              }
+
+              if (
+                existingUser.invitationId &&
+                existingUser.invitationId !==
+                  invitationId &&
+                !existingUser.onboardingCompleted
+              ) {
+                throw new HttpsError(
+                  "failed-precondition",
+                  "This account is already linked to another pending invitation."
+                );
+              }
+            }
+
+            if (
+              existingMember?.organizationId &&
+              existingMember.organizationId !==
+                organizationId
+            ) {
+              throw new HttpsError(
+                "failed-precondition",
+                "This account already belongs to another organization."
+              );
+            }
+
+            const teamIds =
+              cleanStringArray([
+                ...cleanStringArray(
+                  existingUser?.teamIds
+                ),
+
+                ...cleanStringArray(
+                  existingMember?.teamIds
+                ),
+
+                ...(teamId
+                  ? [teamId]
+                  : []),
+              ]);
+
+            const completedUserData = {
+              uid:
+                authenticatedUserId,
+
+              email:
+                authenticatedEmail,
+
+              emailLower:
+                authenticatedEmail,
+
+              fullName,
+
+              jobTitle,
+
+              phoneNumber:
+                phoneNumber ||
+                null,
+
+              department:
+                department ||
+                null,
+
+              invitationId,
+
+              invitationType:
+                invitation.invitationType,
+
+              invitedBy:
+                invitation.invitedBy ||
+                null,
+
+              onboardingType:
+                "invited",
+
+              onboardingStep:
+                null,
+
+              onboardingCompleted:
+                true,
+
+              onboardingCompletedAt:
+                FieldValue.serverTimestamp(),
+
+              emailVerified:
+                true,
+
+              emailVerifiedAt:
+                existingUser
+                  ?.emailVerifiedAt ||
+                FieldValue.serverTimestamp(),
+
+              country:
+                country ||
+                existingUser?.country ||
+                organization.country ||
+                null,
+
+              organizationId,
+
+              organizationName:
+                organization.name ||
+                invitation.organizationName ||
+                "",
+
+              companyId:
+                organization.companyId ||
+                null,
+
+              organizationType:
+                organization.type ||
+                organization.organizationType ||
+                null,
+
+              parentOrganizationId:
+                organization.parentId ||
+                null,
+
+              rootEnterpriseId:
+                organization.rootEnterpriseId ||
+                null,
+
+              ancestorIds:
+                cleanStringArray(
+                  organization.ancestorIds
+                ),
+
+              regionId:
+                organization.regionId ||
+                null,
+
+              sector:
+                organization.sector ||
+                null,
+
+              industrySegment:
+                organization.industrySegment ||
+                null,
+
+              role,
+
+              teamIds,
+
+              status:
+                "active",
+
+              updatedAt:
+                FieldValue.serverTimestamp(),
+            };
+
+            if (!existingUser) {
+              completedUserData.createdAt =
+                FieldValue.serverTimestamp();
+            }
+
+            if (
+              isAdministratorInvitation(
+                invitation.invitationType
+              )
+            ) {
+              completedUserData.adminAssignment = {
+                organizationId,
+
+                organizationName:
+                  organization.name ||
+                  invitation.organizationName ||
+                  "",
+
+                organizationType:
+                  organization.type ||
+                  organization.organizationType ||
+                  null,
+
+                role,
+
+                assignedBy:
+                  invitation.invitedBy ||
+                  null,
+
+                assignmentSource:
+                  "invitation",
+
+                assignedAt:
+                  FieldValue.serverTimestamp(),
+              };
+            }
+
+            const organizationMemberData =
+              buildOrganizationMemberData({
+                userId:
+                  authenticatedUserId,
+
+                authenticatedEmail,
+
+                fullName,
+
+                jobTitle,
+
+                department,
+
+                role,
+
+                organization,
+
+                teamIds,
+
+                existingMember,
+              });
+
+            transaction.set(
+              userReference,
+              completedUserData,
+              {
+                merge: true,
+              }
+            );
+
+            transaction.set(
+              memberReference,
+              organizationMemberData,
+              {
+                merge: true,
+              }
+            );
+
+            if (
+              isAdministratorInvitation(
+                invitation.invitationType
+              )
+            ) {
+              const existingAdminIds =
+                cleanStringArray(
+                  organization.adminIds
+                );
+
+              const adminIds =
+                cleanStringArray([
+                  ...existingAdminIds,
+                  authenticatedUserId,
+                ]);
+
+              const organizationUpdates = {
+                adminIds,
+
+                adminStatus:
+                  "active",
+
+                adminAssignmentStatus:
+                  "assigned",
+
+                administratorAssignedBy:
+                  invitation.invitedBy ||
+                  null,
+
+                administratorAssignedAt:
+                  FieldValue.serverTimestamp(),
+
+                administratorAssignmentSource:
+                  "invitation",
+
+                updatedAt:
+                  FieldValue.serverTimestamp(),
+              };
+
+              if (
+                !organization
+                  .primaryAdminUserId
+              ) {
+                organizationUpdates
+                  .primaryAdminUserId =
+                  authenticatedUserId;
+              }
+
+              transaction.set(
+                organizationReference,
+                organizationUpdates,
+                {
+                  merge: true,
+                }
+              );
+            }
+
+            if (
+              invitationStatus ===
+              "pending"
+            ) {
+              transaction.set(
+                invitationReference,
+                {
+                  status:
+                    "accepted",
+
+                  acceptedBy:
+                    authenticatedUserId,
+
+                  acceptedEmail:
+                    authenticatedEmail,
+
+                  acceptedAt:
+                    FieldValue.serverTimestamp(),
+
+                  updatedAt:
+                    FieldValue.serverTimestamp(),
+                },
+                {
+                  merge: true,
+                }
+              );
+            }
+
+            return {
+              success: true,
+
+              userId:
+                authenticatedUserId,
+
+              email:
+                authenticatedEmail,
+
+              organizationId,
+
+              organizationName:
+                organization.name ||
+                invitation.organizationName ||
+                "",
+
+              companyId:
+                organization.companyId ||
+                null,
+
+              role,
+
+              teamIds,
+
+              invitationId,
+
+              invitationType:
+                invitation.invitationType,
+
+              onboardingCompleted:
+                true,
+
+              status:
+                "active",
+
+              dashboardRoute:
+                getDashboardRoute(
+                  organization
+                ),
+            };
+          }
+        );
+
+      return result;
     }
   );
 

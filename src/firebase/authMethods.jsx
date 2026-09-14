@@ -1,4 +1,4 @@
-/*
+/**
  * Firebase Authentication helpers.
  *
  * This file keeps Firebase Authentication operations in one place so pages and
@@ -13,6 +13,7 @@ import { auth } from "./firebase.js";
 
 import {
   createUserWithEmailAndPassword,
+  getIdToken,
   reload,
   sendEmailVerification,
   sendPasswordResetEmail,
@@ -36,7 +37,7 @@ const requireEmail = (email) => {
   return normalizedEmail;
 };
 
-/*
+/**
  * Creates a Firebase Authentication account.
  *
  * The caller remains responsible for creating the related users/{uid}
@@ -53,7 +54,7 @@ export const doCreateWithEmailAndPassword = (
   );
 };
 
-/*
+/**
  * Signs in an existing Firebase Authentication user.
  */
 export const doSignInWithEmailAndPassword = (
@@ -67,7 +68,7 @@ export const doSignInWithEmailAndPassword = (
   );
 };
 
-/*
+/**
  * Signs out the currently authenticated user.
  *
  * The modular signOut(auth) function is used consistently with the other
@@ -77,7 +78,7 @@ export const doSignOut = () => {
   return signOut(auth);
 };
 
-/*
+/**
  * Sends a password-reset email to the supplied address.
  */
 export const doResetPassword = (email) => {
@@ -87,7 +88,7 @@ export const doResetPassword = (email) => {
   );
 };
 
-/*
+/**
  * Sends Firebase's email-verification message.
  *
  * continueUrl is optional for normal account creation.
@@ -118,7 +119,7 @@ export const doSendEmailVerification = (
     continueUrl ?? ""
   ).trim();
 
-  /*
+  /**
    * Normal public signup does not require a continuation URL, so Firebase may
    * send the verification message using its default configuration.
    */
@@ -140,7 +141,7 @@ export const doSendEmailVerification = (
   });
 };
 
-/*
+/**
  * Reloads the Firebase user from the server.
  *
  * Firebase user properties can remain stale in memory after the user verifies
@@ -158,10 +159,16 @@ export const doReloadCurrentUser = async (
 
   await reload(user);
 
+  /*
+   * Firestore security rules read verification state from the Firebase ID token.
+   * Refreshing the token here keeps that claim in step with the reloaded user.
+   */
+  await getIdToken(user, true);
+
   return user;
 };
 
-/*
+/**
  * Reloads the Firebase account and returns its current verification state.
  *
  * This gives verification screens one predictable helper instead of repeatedly
@@ -176,7 +183,7 @@ export const doCheckEmailVerification = async (
   return Boolean(refreshedUser.emailVerified);
 };
 
-/*
+/**
  * Returns the currently authenticated Firebase user without performing a
  * network request.
  *

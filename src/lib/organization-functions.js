@@ -135,10 +135,10 @@ export const buildChildOrganizationMetadata = ({
 
   if (
     childType === "branch" &&
-    !["enterprise", "region"].includes(parentType)
+    parentType !== "region"
   ) {
     throw new Error(
-      "A branch organization must be created under an enterprise or region."
+      "A branch organization must be created directly under a region."
     );
   }
 

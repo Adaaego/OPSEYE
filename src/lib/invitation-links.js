@@ -39,6 +39,12 @@ const validatePublicInvitationCall =
     "validatePublicInvitation"
   );
 
+const completeInvitationCall =
+  httpsCallable(
+    functions,
+    "completeInvitation"
+  );
+
 const normalizeEmail = (value) => {
   return String(value || "").trim().toLowerCase();
 };
@@ -669,6 +675,85 @@ export const validateInvitation = async ({
       validation.valid
         ? invitation
         : null,
+  };
+};
+
+/*
+ * Completes an invitation only after Firebase has confirmed the signed-in
+ * user's verified email. The callable backend validates the invitation and
+ * applies the organization, role and team assignment from the stored record.
+ */
+export const completeInvitation = async ({
+  token,
+  fullName,
+  jobTitle,
+  phoneNumber = "",
+  department = "",
+  country = "",
+}) => {
+  requireValue(
+    token,
+    "An invitation token is required."
+  );
+
+  requireValue(
+    fullName,
+    "Your full name is required."
+  );
+
+  requireValue(
+    jobTitle,
+    "Your job title is required."
+  );
+
+  const actor =
+    getAuthenticatedActor({
+      requireVerifiedEmail: true,
+    });
+
+  /*
+   * Refresh the ID token before the callable runs so the backend receives the
+   * current email-verification claim rather than a token issued before the
+   * verification link was completed.
+   */
+  await auth.currentUser.getIdToken(true);
+
+  const callableResult =
+    await completeInvitationCall({
+      token:
+        String(token).trim(),
+
+      fullName:
+        String(fullName).trim(),
+
+      jobTitle:
+        String(jobTitle).trim(),
+
+      phoneNumber:
+        String(phoneNumber || "").trim(),
+
+      department:
+        String(department || "").trim(),
+
+      country:
+        String(country || "").trim(),
+    });
+
+  const result =
+    callableResult?.data || {};
+
+  if (!result.success) {
+    throw new Error(
+      result.message ||
+        "Your invitation could not be completed."
+    );
+  }
+
+  return {
+    ...result,
+    userId:
+      result.userId ||
+      actor.uid,
   };
 };
 

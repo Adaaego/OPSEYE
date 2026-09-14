@@ -23,7 +23,6 @@
 import {
   doc,
   getDoc,
-  runTransaction,
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
@@ -31,18 +30,14 @@ import {
 import { auth, db } from "../firebase/firebase";
 
 import {
-  buildOrganizationMemberPayload,
-  ORGANIZATION_MEMBERS_COLLECTION,
-} from "./organization-member-functions";
-
-import { getInvitationById,
-hashInvitationToken,
-validateInvitation, } from "./invitation-links";
+  completeInvitation,
+  getInvitationById,
+  hashInvitationToken,
+  validateInvitation,
+} from "./invitation-links";
 
 const USERS_COLLECTION = "users";
 const ORGANIZATIONS_COLLECTION = "organizations";
-const TEAMS_COLLECTION = "teams";
-const INVITATIONS_COLLECTION = "organizationInvitations";
 
 /*
  * These values give invitation pages and authentication routing one predictable
@@ -129,16 +124,6 @@ const getUserReference = (uid) => {
   return doc(db, USERS_COLLECTION, uid);
 };
 
-const getOrganizationMemberReference = (uid) => {
-  requireValue(uid, "A Firebase user ID is required.");
-
-  return doc(
-    db,
-    ORGANIZATION_MEMBERS_COLLECTION,
-    uid
-  );
-};
-
 const getOrganizationReference = (organizationId) => {
   requireValue(
     organizationId,
@@ -149,28 +134,6 @@ const getOrganizationReference = (organizationId) => {
     db,
     ORGANIZATIONS_COLLECTION,
     organizationId
-  );
-};
-
-const getTeamReference = (teamId) => {
-  requireValue(
-    teamId,
-    "A team ID is required."
-  );
-
-  return doc(db, TEAMS_COLLECTION, teamId);
-};
-
-const getInvitationReference = (invitationId) => {
-  requireValue(
-    invitationId,
-    "An invitation ID is required."
-  );
-
-  return doc(
-    db,
-    INVITATIONS_COLLECTION,
-    invitationId
   );
 };
 
@@ -315,29 +278,6 @@ const validateInvitationRoleAssignment = (
   return role;
 };
 
-const validateInvitationEmail = ({
-  invitation,
-  authenticatedEmail,
-}) => {
-  const invitationEmail = normalizeEmail(
-    invitation?.emailLower || invitation?.email
-  );
-
-  if (!invitationEmail) {
-    throw new Error(
-      "The invitation does not contain a valid email address."
-    );
-  }
-
-  if (invitationEmail !== authenticatedEmail) {
-    throw new Error(
-      "This invitation belongs to a different email address."
-    );
-  }
-
-  return invitationEmail;
-};
-
 /*
  * Prevents an existing user account from being silently moved from one
  * organization to another through an invitation.
@@ -393,113 +333,6 @@ const validateExistingUserAssignment = ({
       "This account is already linked to another pending invitation."
     );
   }
-};
-
-const validateOrganization = ({
-  organization,
-  invitation,
-}) => {
-  if (!organization) {
-    throw new Error(
-      "The organization linked to this invitation could not be found."
-    );
-  }
-
-  const organizationId =
-    organization.organizationId ||
-    organization.id;
-
-  if (
-    organizationId !== invitation.organizationId
-  ) {
-    throw new Error(
-      "The invitation organization does not match the stored organization."
-    );
-  }
-
-  const organizationStatus = normalizeStatus(
-    organization.status
-  );
-
-  /*
-   * Older demo records may not yet contain a status field, so an empty status
-   * remains usable. Explicitly archived or inactive organizations are blocked.
-   */
-  if (
-    organizationStatus &&
-    organizationStatus !== "active"
-  ) {
-    throw new Error(
-      "The organization linked to this invitation is not active."
-    );
-  }
-};
-
-const validateTeam = ({
-  team,
-  teamId,
-  organizationId,
-}) => {
-  if (!teamId) {
-    return;
-  }
-
-  if (!team) {
-    throw new Error(
-      "The team linked to this invitation could not be found."
-    );
-  }
-
-  const storedTeamId = team.teamId || team.id;
-
-  if (storedTeamId !== teamId) {
-    throw new Error(
-      "The invitation team does not match the stored team."
-    );
-  }
-
-  if (team.organizationId !== organizationId) {
-    throw new Error(
-      "The invitation team does not belong to the invited organization."
-    );
-  }
-
-  const teamStatus = normalizeStatus(team.status);
-
-  if (teamStatus && teamStatus !== "active") {
-    throw new Error(
-      "The team linked to this invitation is not active."
-    );
-  }
-};
-
-const mergeTeamIds = (
-  existingTeamIds = [],
-  invitedTeamId = ""
-) => {
-  const currentTeamIds = Array.isArray(existingTeamIds)
-    ? existingTeamIds.filter(Boolean)
-    : [];
-
-  if (!invitedTeamId) {
-    return Array.from(new Set(currentTeamIds));
-  }
-
-  return Array.from(
-    new Set([
-      ...currentTeamIds,
-      invitedTeamId,
-    ])
-  );
-};
-
-const isAdministratorInvitation = (
-  invitationType
-) => {
-  return [
-    "region_admin",
-    "branch_admin",
-  ].includes(normalizeStatus(invitationType));
 };
 
 const getDashboardRoute = (organization) => {
@@ -561,15 +394,53 @@ export const linkInvitationToAuthenticatedUser =
           authenticatedUser.email,
       });
 
-    if (!validation.valid) {
-      throw new Error(
-        validation.message ||
-          "This invitation is not valid."
-      );
-    }
+    let invitation =
+      validation.invitation ||
+      null;
 
-    const invitation =
-      validation.invitation;
+    /*
+     * Profile completion is staged. If the invitation was already accepted by
+     * this same user before a later onboarding write failed, allow the user to
+     * resume instead of treating the accepted invitation as unavailable.
+     */
+    if (
+      !validation.valid ||
+      !invitation
+    ) {
+      const invitationId =
+        await hashInvitationToken(
+          token
+        );
+
+      const storedInvitation =
+        await getInvitationById(
+          invitationId
+        );
+
+      const acceptedByCurrentUser =
+        normalizeStatus(
+          storedInvitation?.status
+        ) === "accepted" &&
+        storedInvitation?.acceptedBy ===
+          currentAuthUser.uid &&
+        normalizeEmail(
+          storedInvitation?.emailLower ||
+          storedInvitation?.email
+        ) ===
+          normalizeEmail(
+            currentAuthUser.email
+          );
+
+      if (!acceptedByCurrentUser) {
+        throw new Error(
+          validation.message ||
+            "This invitation is not valid."
+        );
+      }
+
+      invitation =
+        storedInvitation;
+    }
 
 
     validateInvitationRoleAssignment(
@@ -645,8 +516,15 @@ export const linkInvitationToAuthenticatedUser =
         onboardingWasAlreadyCompleted,
 
       status:
-        onboardingWasAlreadyCompleted
-          ? existingUser.status ||
+        onboardingWasAlreadyCompleted ||
+        (
+          normalizeStatus(
+            invitation.status
+          ) === "accepted" &&
+          invitation.acceptedBy ===
+            currentAuthUser.uid
+        )
+          ? existingUser?.status ||
             "active"
           : "profile_pending",
 
@@ -746,15 +624,61 @@ export const getInvitedUserNextStep =
       };
     }
 
-    const invitationId =
-      await hashInvitationToken(
-        normalizedToken
-      );
+    /*
+     * Before Firebase Authentication exists, invitation validation must use the
+     * callable backend rather than reading organizationInvitations directly.
+     */
+    const validation =
+      await validateInvitation({
+        token:
+          normalizedToken,
 
-    const invitation =
-      await getInvitationById(
-        invitationId
-      );
+        expectedEmail:
+          user?.email || "",
+      });
+
+    let invitation =
+      validation.invitation ||
+      null;
+
+    /*
+     * A completed invitation is no longer returned by the pending-invitation
+     * validator. The same authenticated user may still reopen it for routing.
+     */
+    if (
+      (!validation.valid ||
+        !invitation) &&
+      user?.uid
+    ) {
+      const invitationId =
+        await hashInvitationToken(
+          normalizedToken
+        );
+
+      const storedInvitation =
+        await getInvitationById(
+          invitationId
+        );
+
+      const acceptedByCurrentUser =
+        normalizeStatus(
+          storedInvitation?.status
+        ) === "accepted" &&
+        storedInvitation?.acceptedBy ===
+          user.uid &&
+        normalizeEmail(
+          storedInvitation?.emailLower ||
+          storedInvitation?.email
+        ) ===
+          normalizeEmail(
+            user.email
+          );
+
+      if (acceptedByCurrentUser) {
+        invitation =
+          storedInvitation;
+      }
+    }
 
     if (!invitation) {
       return {
@@ -764,10 +688,13 @@ export const getInvitedUserNextStep =
 
         route: "/",
 
-        reason: "not_found",
+        reason:
+          validation.reason ||
+          "unavailable",
 
         message:
-          "This invitation could not be found.",
+          validation.message ||
+          "This invitation is no longer available.",
       };
     }
 
@@ -985,9 +912,8 @@ export const getInvitedUserNextStep =
     }
 
     /*
-     * A completed profile with a still-pending invitation indicates that the
-     * final transaction did not complete previously. Returning to profile
-     * completion allows the operation to be retried safely.
+     * A pending invitation or incomplete profile returns to profile completion.
+     * The callable completion operation is safe to retry.
      */
     if (
       !resolvedUserProfile?.onboardingCompleted ||
@@ -1066,18 +992,11 @@ export const getInvitedUserNextStep =
     };
   };
 
+
 /*
- * Completes an invited user's personal profile and accepts the invitation.
- *
- * The Firebase email must already be verified before this function runs.
- *
- * Firestore updates performed together:
- * 1. Complete and activate the invited user's private users/{uid} profile.
- * 2. Create/update organizationMembers/{uid} for shared directory/access data.
- * 3. Mark organizationInvitations/{invitationId} as accepted.
- * 4. Assign the administrator to the organization where applicable.
- *
- * If any part fails, none of these writes are committed.
+ * Completes an invited user's personal profile through the trusted callable
+ * backend. The invitation remains the source of truth for organization, role
+ * and team access.
  */
 export const completeInvitedUserProfile =
   async ({
@@ -1097,7 +1016,6 @@ export const completeInvitedUserProfile =
     const authenticatedUser =
       validateAuthenticatedUser(user);
 
-
     const currentAuthUser =
       validateCurrentAuthSession(
         authenticatedUser,
@@ -1106,11 +1024,6 @@ export const completeInvitedUserProfile =
             true,
         }
       );
-    if (!currentAuthUser.emailVerified) {
-      throw new Error(
-        "Verify your email address before completing your profile."
-      );
-    }
 
     const normalizedFullName =
       normalizeText(fullName);
@@ -1130,528 +1043,42 @@ export const completeInvitedUserProfile =
       );
     }
 
-    const invitationId =
-      await hashInvitationToken(token);
+    const result =
+      await completeInvitation({
+        token:
+          normalizeText(token),
 
-    const invitationReference =
-      getInvitationReference(
-        invitationId
+        fullName:
+          normalizedFullName,
+
+        jobTitle:
+          normalizedJobTitle,
+
+        phoneNumber:
+          normalizeText(
+            phoneNumber
+          ),
+
+        department:
+          normalizeText(
+            department
+          ),
+
+        country:
+          normalizeText(
+            country
+          ),
+      });
+
+    if (
+      result?.userId &&
+      result.userId !==
+        currentAuthUser.uid
+    ) {
+      throw new Error(
+        "The completed invitation does not match the signed-in account."
       );
+    }
 
-    return runTransaction(
-      db,
-      async (transaction) => {
-        /*
-         * Read the invitation first because it contains the organization and
-         * optional team IDs needed for the remaining document references.
-         */
-        const invitationSnapshot =
-          await transaction.get(
-            invitationReference
-          );
-
-        const invitation =
-          getSnapshotData(
-            invitationSnapshot
-          );
-
-        if (!invitation) {
-          throw new Error(
-            "This invitation could not be found."
-          );
-        }
-
-
-        const invitationRole =
-          validateInvitationRoleAssignment(
-            invitation
-          );
-        const invitationStatus =
-          normalizeStatus(
-            invitation.status
-          );
-
-        /*
-         * The operation is idempotent. If the same user retries after the
-         * invitation was accepted, profile completion can still confirm and
-         * return the existing result.
-         */
-        if (
-          invitationStatus ===
-            "accepted" &&
-          invitation.acceptedBy !==
-            currentAuthUser.uid
-        ) {
-          throw new Error(
-            "This invitation has already been accepted by another user."
-          );
-        }
-
-        if (
-          !["pending", "accepted"].includes(
-            invitationStatus
-          )
-        ) {
-          throw new Error(
-            "This invitation is no longer available."
-          );
-        }
-
-        if (
-          invitationStatus === "pending"
-        ) {
-          const expiryDate =
-            toDate(invitation.expiresAt);
-
-          if (
-            !expiryDate ||
-            expiryDate.getTime() <=
-              Date.now()
-          ) {
-            throw new Error(
-              "This invitation has expired."
-            );
-          }
-        }
-
-        validateInvitationEmail({
-          invitation,
-          authenticatedEmail:
-            currentAuthUser.email,
-        });
-
-        const userReference =
-          getUserReference(
-            currentAuthUser.uid
-          );
-
-        const organizationMemberReference =
-          getOrganizationMemberReference(
-            currentAuthUser.uid
-          );
-
-        const organizationReference =
-          getOrganizationReference(
-            invitation.organizationId
-          );
-
-        const teamReference =
-          invitation.teamId
-            ? getTeamReference(
-                invitation.teamId
-              )
-            : null;
-
-        /*
-         * Firestore transaction reads are completed before any writes.
-         */
-        const [
-          userSnapshot,
-          organizationMemberSnapshot,
-          organizationSnapshot,
-          teamSnapshot,
-        ] = await Promise.all([
-          transaction.get(
-            userReference
-          ),
-
-          transaction.get(
-            organizationMemberReference
-          ),
-
-          transaction.get(
-            organizationReference
-          ),
-
-          teamReference
-            ? transaction.get(
-                teamReference
-              )
-            : Promise.resolve(null),
-        ]);
-
-        const existingUser =
-          getSnapshotData(
-            userSnapshot
-          );
-
-        const existingOrganizationMember =
-          getSnapshotData(
-            organizationMemberSnapshot
-          );
-
-        const organization =
-          getSnapshotData(
-            organizationSnapshot
-          );
-
-        const team = teamSnapshot
-          ? getSnapshotData(
-              teamSnapshot
-            )
-          : null;
-
-        validateExistingUserAssignment({
-          existingUser,
-          invitation,
-          authenticatedEmail:
-            currentAuthUser.email,
-        });
-
-        validateOrganization({
-          organization,
-          invitation,
-        });
-
-        validateTeam({
-          team,
-          teamId:
-            invitation.teamId || "",
-          organizationId:
-            invitation.organizationId,
-        });
-
-        const teamIds =
-          mergeTeamIds(
-            existingUser?.teamIds,
-            invitation.teamId
-          );
-
-        const completedUserData = {
-          uid:
-            currentAuthUser.uid,
-
-          email:
-            currentAuthUser.email,
-
-          emailLower:
-            currentAuthUser.email,
-
-          fullName:
-            normalizedFullName,
-
-          jobTitle:
-            normalizedJobTitle,
-
-          phoneNumber:
-            normalizeText(
-              phoneNumber
-            ) || null,
-
-          department:
-            normalizeText(
-              department
-            ) || null,
-
-          organizationId:
-            invitation.organizationId,
-
-          organizationName:
-            organization.name ||
-            invitation.organizationName ||
-            "",
-
-          companyId:
-            organization.companyId ||
-            null,
-
-          organizationType:
-            organization.type ||
-            null,
-
-          parentOrganizationId:
-            organization.parentId ||
-            null,
-
-          rootEnterpriseId:
-            organization.rootEnterpriseId ||
-            null,
-
-          ancestorIds:
-            Array.isArray(
-              organization.ancestorIds
-            )
-              ? organization.ancestorIds
-              : [],
-
-          regionId:
-            organization.regionId ||
-            null,
-
-          sector:
-            organization.sector ||
-            null,
-
-          industrySegment:
-            organization.industrySegment ||
-            null,
-
-          role:
-            invitationRole,
-
-          teamIds,
-
-          invitationId:
-            invitation.invitationId ||
-            invitation.id,
-
-          invitationType:
-            invitation.invitationType,
-
-          invitedBy:
-            invitation.invitedBy,
-
-          onboardingType:
-            "invited",
-
-          onboardingStep:
-            null,
-
-          onboardingCompleted:
-            true,
-
-          onboardingCompletedAt:
-            serverTimestamp(),
-
-          emailVerified:
-            true,
-
-          emailVerifiedAt:
-            existingUser?.emailVerifiedAt ||
-            serverTimestamp(),
-
-          status:
-            "active",
-
-          country:
-            normalizeText(country) ||
-            existingUser?.country ||
-            organization.country ||
-            null,
-
-          updatedAt:
-            serverTimestamp(),
-        };
-
-        /*
-         * Existing-member promotion and invited-administrator onboarding use
-         * the same adminAssignment shape. This makes authorization and audit
-         * displays independent of how the administrator was assigned.
-         */
-        if (
-          isAdministratorInvitation(
-            invitation.invitationType
-          )
-        ) {
-          completedUserData.adminAssignment = {
-            organizationId:
-              invitation.organizationId,
-
-            organizationName:
-              organization.name ||
-              invitation.organizationName ||
-              "",
-
-            organizationType:
-              organization.type ||
-              null,
-
-            role:
-              invitationRole,
-
-            assignedBy:
-              invitation.invitedBy,
-
-            assignmentSource:
-              "invitation",
-
-            assignedAt:
-              serverTimestamp(),
-          };
-        }
-
-        if (!existingUser) {
-          completedUserData.createdAt =
-            serverTimestamp();
-        }
-
-        const organizationMemberData =
-          buildOrganizationMemberPayload({
-            user: {
-              ...completedUserData,
-              uid:
-                currentAuthUser.uid,
-            },
-            organization,
-            userId:
-              currentAuthUser.uid,
-            updatedBy:
-              currentAuthUser.uid,
-          });
-
-        /*
-         * Preserve the directory record's original creation time on retries.
-         * The invitation-completion transaction is intentionally idempotent.
-         */
-        if (!existingOrganizationMember) {
-          organizationMemberData.createdAt =
-            serverTimestamp();
-        }
-
-        transaction.set(
-          userReference,
-          completedUserData,
-          {
-            merge: true,
-          }
-        );
-
-        /*
-         * Store only safe organization-visible identity/access fields here.
-         * Private fields such as phoneNumber remain only on users/{uid}.
-         */
-        transaction.set(
-          organizationMemberReference,
-          organizationMemberData,
-          {
-            merge: true,
-          }
-        );
-
-        if (
-          invitationStatus ===
-          "pending"
-        ) {
-          transaction.update(
-            invitationReference,
-            {
-              status: "accepted",
-
-              acceptedBy:
-                currentAuthUser.uid,
-
-              acceptedEmail:
-                currentAuthUser.email,
-
-              acceptedAt:
-                serverTimestamp(),
-
-              updatedAt:
-                serverTimestamp(),
-            }
-          );
-        }
-
-        /*
-         * Region and branch administrators are also recorded on the
-         * organization document for administration and display.
-         *
-         * Shared organization access metadata is mirrored in
-         * organizationMembers/{uid}; users/{uid} remains the private profile.
-         */
-        if (
-          isAdministratorInvitation(
-            invitation.invitationType
-          )
-        ) {
-          const existingAdminIds =
-            Array.isArray(
-              organization.adminIds
-            )
-              ? organization.adminIds
-              : [];
-
-          const adminIds =
-            Array.from(
-              new Set([
-                ...existingAdminIds,
-                currentAuthUser.uid,
-              ])
-            );
-
-          const organizationUpdates = {
-            adminIds,
-
-            adminStatus:
-              "active",
-
-            /*
-             * "assigned" is the final state for both assignment paths:
-             * existing-member transfer or accepted invitation.
-             */
-            adminAssignmentStatus:
-              "assigned",
-
-            administratorAssignedBy:
-              invitation.invitedBy,
-
-            administratorAssignedAt:
-              serverTimestamp(),
-
-            administratorAssignmentSource:
-              "invitation",
-
-            updatedAt:
-              serverTimestamp(),
-          };
-
-          /*
-           * Do not replace an existing primary administrator. The first
-           * accepted administrator becomes the primary administrator.
-           */
-          if (
-            !organization.primaryAdminUserId
-          ) {
-            organizationUpdates.primaryAdminUserId =
-              currentAuthUser.uid;
-          }
-
-          transaction.update(
-            organizationReference,
-            organizationUpdates
-          );
-        }
-
-        return {
-          userId:
-            currentAuthUser.uid,
-
-          email:
-            currentAuthUser.email,
-
-          organizationId:
-            invitation.organizationId,
-
-          organizationName:
-            organization.name ||
-            invitation.organizationName ||
-            "",
-
-          companyId:
-            organization.companyId ||
-            null,
-
-          role:
-            invitationRole,
-
-          teamIds,
-
-          invitationId,
-
-          invitationType:
-            invitation.invitationType,
-
-          onboardingCompleted:
-            true,
-
-          status:
-            "active",
-
-          dashboardRoute:
-            getDashboardRoute(
-              organization
-            ),
-        };
-      }
-    );
+    return result;
   };

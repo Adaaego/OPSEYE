@@ -49,9 +49,6 @@ import {
   updateOrganizationMemberProfile,
 } from "../../lib/organization-member-functions";
 import {
-  createDefaultOrganizationTeam,
-} from "../../lib/team-functions";
-import {
   createBranchAndAssignExistingAdministrator,
   createBranchAndInviteAdministrator,
   createRegionAndAssignExistingAdministrator,
@@ -599,9 +596,9 @@ const getTimestampMilliseconds = (value) => {
 };
 
 /*
- * Existing organizations created before the team workflow may not yet have a
- * default team. Only organization administrators may create that missing team
- * while Account Settings is loading.
+ * Older memberships may not contain Team metadata. Keep those records readable,
+ * but Account Settings must not create organization teams as a side effect of
+ * loading the page.
  */
 const DEFAULT_TEAM_IMPLICIT_ADMIN_ROLES = new Set([
   "ministry_admin",
@@ -1350,8 +1347,8 @@ const AccountSettings = ({ roles = [] }) => {
       /*
        * Team lookup:
        * 1. organizationMembers/{uid}.organizationId identifies the organization.
-       * 2. teams.organizationId resolves that organization's default team.
-       * 3. the resolved teamId is matched against organizationMembers.teamIds.
+       * 2. organizationMembers.teamIds is preferred where it identifies a valid Team.
+       * 3. teams.organizationId is used only to resolve an existing organization Team.
        *
        * A Team-tab failure is isolated from Account profile loading.
        */
@@ -1422,9 +1419,9 @@ const AccountSettings = ({ roles = [] }) => {
         }
 
         /*
-         * Regional and Branch behavior remains unchanged. Enterprise/Ministry
-         * also use this as a compatibility fallback only when their membership
-         * has no usable Team document.
+         * Regional and Branch organizations resolve their organization team here.
+         * Enterprise and Ministry accounts also use this as a read-only
+         * compatibility fallback when their membership has no usable Team record.
          */
         if (
           organizationTeams.length === 0
@@ -1472,7 +1469,9 @@ const AccountSettings = ({ roles = [] }) => {
           null;
 
         /*
-         * Preserve the existing legacy top-level organization behavior.
+         * Team creation belongs to the organization setup workflow. If an older
+         * organization has no Team record, leave it unresolved here instead of
+         * changing organization data while Account Settings is loading.
          */
         if (
           !resolvedDefaultTeam &&
@@ -1482,17 +1481,9 @@ const AccountSettings = ({ roles = [] }) => {
             )
           )
         ) {
-          resolvedDefaultTeam =
-            await createDefaultOrganizationTeam({
-              organization:
-                normalizedOrganization,
-              createdBy:
-                currentUser.uid,
-            });
-
-          organizationTeams = [
-            resolvedDefaultTeam,
-          ];
+          setTeamLoadError(
+            "This organization does not have a team configured yet."
+          );
         }
 
         organizationUsers =
