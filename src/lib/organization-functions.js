@@ -17,10 +17,11 @@ import {
   where,
 } from "firebase/firestore";
 
-import { db } from "../firebase/firebase";
+import { auth, db } from "../firebase/firebase";
 import { generateOrganizationId } from "./functions";
 
 const ORGANIZATIONS_COLLECTION = "organizations";
+const ORGANIZATION_MEMBERS_COLLECTION = "organizationMembers";
 
 const normalizeText = (value) => {
   return String(value ?? "")
@@ -539,6 +540,32 @@ export const createBranchOrganization = async ({
     "The user creating the branch is required."
   );
 
+  const currentUser = auth.currentUser;
+
+  if (
+    !currentUser?.uid ||
+    currentUser.uid !== createdBy
+  ) {
+    throw new Error(
+      "The signed-in Regional Administrator does not match the user creating this branch."
+    );
+  }
+
+  /*
+   * Regional Administrators created through an invitation may still have an
+   * older Firebase ID token cached from before email verification. Refresh the
+   * Auth user and token before the Firestore write so Security Rules evaluate
+   * the current verified account state.
+   */
+  await currentUser.reload();
+  await currentUser.getIdToken(true);
+
+  if (!currentUser.emailVerified) {
+    throw new Error(
+      "Verify your email address before creating a branch."
+    );
+  }
+
   const parentOrganizationId =
     getOrganizationId(parentOrganization);
 
@@ -567,6 +594,83 @@ export const createBranchOrganization = async ({
     );
   }
 
+  const memberReference = doc(
+    db,
+    ORGANIZATION_MEMBERS_COLLECTION,
+    currentUser.uid
+  );
+
+  const memberSnapshot =
+    await getDoc(memberReference);
+
+  if (!memberSnapshot.exists()) {
+    throw new Error(
+      "Your Regional Administrator membership could not be found."
+    );
+  }
+
+  const member = memberSnapshot.data();
+
+  if (
+    member.organizationId !==
+    parentOrganizationId
+  ) {
+    throw new Error(
+      "Your Regional Administrator membership does not match this region."
+    );
+  }
+
+  const memberRole = normalizeStatus(
+    member.role
+  );
+
+  const memberOrganizationType =
+    normalizeStatus(
+      member.organizationType ||
+      member.organizationLevel
+    );
+
+  if (
+    memberRole !== "region_admin" &&
+    memberOrganizationType !== "region"
+  ) {
+    throw new Error(
+      "Only a Regional Administrator can create a branch."
+    );
+  }
+
+  const rootEnterpriseId = String(
+    member.rootEnterpriseId ||
+    parentOrganization.rootEnterpriseId ||
+    ""
+  ).trim();
+
+  const regionId = normalizeRegionId(
+    member.regionId ||
+    parentOrganization.regionId
+  );
+
+  const sector = String(
+    member.sector ||
+    parentOrganization.sector ||
+    ""
+  ).trim();
+
+  requireValue(
+    rootEnterpriseId,
+    "Your Regional Administrator membership is missing its root enterprise ID."
+  );
+
+  requireValue(
+    regionId,
+    "Your Regional Administrator membership is missing its region ID."
+  );
+
+  requireValue(
+    sector,
+    "Your Regional Administrator membership is missing its sector."
+  );
+
   const existingBranch =
     await checkBranchExists({
       parentOrganizationId,
@@ -583,8 +687,7 @@ export const createBranchOrganization = async ({
     String(organizationId || "").trim() ||
     (await createUniqueChildOrganizationId({
       type: "branch",
-      sector:
-        parentOrganization.sector,
+      sector,
       country:
         parentOrganization.country ||
         "Ghana",
@@ -603,14 +706,28 @@ export const createBranchOrganization = async ({
         resolvedOrganizationId,
       organizationName,
       organizationType: "branch",
-      regionId:
-        parentOrganization.regionId,
+      regionId,
       createdBy,
       status,
     });
 
   const payload = {
     ...hierarchyMetadata,
+
+    parentId:
+      parentOrganizationId,
+
+    rootEnterpriseId,
+
+    ancestorIds: Array.from(
+      new Set([
+        rootEnterpriseId,
+        parentOrganizationId,
+      ])
+    ),
+
+    regionId,
+    sector,
 
     /*
      * The branch can be created before a new administrator accepts an
@@ -629,9 +746,101 @@ export const createBranchOrganization = async ({
       serverTimestamp(),
   };
 
+  const tokenResult =
+    await currentUser.getIdTokenResult(true);
+
+  console.log(
+    "OPSEYE BRANCH RULE: authUid",
+    currentUser.uid
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: createdBy",
+    createdBy
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: emailVerifiedProperty",
+    currentUser.emailVerified
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: emailVerifiedClaim",
+    tokenResult.claims.email_verified
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: memberRole",
+    member.role
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: memberOrganizationType",
+    member.organizationType
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: memberOrganizationId",
+    member.organizationId
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: memberSector",
+    member.sector
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: payloadType",
+    payload.type
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: payloadParentId",
+    payload.parentId
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: payloadCreatedBy",
+    payload.createdBy
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: payloadSector",
+    payload.sector
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: payloadRootEnterpriseId",
+    payload.rootEnterpriseId
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: payloadRegionId",
+    payload.regionId
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: payloadAncestorIds",
+    payload.ancestorIds
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: resolvedOrganizationId",
+    resolvedOrganizationId
+  );
+
+  console.log(
+    "OPSEYE BRANCH RULE: payloadOrganizationId",
+    payload.organizationId
+  );
+
   await setDoc(
     organizationReference,
     payload
+  );
+
+  console.log(
+    "OPSEYE BRANCH: SETDOC SUCCESS"
   );
 
   const createdOrganization =
