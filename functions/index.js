@@ -292,6 +292,13 @@ const normalizeText = (value) => {
   return String(value ?? "").trim();
 };
 
+const normalizeIdentifier = (value) => {
+  return normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+};
+
 const cleanStringArray = (value) => {
   return Array.from(
     new Set(
@@ -553,8 +560,9 @@ const buildOrganizationMemberData = ({
 /*
  * Completes an invited account after Firebase confirms the signed-in email.
  *
- * The invitation remains the source of truth for organization, role and team
- * access. Personal profile fields come from the user completing onboarding.
+ * The invitation remains the source of truth for organization and role access.
+ * Team-member invitations point to an existing team, while Region/Branch admin
+ * invitations create or reuse the organization's default team during completion.
  *
  * All access writes are committed together so the account cannot be left in a
  * partially activated state.
@@ -807,10 +815,54 @@ exports.completeInvitation =
                   organizationId
                 );
 
-            const teamId =
+            const invitationType =
+              normalizeStatus(
+                invitation.invitationType
+              );
+
+            const administratorInvitation =
+              isAdministratorInvitation(
+                invitationType
+              );
+
+            const invitationTeamId =
               normalizeText(
                 invitation.teamId
               );
+
+            if (
+              invitationType ===
+                "team_member" &&
+              !invitationTeamId
+            ) {
+              throw new HttpsError(
+                "failed-precondition",
+                "The team-member invitation does not contain a valid team."
+              );
+            }
+
+            const defaultTeamId =
+              administratorInvitation
+                ? `team-${normalizeIdentifier(
+                    organizationId
+                  )}`
+                : "";
+
+            const teamId =
+              administratorInvitation
+                ? invitationTeamId ||
+                  defaultTeamId
+                : invitationTeamId;
+
+            if (
+              administratorInvitation &&
+              !teamId
+            ) {
+              throw new HttpsError(
+                "failed-precondition",
+                "The administrator invitation could not resolve its default team."
+              );
+            }
 
             const teamReference =
               teamId
@@ -836,10 +888,64 @@ exports.completeInvitation =
                 memberReference
               );
 
-            const organizationSnapshot =
+            let resolvedOrganizationReference =
+              organizationReference;
+
+            let organizationSnapshot =
               await transaction.get(
                 organizationReference
               );
+
+            if (
+              !organizationSnapshot.exists
+            ) {
+              const organizationQuery =
+                db
+                  .collection(
+                    ORGANIZATIONS_COLLECTION
+                  )
+                  .where(
+                    "organizationId",
+                    "==",
+                    organizationId
+                  )
+                  .limit(2);
+
+              const organizationQuerySnapshot =
+                await transaction.get(
+                  organizationQuery
+                );
+
+              if (
+                organizationQuerySnapshot.empty
+              ) {
+                throw new HttpsError(
+                  "not-found",
+                  "The organization linked to this invitation could not be found.",
+                  {
+                    organizationId,
+                  }
+                );
+              }
+
+              if (
+                organizationQuerySnapshot.size > 1
+              ) {
+                throw new HttpsError(
+                  "failed-precondition",
+                  "More than one organization uses the organization ID linked to this invitation.",
+                  {
+                    organizationId,
+                  }
+                );
+              }
+
+              organizationSnapshot =
+                organizationQuerySnapshot.docs[0];
+
+              resolvedOrganizationReference =
+                organizationSnapshot.ref;
+            }
 
             const teamSnapshot =
               teamReference
@@ -847,15 +953,6 @@ exports.completeInvitation =
                     teamReference
                   )
                 : null;
-
-            if (
-              !organizationSnapshot.exists
-            ) {
-              throw new HttpsError(
-                "not-found",
-                "The organization linked to this invitation could not be found."
-              );
-            }
 
             const organization = {
               id:
@@ -895,63 +992,112 @@ exports.completeInvitation =
               );
             }
 
+            let administratorTeamData =
+              null;
+
             if (teamId) {
               if (
                 !teamSnapshot ||
                 !teamSnapshot.exists
               ) {
-                throw new HttpsError(
-                  "not-found",
-                  "The team linked to this invitation could not be found."
-                );
-              }
+                if (
+                  !administratorInvitation
+                ) {
+                  throw new HttpsError(
+                    "not-found",
+                    "The team linked to this invitation could not be found."
+                  );
+                }
 
-              const team = {
-                id:
-                  teamSnapshot.id,
+                const teamName =
+                  `${normalizeText(
+                    organization.name ||
+                    invitation.organizationName ||
+                    "Organization"
+                  )} Team`;
 
-                ...teamSnapshot.data(),
-              };
+                administratorTeamData = {
+                  teamId,
 
-              const storedTeamId =
-                team.teamId ||
-                team.id ||
-                "";
+                  name:
+                    teamName,
 
-              if (
-                storedTeamId !==
-                teamId
-              ) {
-                throw new HttpsError(
-                  "failed-precondition",
-                  "The invitation team does not match the stored team."
-                );
-              }
+                  normalizedName:
+                    teamName
+                      .trim()
+                      .toLowerCase(),
 
-              if (
-                team.organizationId !==
-                organizationId
-              ) {
-                throw new HttpsError(
-                  "failed-precondition",
-                  "The invitation team does not belong to the invited organization."
-                );
-              }
+                  organizationId,
 
-              const teamStatus =
-                normalizeStatus(
-                  team.status
-                );
+                  teamType:
+                    "organization",
 
-              if (
-                teamStatus &&
-                teamStatus !==
-                  "active"
-              ) {
-                throw new HttpsError(
-                  "failed-precondition",
-                  "The team linked to this invitation is not active."
-                );
+                  isDefault:
+                    true,
+
+                  status:
+                    "active",
+
+                  createdBy:
+                    authenticatedUserId,
+
+                  createdAt:
+                    FieldValue.serverTimestamp(),
+
+                  updatedBy:
+                    authenticatedUserId,
+
+                  updatedAt:
+                    FieldValue.serverTimestamp(),
+                };
+              } else {
+                const team = {
+                  id:
+                    teamSnapshot.id,
+
+                  ...teamSnapshot.data(),
+                };
+
+                const storedTeamId =
+                  team.teamId ||
+                  team.id ||
+                  "";
+
+                if (
+                  storedTeamId !==
+                  teamId
+                ) {
+                  throw new HttpsError(
+                    "failed-precondition",
+                    "The invitation team does not match the stored team."
+                  );
+                }
+
+                if (
+                  team.organizationId !==
+                  organizationId
+                ) {
+                  throw new HttpsError(
+                    "failed-precondition",
+                    "The invitation team does not belong to the invited organization."
+                  );
+                }
+
+                const teamStatus =
+                  normalizeStatus(
+                    team.status
+                  );
+
+                if (
+                  teamStatus &&
+                  teamStatus !==
+                    "active"
+                ) {
+                  throw new HttpsError(
+                    "failed-precondition",
+                    "The team linked to this invitation is not active."
+                  );
+                }
               }
             }
 
@@ -1201,6 +1347,15 @@ exports.completeInvitation =
                 existingMember,
               });
 
+            if (
+              administratorTeamData
+            ) {
+              transaction.set(
+                teamReference,
+                administratorTeamData
+              );
+            }
+
             transaction.set(
               userReference,
               completedUserData,
@@ -1266,7 +1421,7 @@ exports.completeInvitation =
               }
 
               transaction.set(
-                organizationReference,
+                resolvedOrganizationReference,
                 organizationUpdates,
                 {
                   merge: true,

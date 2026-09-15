@@ -535,17 +535,6 @@ export const createRegionAndInviteAdministrator =
         ),
     });
 
-    /*
-     * The team belongs to the organization, so it is prepared by the Enterprise
-     * Administrator before the invited Regional Administrator creates an account.
-     */
-    const defaultTeam =
-      await createDefaultOrganizationTeam({
-        organization,
-        createdBy:
-          currentUserId,
-      });
-
     const invitationToken =
       generateInvitationToken();
 
@@ -580,11 +569,6 @@ export const createRegionAndInviteAdministrator =
 
         role:
           REGION_ADMIN_ROLE,
-
-        teamId:
-          getTeamId(
-            defaultTeam
-          ),
 
         invitedBy:
           currentUserId,
@@ -649,7 +633,6 @@ export const createRegionAndInviteAdministrator =
           "region_admin",
     
         teamName:
-          defaultTeam.name ||
           organization.name,
     
         invitationUrl,
@@ -680,7 +663,7 @@ export const createRegionAndInviteAdministrator =
           : "region_created_email_failed",
 
       organization,
-      defaultTeam,
+      defaultTeam: null,
       invitation,
       invitationUrl,
       emailDelivery,
@@ -901,17 +884,6 @@ export const createBranchAndInviteAdministrator =
         ),
     });
 
-    /*
-     * The branch team is prepared before the invitation is sent so the invited
-     * administrator can be linked to it during the same onboarding flow.
-     */
-    const defaultTeam =
-      await createDefaultOrganizationTeam({
-        organization,
-        createdBy:
-          currentUserId,
-      });
-
     const invitationToken =
       generateInvitationToken();
 
@@ -948,11 +920,6 @@ export const createBranchAndInviteAdministrator =
 
         role:
           BRANCH_ADMIN_ROLE,
-
-        teamId:
-          getTeamId(
-            defaultTeam
-          ),
 
         invitedBy:
           currentUserId,
@@ -1016,7 +983,6 @@ export const createBranchAndInviteAdministrator =
             BRANCH_ADMIN_ROLE,
 
           teamName:
-            defaultTeam.name ||
             organization.name,
 
           invitationUrl,
@@ -1048,7 +1014,7 @@ export const createBranchAndInviteAdministrator =
           : "branch_created_email_failed",
 
       organization,
-      defaultTeam,
+      defaultTeam: null,
       invitation,
       invitationUrl,
       emailDelivery,

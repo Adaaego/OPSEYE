@@ -590,7 +590,21 @@ export const validateInvitation = async ({
   const currentUser =
     auth.currentUser;
 
-  if (!currentUser) {
+  const normalizedExpectedEmail =
+    normalizeEmail(
+      expectedEmail
+    );
+
+  /*
+   * Invitation-entry pages do not yet know which Firebase account should own
+   * the invitation. Validate those links through the callable backend even if
+   * another OPSEYE account is already signed in on the browser.
+   */
+  const usePublicValidation =
+    !currentUser ||
+    !normalizedExpectedEmail;
+
+  if (usePublicValidation) {
     const callableResult =
       await validatePublicInvitationCall({
         token:
@@ -618,11 +632,6 @@ export const validateInvitation = async ({
 
     const publicInvitation =
       result.invitation;
-
-    const normalizedExpectedEmail =
-      normalizeEmail(
-        expectedEmail
-      );
 
     if (
       normalizedExpectedEmail &&
