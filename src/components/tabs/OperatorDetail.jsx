@@ -1070,32 +1070,21 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
                     childWorkforceTotal) *
                     100
                 : 0;
-            let status = organization.status ||
+            /*
+             * Show the status of the most recent reporting obligation.
+             * A historical late report must not keep the organization labelled
+             * "submitted late" after a newer report has been submitted on time.
+             */
+            const latestReport = [...childReports]
+                .sort((first, second) => (getReportingRecordDate(second)?.getTime() ||
+                0) -
+                (getReportingRecordDate(first)?.getTime() ||
+                0))[0] ||
+                null;
+
+            const status = latestReport?.status ||
+                organization.status ||
                 "no_data";
-            if (childReports.length >
-                0) {
-                if (childSubmitted.length ===
-                    childReports.length) {
-                    status =
-                        childSubmitted.some(isReportSubmittedLate)
-                            ? "submitted_late"
-                            : "submitted";
-                }
-                else if (childSubmitted.length >
-                    0) {
-                    status =
-                        "partial";
-                }
-                else if (childReports.some((report) => normalizeStatus(report.status) ===
-                    "overdue")) {
-                    status =
-                        "overdue";
-                }
-                else {
-                    status =
-                        "pending_submission";
-                }
-            }
             return {
                 ...organization,
                 id: organizationId,
@@ -1120,10 +1109,77 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
                     reportsSubmitted: childReportsSubmitted,
                     reportsExpected: childReportsExpected,
                 }),
-                compliance: calculateOnTimeCompliance({
-                    reportsSubmittedOnTime: childReportsSubmittedOnTime,
-                    reportsExpected: childReportsExpected,
-                }),
+                compliance: (() => {
+                    const childOrganizationLevel = normalizeStatus(
+                        organization.organizationLevel ||
+                        organization.type ||
+                        organization.organizationType ||
+                        organization.level
+                    );
+
+                    /*
+                     * A Branch uses its own score. A Region shown beneath an
+                     * Enterprise uses the average of its Branch scores.
+                     */
+                    if (
+                        childOrganizationLevel === "branch" ||
+                        !Array.isArray(organization.branches) ||
+                        organization.branches.length === 0
+                    ) {
+                        return calculateOnTimeCompliance({
+                            reportsSubmittedOnTime: childReportsSubmittedOnTime,
+                            reportsExpected: childReportsExpected,
+                        });
+                    }
+
+                    const directChildComplianceRates = organization.branches
+                        .map((directChild) => {
+                            const directChildId =
+                                getOrganizationId(directChild);
+
+                            const directChildReports =
+                                filteredScopedReports.filter(
+                                    (report) =>
+                                        report.organizationId ===
+                                        directChildId
+                                );
+
+                            const eligibleDirectChildReports =
+                                directChildReports.filter(
+                                    (report) =>
+                                        isReportEligibleForCompliance(report)
+                                );
+
+                            if (
+                                eligibleDirectChildReports.length === 0
+                            ) {
+                                return null;
+                            }
+
+                            return calculateOnTimeCompliance({
+                                reportsSubmittedOnTime:
+                                    eligibleDirectChildReports.filter(
+                                        isReportSubmittedOnTime
+                                    ).length,
+                                reportsExpected:
+                                    eligibleDirectChildReports.length,
+                            });
+                        })
+                        .filter(
+                            (value) =>
+                                Number.isFinite(Number(value))
+                        )
+                        .map(Number);
+
+                    return directChildComplianceRates.length > 0
+                        ? directChildComplianceRates.reduce(
+                            (total, value) =>
+                                total + value,
+                            0
+                        ) /
+                            directChildComplianceRates.length
+                        : 0;
+                })(),
                 localWorkforce: childLocalWorkforce,
                 localWorkforcePct: childLocalWorkforcePercentage,
                 workforce: {
@@ -1403,10 +1459,32 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
         reportsSubmitted,
         reportsExpected,
     });
-    const onTimeCompliance = calculateOnTimeCompliance({
+    const ownOnTimeCompliance = calculateOnTimeCompliance({
         reportsSubmittedOnTime,
         reportsExpected,
     });
+
+    /*
+     * Keep the detail view aligned with the Operators table:
+     * - Branch: own compliance.
+     * - Region: average of Branch compliance rates.
+     * - Enterprise: average of Region compliance rates.
+     */
+    const childComplianceRates = branches
+        .filter((child) => Number(child.reportsExpected) > 0)
+        .map((child) => Number(child.compliance))
+        .filter(Number.isFinite);
+
+    const onTimeCompliance =
+        organizationLevel === "branch" ||
+        childComplianceRates.length === 0
+            ? ownOnTimeCompliance
+            : childComplianceRates.reduce(
+                (total, value) =>
+                    total + value,
+                0
+            ) /
+                childComplianceRates.length;
     const localWorkforceColour = !Array.isArray(CHART_COLORS) &&
         CHART_COLORS?.local
         ? CHART_COLORS.local
@@ -1657,7 +1735,17 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
                 {`${formatNumber(onTimeCompliance, 1)}%`}
               </span>) : ("—")} caption={reportsExpected >
             0
-            ? `${formatNumber(reportsSubmittedOnTime)} of ${formatNumber(reportsExpected)} due reports submitted on time`
+            ? organizationLevel ===
+                "enterprise" &&
+                childComplianceRates.length >
+                    0
+                ? `Average of ${formatNumber(childComplianceRates.length)} regional compliance rates`
+                : organizationLevel ===
+                    "region" &&
+                    childComplianceRates.length >
+                        0
+                    ? `Average of ${formatNumber(childComplianceRates.length)} branch compliance rates`
+                    : `${formatNumber(reportsSubmittedOnTime)} of ${formatNumber(reportsExpected)} due reports submitted on time`
             : "No completed reporting obligations yet"} icon={ClipboardList}/>
 
         <KpiCard label="Local Workforce" value={hasWorkforceData
@@ -1782,7 +1870,9 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
                 ? "translate-x-0 opacity-100"
                 : "translate-x-2 opacity-0"}`}>
             <Table headers={[
-                "Region",
+                ...(canFilterByRegion
+                    ? ["Region"]
+                    : []),
                 "Report Type",
                 "Product",
                 "Status",
@@ -1790,7 +1880,6 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
                 "Date",
                 "Time",
                 `${getProductLabel(reportingProduct)} Production (L)`,
-                `${getProductLabel(reportingProduct)} Estimated Revenue`,
             ]} rows={paginatedReportingHistory} accentKey="status" renderRow={(report) => (<>
                   {canFilterByRegion && (<td className="whitespace-nowrap px-4 py-3">
                       <EmptyCell value={report.region}/>
@@ -1827,12 +1916,6 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
                     : null}/>
                   </td>
 
-                  <td className="whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-slate-800">
-                    <EmptyCell value={Number(report.estimatedRevenue) >
-                    0
-                    ? formatCurrency(report.estimatedRevenue)
-                    : null}/>
-                  </td>
                 </>)}/>
             </div>) : (<EmptyState message="No reporting records match the selected filters"/>)}
 

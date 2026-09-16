@@ -1079,7 +1079,7 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
          * The existing compliance property now represents on-time compliance.
          * Late submissions improve completion but do not improve this score.
          */
-        const compliance = calculateOnTimeCompliance({
+        const ownCompliance = calculateOnTimeCompliance({
             reportsSubmittedOnTime,
             reportsExpected,
         });
@@ -1157,6 +1157,31 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
         const productionIsCarriedForward = !hasTodayProduction &&
             displayedProduction > 0;
         const branches = directChildOrganizations.map((child) => buildOperatorData(child));
+
+        /*
+         * Compliance follows the organization hierarchy:
+         * - Branch: its own on-time compliance.
+         * - Region: average of the Branch compliance rates beneath it.
+         * - Enterprise: average of the Region compliance rates beneath it.
+         *
+         * Children with no completed reporting obligations are excluded from the
+         * average rather than being treated as zero compliance.
+         */
+        const childComplianceRates = branches
+            .filter((child) => Number(child.reportsExpected) > 0)
+            .map((child) => Number(child.compliance))
+            .filter(Number.isFinite);
+
+        const compliance = organizationLevel ===
+            "branch" ||
+            childComplianceRates.length === 0
+            ? ownCompliance
+            : childComplianceRates.reduce((total, value) => total + value, 0) /
+                childComplianceRates.length;
+
+        const complianceChildCount =
+            childComplianceRates.length;
+
         const latestReportDate = [
             ...scopedReports.map(getSubmittedAt),
             ...scopedWorkforceRecords.map(getWorkforceUpdatedAt),
@@ -1165,25 +1190,24 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
             .sort((first, second) => second -
             first)[0] ||
             organizationsLoadedAt;
-        let status = organization.status ||
+
+        /*
+         * Status is the status of the most recent reporting obligation.
+         * Historical late submissions must not make a currently submitted
+         * organization continue to display "submitted late".
+         */
+        const latestReport = [...scopedReports]
+            .sort((first, second) => (getReportDate(second)?.getTime() ||
+            getSubmittedAt(second)?.getTime() ||
+            0) -
+            (getReportDate(first)?.getTime() ||
+            getSubmittedAt(first)?.getTime() ||
+            0))[0] ||
+            null;
+
+        const status = latestReport?.status ||
+            organization.status ||
             "active";
-        if (expectedToday.length >
-            0) {
-            status =
-                submittedToday.length ===
-                    expectedToday.length
-                    ? submittedLateToday.length >
-                        0
-                        ? "submitted_late"
-                        : "submitted"
-                    : submittedToday.length >
-                        0
-                        ? "partial"
-                        : expectedToday.some((report) => normalizeStatus(report.status) ===
-                            "overdue")
-                            ? "overdue"
-                            : "missing";
-        }
         const administrator = getOrganizationAdministrator(organization);
         const regionLabel = getOrganizationRegionLabel(organization);
         return {
@@ -1216,6 +1240,7 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
              * separately because late reports still provide required ministry data.
              */
             compliance,
+            complianceChildCount,
             submissionCompletion,
             reportsSubmitted,
             reportsSubmittedOnTime,
@@ -1737,12 +1762,22 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
                                     {`${formatNumber(operator.compliance, 1)}%`}
                                   </p>
 
-                                  <p className="mt-0.5 text-[10px] text-slate-400">
-                                    {formatNumber(operator.reportsSubmittedOnTime)}{" "}
-                                    on time ·{" "}
-                                    {formatNumber(operator.reportsSubmittedLate)}{" "}
-                                    late
-                                  </p>
+                                  {operator.organizationLevel !==
+                    "branch" &&
+                    operator.complianceChildCount >
+                        0 ? (<p className="mt-0.5 text-[10px] text-slate-400">
+                                      Average of{" "}
+                                      {formatNumber(operator.complianceChildCount)}{" "}
+                                      {operator.organizationLevel ===
+                        "enterprise"
+                        ? "regions"
+                        : "branches"}
+                                    </p>) : (<p className="mt-0.5 text-[10px] text-slate-400">
+                                      {formatNumber(operator.reportsSubmittedOnTime)}{" "}
+                                      on time ·{" "}
+                                      {formatNumber(operator.reportsSubmittedLate)}{" "}
+                                      late
+                                    </p>)}
 
                                   <p className="mt-0.5 text-[10px] text-slate-400">
                                     {formatNumber(operator.submissionCompletion, 1)}% completion
