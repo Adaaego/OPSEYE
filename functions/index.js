@@ -1413,11 +1413,22 @@ exports.completeInvitation =
 
               if (
                 !organization
-                  .primaryAdminUserId
+                  .primaryAdminUserId ||
+                organization
+                  .primaryAdminUserId ===
+                  authenticatedUserId
               ) {
                 organizationUpdates
                   .primaryAdminUserId =
                   authenticatedUserId;
+
+                organizationUpdates
+                  .adminName =
+                  fullName;
+
+                organizationUpdates
+                  .adminEmail =
+                  authenticatedEmail;
               }
 
               transaction.set(

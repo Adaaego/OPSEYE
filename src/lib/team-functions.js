@@ -892,6 +892,26 @@ export const transferUserToOrganizationTeam = async ({
             storedOrganization.primaryAdminUserId ||
             userId,
 
+          adminName:
+            !storedOrganization.primaryAdminUserId ||
+            storedOrganization.primaryAdminUserId ===
+              userId
+              ? member.fullName ||
+                member.displayName ||
+                ""
+              : storedOrganization.adminName ||
+                "",
+
+          adminEmail:
+            !storedOrganization.primaryAdminUserId ||
+            storedOrganization.primaryAdminUserId ===
+              userId
+              ? member.emailLower ||
+                member.email ||
+                ""
+              : storedOrganization.adminEmail ||
+                "",
+
           adminStatus:
             "active",
 

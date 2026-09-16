@@ -580,6 +580,11 @@ export const submitOnboarding = async (
     status: "active",
 
     adminIds: [uid],
+    primaryAdminUserId: uid,
+    adminName: userProfile.fullName.trim(),
+    adminEmail:
+      currentAuthUser.email ||
+      onboardingEmail,
     createdBy: uid,
 
     createdAt: serverTimestamp(),
