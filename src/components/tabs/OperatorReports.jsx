@@ -21,6 +21,7 @@ import { Button } from "../ui/Button";
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   onSnapshot,
   query,
@@ -34,10 +35,17 @@ import {
   db,
 } from "../../firebase/firebase";
 
+import {
+  calculateSubmissionMetrics,
+} from "../../lib/calculation-metrics";
+
 import ReportViewer from "./ReportsViewer";
 
 const NAVY = "#0F172A";
 const PALE_BLUE = "#C8D5E8";
+
+const COMPANY_FUEL_PRICES_COLLECTION =
+  "companyFuelPrices";
 
 const TASK_STATUS_OPTIONS = [
   "Draft",
@@ -123,6 +131,176 @@ const getDateKey = (value) => {
   ).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
+};
+
+const toNumber = (value) => {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return 0;
+  }
+
+  const number = Number(value);
+
+  return Number.isFinite(number)
+    ? number
+    : 0;
+};
+
+const getFirstFiniteNumber = (...values) => {
+  for (const value of values) {
+    if (
+      value === null ||
+      value === undefined ||
+      value === ""
+    ) {
+      continue;
+    }
+
+    const number = Number(value);
+
+    if (Number.isFinite(number)) {
+      return number;
+    }
+  }
+
+  return 0;
+};
+
+const getPriceValue = (
+  priceRecord,
+  product
+) => {
+  if (!priceRecord) {
+    return 0;
+  }
+
+  if (product === "petrol") {
+    return getFirstFiniteNumber(
+      priceRecord.petrolPrice,
+      priceRecord.petrolPricePerLitre,
+      priceRecord.petrol_price,
+      priceRecord.petrol?.price,
+      priceRecord.products?.petrol?.price,
+      priceRecord.npaPrices?.petrol,
+      priceRecord.npa?.petrol
+    );
+  }
+
+  return getFirstFiniteNumber(
+    priceRecord.dieselPrice,
+    priceRecord.dieselPricePerLitre,
+    priceRecord.diesel_price,
+    priceRecord.diesel?.price,
+    priceRecord.products?.diesel?.price,
+    priceRecord.npaPrices?.diesel,
+    priceRecord.npa?.diesel
+  );
+};
+
+const getReportFields = (report) => {
+  const snapshots = [
+    report?.formSnapshot,
+    report?.templateSnapshot,
+    report?.formTemplate,
+    report,
+  ].filter(Boolean);
+
+  for (const snapshot of snapshots) {
+    if (Array.isArray(snapshot.fields)) {
+      return snapshot.fields;
+    }
+
+    if (Array.isArray(snapshot.steps)) {
+      return snapshot.steps.flatMap((step) =>
+        Array.isArray(step?.fields)
+          ? step.fields
+          : []
+      );
+    }
+  }
+
+  return [];
+};
+
+const getReportValues = (report) => {
+  return (
+    report?.fieldValues ||
+    report?.responses ||
+    report?.answers ||
+    report?.values ||
+    {}
+  );
+};
+
+const getReportFuelMetrics = (report) => {
+  const sourceMetrics =
+    report?.sourceMetrics || {};
+
+  const calculatedMetrics =
+    report?.calculatedMetrics || {};
+
+  const petrolVolume = toNumber(
+    sourceMetrics.petrol_volume_sold
+  );
+
+  const dieselVolume = toNumber(
+    sourceMetrics.diesel_volume_sold
+  );
+
+  const petrolPrice = toNumber(
+    report?.petrolUnitPrice
+  );
+
+  const dieselPrice = toNumber(
+    report?.dieselUnitPrice
+  );
+
+  const petrolRevenue =
+    getFirstFiniteNumber(
+      calculatedMetrics.petrol_revenue,
+      calculatedMetrics.estimated_petrol_revenue,
+      calculatedMetrics.petrol_estimated_revenue
+    ) ||
+    petrolVolume * petrolPrice;
+
+  const dieselRevenue =
+    getFirstFiniteNumber(
+      calculatedMetrics.diesel_revenue,
+      calculatedMetrics.estimated_diesel_revenue,
+      calculatedMetrics.diesel_estimated_revenue
+    ) ||
+    dieselVolume * dieselPrice;
+
+  const totalVolume =
+    getFirstFiniteNumber(
+      calculatedMetrics.total_volume_sold
+    ) ||
+    petrolVolume + dieselVolume;
+
+  const totalRevenue =
+    getFirstFiniteNumber(
+      calculatedMetrics.estimated_daily_revenue,
+      calculatedMetrics.estimated_revenue,
+      calculatedMetrics.total_revenue
+    ) ||
+    petrolRevenue + dieselRevenue;
+
+  return {
+    petrolVolume,
+    dieselVolume,
+    totalVolume,
+    petrolPrice,
+    dieselPrice,
+    petrolRevenue,
+    dieselRevenue,
+    totalRevenue,
+    hasFuelData:
+      petrolVolume > 0 ||
+      dieselVolume > 0,
+  };
 };
 
 const getWorkflowStageRole = (report) => {
@@ -748,6 +926,56 @@ const OperatorsReports = ({
                           )
                         );
 
+                      /*
+                       * NPA prices are stored once per Enterprise and keyed by the
+                       * Enterprise organization ID. Branch and Region accounts use
+                       * their canonical rootEnterpriseId to read that exact record.
+                       */
+                      const currentOrganizationId =
+                        getOrganizationId(
+                          organization
+                        );
+
+                      const currentOrganizationLevel =
+                        getOrganizationLevel(
+                          organization
+                        );
+
+                      const fuelPriceEnterpriseId =
+                        currentOrganizationLevel ===
+                        "enterprise"
+                          ? currentOrganizationId
+                          : organization.rootEnterpriseId ||
+                            organization.enterpriseId ||
+                            "";
+
+                      let companyFuelPrice = {};
+
+                      if (fuelPriceEnterpriseId) {
+                        try {
+                          const priceSnapshot =
+                            await getDoc(
+                              doc(
+                                db,
+                                COMPANY_FUEL_PRICES_COLLECTION,
+                                fuelPriceEnterpriseId
+                              )
+                            );
+
+                          if (priceSnapshot.exists()) {
+                            companyFuelPrice = {
+                              id: priceSnapshot.id,
+                              ...priceSnapshot.data(),
+                            };
+                          }
+                        } catch (priceError) {
+                          console.error(
+                            `Unable to load company fuel price for ${fuelPriceEnterpriseId}:`,
+                            priceError
+                          );
+                        }
+                      }
+
                       unsubscribeReports();
 
                       unsubscribeReports =
@@ -786,7 +1014,48 @@ const OperatorsReports = ({
                                         reportOrganization
                                       );
 
-                                    return {
+                                    const pricingSnapshot =
+                                      report.pricingSnapshot ||
+                                      {};
+
+                                    const petrolUnitPrice =
+                                      getPriceValue(
+                                        pricingSnapshot,
+                                        "petrol"
+                                      ) ||
+                                      getPriceValue(
+                                        companyFuelPrice,
+                                        "petrol"
+                                      );
+
+                                    const dieselUnitPrice =
+                                      getPriceValue(
+                                        pricingSnapshot,
+                                        "diesel"
+                                      ) ||
+                                      getPriceValue(
+                                        companyFuelPrice,
+                                        "diesel"
+                                      );
+
+                                    const calculatedFallback =
+                                      calculateSubmissionMetrics({
+                                        fields:
+                                          getReportFields(
+                                            report
+                                          ),
+                                        fieldValues:
+                                          getReportValues(
+                                            report
+                                          ),
+                                        petrolPrice:
+                                          petrolUnitPrice,
+                                        dieselPrice:
+                                          dieselUnitPrice,
+                                        nationalVolume: 0,
+                                      });
+
+                                    const enrichedReport = {
                                       ...report,
                                       organizationName:
                                         reportOrganization
@@ -816,6 +1085,45 @@ const OperatorsReports = ({
                                           getWorkflowStageRole(
                                             report
                                           )
+                                        ),
+                                      petrolUnitPrice,
+                                      dieselUnitPrice,
+                                      priceEffectiveAt:
+                                        pricingSnapshot.effectiveAt ||
+                                        pricingSnapshot.effectiveDate ||
+                                        pricingSnapshot.updatedAt ||
+                                        pricingSnapshot.createdAt ||
+                                        companyFuelPrice.effectiveAt ||
+                                        companyFuelPrice.effectiveDate ||
+                                        companyFuelPrice.updatedAt ||
+                                        companyFuelPrice.createdAt ||
+                                        null,
+                                      referencePrices: {
+                                        petrolPrice:
+                                          petrolUnitPrice,
+                                        dieselPrice:
+                                          dieselUnitPrice,
+                                      },
+                                      sourceMetrics: {
+                                        ...calculatedFallback.sourceMetrics,
+                                        ...(report.sourceMetrics ||
+                                          report.metricValues ||
+                                          report.metrics?.source ||
+                                          {}),
+                                      },
+                                      calculatedMetrics: {
+                                        ...calculatedFallback.calculatedMetrics,
+                                        ...(report.calculatedMetrics ||
+                                          report.metrics?.calculated ||
+                                          {}),
+                                      },
+                                    };
+
+                                    return {
+                                      ...enrichedReport,
+                                      fuelMetrics:
+                                        getReportFuelMetrics(
+                                          enrichedReport
                                         ),
                                     };
                                   }

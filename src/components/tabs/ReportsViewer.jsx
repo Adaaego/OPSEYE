@@ -23,6 +23,7 @@ import {
   Clock,
   Globe,
   History,
+  Fuel,
   Lock,
   MapPin,
   Save,
@@ -110,6 +111,62 @@ const formatAuditTimestamp = (value) => {
   ).format(date);
 };
 
+const toNumber = (value) => {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return 0;
+  }
+
+  const number = Number(value);
+
+  return Number.isFinite(number)
+    ? number
+    : 0;
+};
+
+const formatNumber = (
+  value,
+  maximumFractionDigits = 0
+) => {
+  return new Intl.NumberFormat(
+    "en-GB",
+    {
+      maximumFractionDigits,
+    }
+  ).format(toNumber(value));
+};
+
+const formatCurrency = (value) => {
+  return new Intl.NumberFormat(
+    "en-GH",
+    {
+      style: "currency",
+      currency: "GHS",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }
+  ).format(toNumber(value));
+};
+
+const formatLitres = (value) => {
+  const litres = toNumber(value);
+
+  return litres > 0
+    ? `${formatNumber(litres, 2)} L`
+    : "—";
+};
+
+const formatPricePerLitre = (value) => {
+  const price = toNumber(value);
+
+  return price > 0
+    ? `${formatCurrency(price)}/L`
+    : "—";
+};
+
 const ReportViewer = ({
   report,
   currentUserProfile = null,
@@ -134,6 +191,25 @@ const ReportViewer = ({
     Array.isArray(report?.fields)
       ? report.fields
       : [];
+
+  const fuelMetrics =
+    report?.fuelMetrics || {
+      petrolVolume: 0,
+      dieselVolume: 0,
+      totalVolume: 0,
+      petrolPrice:
+        toNumber(
+          report?.petrolUnitPrice
+        ),
+      dieselPrice:
+        toNumber(
+          report?.dieselUnitPrice
+        ),
+      petrolRevenue: 0,
+      dieselRevenue: 0,
+      totalRevenue: 0,
+      hasFuelData: false,
+    };
 
   const workflowHistory =
     Array.isArray(
@@ -1102,6 +1178,122 @@ const ReportViewer = ({
               </div>
             )}
           </section>
+
+          {fuelMetrics.hasFuelData && (
+            <section className="border-t border-slate-200 bg-white px-5 py-5">
+              <div className="mb-4 flex items-center gap-2">
+                <div className="h-5 w-1 rounded-full bg-navy-950" />
+
+                <Fuel className="h-4 w-4 text-navy-700" />
+
+                <div>
+                  <h3 className="text-base font-bold text-navy-950">
+                    Fuel Sales Summary
+                  </h3>
+
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Submitted fuel quantities valued using the applicable NPA price for the operator.
+                  </p>
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                <div className="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+                  {[
+                    {
+                      key: "petrol",
+                      label: "Petrol sold",
+                      volume:
+                        fuelMetrics.petrolVolume,
+                      price:
+                        fuelMetrics.petrolPrice,
+                      revenue:
+                        fuelMetrics.petrolRevenue,
+                    },
+                    {
+                      key: "diesel",
+                      label: "Diesel sold",
+                      volume:
+                        fuelMetrics.dieselVolume,
+                      price:
+                        fuelMetrics.dieselPrice,
+                      revenue:
+                        fuelMetrics.dieselRevenue,
+                    },
+                  ].map((product) => (
+                    <div
+                      key={product.key}
+                      className="p-4"
+                    >
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-600">
+                        {product.label}
+                      </p>
+
+                      <p className="mt-2 text-xl font-bold tabular-nums text-navy-950">
+                        {formatLitres(
+                          product.volume
+                        )}
+                      </p>
+
+                      <div className="mt-3 space-y-1.5 text-xs">
+                        <div className="flex items-center justify-between gap-4">
+                          <span className="text-slate-500">
+                            NPA price
+                          </span>
+
+                          <span className="font-semibold tabular-nums text-slate-800">
+                            {formatPricePerLitre(
+                              product.price
+                            )}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-4">
+                          <span className="text-slate-500">
+                            Estimated value
+                          </span>
+
+                          <span className="font-semibold tabular-nums text-slate-800">
+                            {formatCurrency(
+                              product.revenue
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 bg-navy-950 px-4 py-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">
+                      Total fuel sold
+                    </p>
+                    <p className="mt-1 text-sm font-semibold tabular-nums text-white">
+                      {formatLitres(
+                        fuelMetrics.totalVolume
+                      )}
+                    </p>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">
+                      Total estimated value
+                    </p>
+                    <p className="mt-1 text-sm font-semibold tabular-nums text-white">
+                      {formatCurrency(
+                        fuelMetrics.totalRevenue
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+                  Prices are resolved from the report pricing snapshot or the NPA fuel-price record linked to the Enterprise.
+                </div>
+              </div>
+            </section>
+          )}
 
           <section className="border-t border-slate-200 bg-white px-5 py-5">
             <div className="mb-4 flex items-center gap-2">
