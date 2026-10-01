@@ -85,20 +85,20 @@ const APPROVAL_ROLE_LABELS = {
 };
 
 const normalizeValue = (value) => {
-  return String(value ?? "")
+return String(value ?? "")
     .trim()
     .toLowerCase();
 };
 
 const normalizeStatus = (value) => {
-  return normalizeValue(value)
+return normalizeValue(value)
     .replace(/[\s-]+/g, "_");
 };
 
 const hashInvitationToken = (
-  token
+token
 ) => {
-  return createHash("sha256")
+return createHash("sha256")
     .update(
       String(token || "").trim(),
       "utf8"
@@ -132,11 +132,11 @@ exports.validatePublicInvitation =
           ""
         ).trim();
 
-      if (
+if (
         token.length < 16 ||
         token.length > 512
       ) {
-        throw new HttpsError(
+throw new HttpsError(
           "invalid-argument",
           "A valid invitation token is required."
         );
@@ -148,7 +148,7 @@ exports.validatePublicInvitation =
         );
 
       const invitationSnapshot =
-        await db
+await db
           .collection(
             INVITATIONS_COLLECTION
           )
@@ -157,10 +157,10 @@ exports.validatePublicInvitation =
           )
           .get();
 
-      if (
+if (
         !invitationSnapshot.exists
       ) {
-        return {
+return {
           valid: false,
           reason: "not_found",
           message:
@@ -280,7 +280,6 @@ exports.validatePublicInvitation =
       };
     }
   );
-
 
 const normalizeEmail = (value) => {
   return String(value ?? "")
@@ -1512,6 +1511,590 @@ exports.completeInvitation =
         );
 
       return result;
+    }
+  );
+
+const REPORT_AUTO_APPROVAL_DELAYS =
+  new Set([
+    15,
+    30,
+    60,
+    120,
+    240,
+  ]);
+
+/*
+ * Region and Enterprise admins may configure automatic approval only for
+ * their own organization. The setting does not change reporting visibility:
+ * a report must already have reached that organization's workflow stage.
+ */
+exports.setReportAutoApproval =
+  onCall(
+    {
+      region:
+        "europe-west1",
+      timeoutSeconds:
+        30,
+    },
+    async (request) => {
+      const userId =
+        request.auth?.uid ||
+        "";
+      if (!userId) {
+        throw new HttpsError(
+          "unauthenticated",
+          "Sign in before changing auto-approval settings."
+        );
+      }
+      const organizationId =
+        String(
+          request.data?.organizationId ||
+          ""
+        ).trim();
+      const enabled =
+        request.data?.enabled === true;
+      const delayMinutes =
+        Number(
+          request.data?.delayMinutes
+        );
+      if (!organizationId) {
+        throw new HttpsError(
+          "invalid-argument",
+          "A valid organization is required."
+        );
+      }
+      if (
+        !REPORT_AUTO_APPROVAL_DELAYS.has(
+          delayMinutes
+        )
+      ) {
+        throw new HttpsError(
+          "invalid-argument",
+          "Choose a valid auto-approval delay."
+        );
+      }
+      const memberReference =
+        db
+          .collection(
+            ORGANIZATION_MEMBERS_COLLECTION
+          )
+          .doc(
+            userId
+          );
+      const organizationReference =
+        db
+          .collection(
+            ORGANIZATIONS_COLLECTION
+          )
+          .doc(
+            organizationId
+          );
+      const [
+        memberSnapshot,
+        organizationSnapshot,
+      ] =
+        await Promise.all([
+          memberReference.get(),
+          organizationReference.get(),
+        ]);
+      if (!memberSnapshot.exists) {
+        throw new HttpsError(
+          "permission-denied",
+          "Your organization membership could not be found."
+        );
+      }
+      if (!organizationSnapshot.exists) {
+        throw new HttpsError(
+          "not-found",
+          "The organization could not be found."
+        );
+      }
+      const member =
+        memberSnapshot.data();
+      const organization =
+        organizationSnapshot.data();
+      const memberRole =
+        normalizeStatus(
+          member?.role ||
+          member?.userRole
+        );
+      const organizationType =
+        normalizeStatus(
+          organization?.type ||
+          organization?.organizationType ||
+          organization?.level
+        );
+      const validAdmin =
+        (
+          memberRole ===
+            "region_admin" &&
+          organizationType ===
+            "region"
+        ) ||
+        (
+          memberRole ===
+            "enterprise_admin" &&
+          organizationType ===
+            "enterprise"
+        );
+      if (
+        !validAdmin ||
+        String(
+          member?.organizationId ||
+          ""
+        ).trim() !==
+          organizationId
+      ) {
+        throw new HttpsError(
+          "permission-denied",
+          "Only the Region or Enterprise administrator for this organization can change auto-approval settings."
+        );
+      }
+      await organizationReference.set(
+        {
+          reportAutoApproval: {
+            enabled,
+            delayMinutes,
+            updatedBy:
+              userId,
+            updatedAt:
+              FieldValue.serverTimestamp(),
+          },
+          updatedAt:
+            FieldValue.serverTimestamp(),
+        },
+        {
+          merge: true,
+        }
+      );
+      return {
+        success: true,
+        organizationId,
+        enabled,
+        delayMinutes,
+      };
+    }
+  );
+
+const getReportStageEnteredAt = (
+  report
+) => {
+  const history =
+    Array.isArray(
+      report?.workflowHistory
+    )
+      ? report.workflowHistory
+      : [];
+  for (
+    let index =
+      history.length - 1;
+    index >= 0;
+    index -= 1
+  ) {
+    const timestamp =
+      toDate(
+        history[index]?.timestamp
+      );
+    if (timestamp) {
+      return timestamp;
+    }
+  }
+  return (
+    toDate(
+      report?.updatedAt
+    ) ||
+    toDate(
+      report?.submittedAt
+    ) ||
+    null
+  );
+};
+
+const getAutoApprovalDueAt = ({
+  report,
+  delayMinutes,
+}) => {
+  const stageEnteredAt =
+    getReportStageEnteredAt(
+      report
+    );
+  if (!stageEnteredAt) {
+    return null;
+  }
+  const delayedApprovalAt =
+    new Date(
+      stageEnteredAt.getTime() +
+      delayMinutes * 60 * 1000
+    );
+  const deadlineAt =
+    toDate(
+      report?.deadlineAt
+    );
+  if (!deadlineAt) {
+    return delayedApprovalAt;
+  }
+  /*
+   * Never schedule an approval before the report reached this stage.
+   * If a late submission reaches a reviewer after the original deadline,
+   * it becomes eligible immediately.
+   */
+  const latestValidDeadline =
+    new Date(
+      Math.max(
+        deadlineAt.getTime(),
+        stageEnteredAt.getTime()
+      )
+    );
+  return new Date(
+    Math.min(
+      delayedApprovalAt.getTime(),
+      latestValidDeadline.getTime()
+    )
+  );
+};
+
+const getAutoApprovalOrganizationId = (
+  report,
+  stageRole
+) => {
+  if (
+    stageRole ===
+    "region_admin"
+  ) {
+    return String(
+      report?.parentOrganizationId ||
+      ""
+    ).trim();
+  }
+  if (
+    stageRole ===
+    "enterprise_admin"
+  ) {
+    return String(
+      report?.rootEnterpriseId ||
+      ""
+    ).trim();
+  }
+  return "";
+};
+
+const autoApproveReport = async ({
+  reportReference,
+  now,
+}) => {
+  return db.runTransaction(
+    async (transaction) => {
+      const reportSnapshot =
+        await transaction.get(
+          reportReference
+        );
+      if (!reportSnapshot.exists) {
+        return false;
+      }
+      const report = {
+        id:
+          reportSnapshot.id,
+        ...reportSnapshot.data(),
+      };
+      const status =
+        normalizeStatus(
+          report.status
+        );
+      const stageRole =
+        normalizeStatus(
+          report.currentStageRole ||
+          report.assignedRole
+        );
+      if (
+        status !==
+          "under_review" ||
+        ![
+          "region_admin",
+          "enterprise_admin",
+        ].includes(
+          stageRole
+        )
+      ) {
+        return false;
+      }
+      const organizationId =
+        getAutoApprovalOrganizationId(
+          report,
+          stageRole
+        );
+      if (!organizationId) {
+        return false;
+      }
+      const organizationReference =
+        db
+          .collection(
+            ORGANIZATIONS_COLLECTION
+          )
+          .doc(
+            organizationId
+          );
+      const organizationSnapshot =
+        await transaction.get(
+          organizationReference
+        );
+      if (
+        !organizationSnapshot.exists
+      ) {
+        return false;
+      }
+      const organization =
+        organizationSnapshot.data();
+      const autoApproval =
+        organization
+          ?.reportAutoApproval ||
+        {};
+      const enabled =
+        autoApproval.enabled ===
+        true;
+      const delayMinutes =
+        Number(
+          autoApproval.delayMinutes
+        );
+      if (
+        !enabled ||
+        !REPORT_AUTO_APPROVAL_DELAYS.has(
+          delayMinutes
+        )
+      ) {
+        return false;
+      }
+      const dueAt =
+        getAutoApprovalDueAt({
+          report,
+          delayMinutes,
+        });
+      if (
+        !dueAt ||
+        dueAt.getTime() >
+          now.getTime()
+      ) {
+        return false;
+      }
+      const workflowStages =
+        Array.isArray(
+          report.workflowStages
+        )
+          ? report.workflowStages
+          : [];
+      const currentStageIndex =
+        Number.isInteger(
+          report.currentStageIndex
+        )
+          ? report.currentStageIndex
+          : -1;
+      if (
+        currentStageIndex < 1 ||
+        currentStageIndex >=
+          workflowStages.length - 1
+      ) {
+        return false;
+      }
+      const currentStage =
+        workflowStages[
+          currentStageIndex
+        ];
+      const storedStageRole =
+        normalizeStatus(
+          currentStage?.role
+        );
+      if (
+        storedStageRole !==
+          stageRole
+      ) {
+        return false;
+      }
+      const nextStageIndex =
+        currentStageIndex + 1;
+      const nextStage =
+        workflowStages[
+          nextStageIndex
+        ];
+      const nextStageRole =
+        normalizeStatus(
+          nextStage?.role
+        );
+      if (!nextStageRole) {
+        return false;
+      }
+      const hasReachedMinistry =
+        nextStageRole ===
+        "ministry";
+      const wasSubmittedLate =
+        report.wasSubmittedLate ===
+        true;
+      const historyEntry = {
+        action:
+          hasReachedMinistry
+            ? "auto_approved_to_ministry"
+            : "auto_approved",
+        userId:
+          "system_auto_approval",
+        userName:
+          "Auto-Approval",
+        userEmail:
+          "",
+        role:
+          stageRole,
+        stageIndex:
+          currentStageIndex,
+        stageLabel:
+          currentStage?.label ||
+          APPROVAL_ROLE_LABELS[
+            stageRole
+          ] ||
+          stageRole,
+        timestamp:
+          Timestamp.now(),
+        automatic:
+          true,
+        delayMinutes,
+        organizationId,
+      };
+      transaction.update(
+        reportReference,
+        {
+          currentStageIndex:
+            nextStageIndex,
+          currentStageRole:
+            hasReachedMinistry
+              ? "ministry"
+              : nextStageRole,
+          assignedRole:
+            hasReachedMinistry
+              ? ""
+              : nextStageRole,
+          assignedUserId:
+            "",
+          assignedUserName:
+            "",
+          assignedUserEmail:
+            "",
+          assignedTo:
+            hasReachedMinistry
+              ? "Ministry — Preview Only"
+              : nextStage?.label ||
+                nextStage?.role ||
+                "",
+          status:
+            hasReachedMinistry
+              ? wasSubmittedLate
+                ? "submitted_late"
+                : "submitted"
+              : "under_review",
+          organizationApprovalCompleted:
+            hasReachedMinistry,
+          availableToMinistry:
+            hasReachedMinistry,
+          updatedBy:
+            "system_auto_approval",
+          updatedAt:
+            FieldValue.serverTimestamp(),
+          workflowHistory:
+            FieldValue.arrayUnion(
+              historyEntry
+            ),
+        }
+      );
+      return true;
+    }
+  );
+};
+
+/*
+ * Runs every minute and performs the same workflow advancement as a manual
+ * approval, but only for reports that have already reached a Region or
+ * Enterprise review stage and whose organization has enabled auto-approval.
+ */
+exports.processReportAutoApprovals =
+  onSchedule(
+    {
+      schedule:
+        "every 1 minutes",
+      timeZone:
+        DEFAULT_TIMEZONE,
+      region:
+        "europe-west1",
+      timeoutSeconds:
+        540,
+    },
+    async () => {
+      const now =
+        new Date();
+      const snapshot =
+        await db
+          .collection(
+            REPORT_SUBMISSIONS_COLLECTION
+          )
+          .where(
+            "status",
+            "==",
+            "under_review"
+          )
+          .get();
+      if (snapshot.empty) {
+        logger.info(
+          "No reports are waiting for auto-approval."
+        );
+        return;
+      }
+      let approvedCount = 0;
+      for (
+        const reportDocument of
+        snapshot.docs
+      ) {
+        const report =
+          reportDocument.data();
+        const stageRole =
+          normalizeStatus(
+            report.currentStageRole ||
+            report.assignedRole
+          );
+        if (
+          ![
+            "region_admin",
+            "enterprise_admin",
+          ].includes(
+            stageRole
+          )
+        ) {
+          continue;
+        }
+        try {
+          const approved =
+            await autoApproveReport({
+              reportReference:
+                reportDocument.ref,
+              now,
+            });
+          if (approved) {
+            approvedCount += 1;
+          }
+        } catch (error) {
+          logger.error(
+            "Unable to auto-approve report.",
+            {
+              reportId:
+                reportDocument.id,
+              error:
+                error?.message ||
+                String(error),
+            }
+          );
+        }
+      }
+      logger.info(
+        "Report auto-approval processing completed.",
+        {
+          reviewedCount:
+            snapshot.size,
+          approvedCount,
+        }
+      );
     }
   );
 
@@ -2891,7 +3474,7 @@ exports.closeExpiredReports =
         });
 
       const closedTemplateCount =
-        await closeActiveTemplates(
+await closeActiveTemplates(
           now
         );
 

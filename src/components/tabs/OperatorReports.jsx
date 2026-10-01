@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   CalendarClock,
@@ -6,8 +7,8 @@ import {
   Clock3,
   ExternalLink,
   FileText,
+  X,
 } from "lucide-react";
-
 import {
   Card,
   EmptyCell,
@@ -15,9 +16,7 @@ import {
   Select,
   StatusBadge,
 } from "../ui/interface";
-
 import { Button } from "../ui/Button";
-
 import {
   collection,
   doc,
@@ -27,26 +26,39 @@ import {
   query,
   where,
 } from "firebase/firestore";
-
 import { onAuthStateChanged } from "firebase/auth";
-
+import {
+  getFunctions,
+  httpsCallable,
+} from "firebase/functions";
 import {
   auth,
   db,
 } from "../../firebase/firebase";
-
 import {
   calculateSubmissionMetrics,
 } from "../../lib/calculation-metrics";
-
 import ReportViewer from "./ReportsViewer";
-
 const NAVY = "#0F172A";
 const PALE_BLUE = "#C8D5E8";
-
 const COMPANY_FUEL_PRICES_COLLECTION =
   "companyFuelPrices";
-
+const AUTO_APPROVAL_DELAY_OPTIONS = [
+  { label: "15 minutes", value: 15 },
+  { label: "30 minutes", value: 30 },
+  { label: "1 hour", value: 60 },
+  { label: "2 hours", value: 120 },
+  { label: "4 hours", value: 240 },
+];
+const functions = getFunctions(
+  undefined,
+  "europe-west1"
+);
+const setReportAutoApprovalCall =
+  httpsCallable(
+    functions,
+    "setReportAutoApproval"
+  );
 const TASK_STATUS_OPTIONS = [
   "Draft",
   "Pending Submission",
@@ -54,20 +66,33 @@ const TASK_STATUS_OPTIONS = [
   "Pending Review",
   "Overdue",
 ];
-
+const formatAutoApprovalDelay = (
+  delayMinutes
+) => {
+  const minutes = Number(delayMinutes);
+  if (minutes === 60) {
+    return "1 hour";
+  }
+  if (
+    Number.isFinite(minutes) &&
+    minutes > 60 &&
+    minutes % 60 === 0
+  ) {
+    return `${minutes / 60} hours`;
+  }
+  return `${minutes || 30} minutes`;
+};
 const normalizeValue = (value) => {
-  return String(value ?? "")
+return String(value ?? "")
     .trim()
     .toLowerCase();
 };
-
 const normalizeStatus = (value) => {
-  return normalizeValue(value).replace(
+return normalizeValue(value).replace(
     /[\s-]+/g,
     "_"
   );
 };
-
 const getRoleLabel = (role) => {
   const roleLabels = {
     employee: "Employee",
@@ -77,51 +102,43 @@ const getRoleLabel = (role) => {
     enterprise_admin: "Enterprise Admin",
     ministry: "Ministry",
   };
-
-  return (
+return (
     roleLabels[normalizeValue(role)] ||
-    role ||
+role ||
     ""
   );
 };
-
 const getOrganizationId = (organization) => {
-  return (
+return (
     organization?.organizationId ||
     organization?.id ||
     ""
   );
 };
-
 const getOrganizationLevel = (organization) => {
-  return normalizeStatus(
+return normalizeStatus(
     organization?.type ||
       organization?.organizationType ||
       organization?.level
   );
 };
-
 const getDateKey = (value) => {
-  if (!value) {
-    return "";
+if (!value) {
+return "";
   }
-
-  if (
+if (
     typeof value === "string" &&
     /^\d{4}-\d{2}-\d{2}/.test(value)
   ) {
-    return value.slice(0, 10);
+return value.slice(0, 10);
   }
-
   const date =
     typeof value?.toDate === "function"
       ? value.toDate()
       : new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return "";
+if (Number.isNaN(date.getTime())) {
+return "";
   }
-
   const year = date.getFullYear();
   const month = String(
     date.getMonth() + 1
@@ -129,56 +146,46 @@ const getDateKey = (value) => {
   const day = String(
     date.getDate()
   ).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
+return `${year}-${month}-${day}`;
 };
-
 const toNumber = (value) => {
-  if (
+if (
     value === null ||
     value === undefined ||
     value === ""
   ) {
-    return 0;
+return 0;
   }
-
   const number = Number(value);
-
-  return Number.isFinite(number)
+return Number.isFinite(number)
     ? number
     : 0;
 };
-
 const getFirstFiniteNumber = (...values) => {
-  for (const value of values) {
-    if (
+for (const value of values) {
+if (
       value === null ||
       value === undefined ||
       value === ""
     ) {
-      continue;
+continue;
     }
-
     const number = Number(value);
-
-    if (Number.isFinite(number)) {
-      return number;
+if (Number.isFinite(number)) {
+return number;
     }
   }
-
-  return 0;
+return 0;
 };
-
 const getPriceValue = (
-  priceRecord,
-  product
+priceRecord,
+product
 ) => {
-  if (!priceRecord) {
-    return 0;
+if (!priceRecord) {
+return 0;
   }
-
-  if (product === "petrol") {
-    return getFirstFiniteNumber(
+if (product === "petrol") {
+return getFirstFiniteNumber(
       priceRecord.petrolPrice,
       priceRecord.petrolPricePerLitre,
       priceRecord.petrol_price,
@@ -188,8 +195,7 @@ const getPriceValue = (
       priceRecord.npa?.petrol
     );
   }
-
-  return getFirstFiniteNumber(
+return getFirstFiniteNumber(
     priceRecord.dieselPrice,
     priceRecord.dieselPricePerLitre,
     priceRecord.diesel_price,
@@ -199,7 +205,6 @@ const getPriceValue = (
     priceRecord.npa?.diesel
   );
 };
-
 const getReportFields = (report) => {
   const snapshots = [
     report?.formSnapshot,
@@ -207,26 +212,22 @@ const getReportFields = (report) => {
     report?.formTemplate,
     report,
   ].filter(Boolean);
-
-  for (const snapshot of snapshots) {
-    if (Array.isArray(snapshot.fields)) {
-      return snapshot.fields;
+for (const snapshot of snapshots) {
+if (Array.isArray(snapshot.fields)) {
+return snapshot.fields;
     }
-
-    if (Array.isArray(snapshot.steps)) {
-      return snapshot.steps.flatMap((step) =>
+if (Array.isArray(snapshot.steps)) {
+return snapshot.steps.flatMap((step) =>
         Array.isArray(step?.fields)
           ? step.fields
           : []
       );
     }
   }
-
-  return [];
+return [];
 };
-
 const getReportValues = (report) => {
-  return (
+return (
     report?.fieldValues ||
     report?.responses ||
     report?.answers ||
@@ -234,30 +235,23 @@ const getReportValues = (report) => {
     {}
   );
 };
-
 const getReportFuelMetrics = (report) => {
   const sourceMetrics =
     report?.sourceMetrics || {};
-
   const calculatedMetrics =
     report?.calculatedMetrics || {};
-
   const petrolVolume = toNumber(
     sourceMetrics.petrol_volume_sold
   );
-
   const dieselVolume = toNumber(
     sourceMetrics.diesel_volume_sold
   );
-
   const petrolPrice = toNumber(
     report?.petrolUnitPrice
   );
-
   const dieselPrice = toNumber(
     report?.dieselUnitPrice
   );
-
   const petrolRevenue =
     getFirstFiniteNumber(
       calculatedMetrics.petrol_revenue,
@@ -265,7 +259,6 @@ const getReportFuelMetrics = (report) => {
       calculatedMetrics.petrol_estimated_revenue
     ) ||
     petrolVolume * petrolPrice;
-
   const dieselRevenue =
     getFirstFiniteNumber(
       calculatedMetrics.diesel_revenue,
@@ -273,13 +266,11 @@ const getReportFuelMetrics = (report) => {
       calculatedMetrics.diesel_estimated_revenue
     ) ||
     dieselVolume * dieselPrice;
-
   const totalVolume =
     getFirstFiniteNumber(
       calculatedMetrics.total_volume_sold
     ) ||
     petrolVolume + dieselVolume;
-
   const totalRevenue =
     getFirstFiniteNumber(
       calculatedMetrics.estimated_daily_revenue,
@@ -287,8 +278,7 @@ const getReportFuelMetrics = (report) => {
       calculatedMetrics.total_revenue
     ) ||
     petrolRevenue + dieselRevenue;
-
-  return {
+return {
     petrolVolume,
     dieselVolume,
     totalVolume,
@@ -302,42 +292,36 @@ const getReportFuelMetrics = (report) => {
       dieselVolume > 0,
   };
 };
-
 const getWorkflowStageRole = (report) => {
   const workflowStages = Array.isArray(
     report?.workflowStages
   )
     ? report.workflowStages
     : [];
-
   const currentStageIndex = Number.isInteger(
     report?.currentStageIndex
   )
     ? report.currentStageIndex
     : 0;
-
-  return normalizeValue(
+return normalizeValue(
     report?.currentStageRole ||
       report?.assignedRole ||
       workflowStages[currentStageIndex]
         ?.role
   );
 };
-
 const getWorkflowStageLabel = (report) => {
   const workflowStages = Array.isArray(
     report?.workflowStages
   )
     ? report.workflowStages
     : [];
-
   const currentStageIndex = Number.isInteger(
     report?.currentStageIndex
   )
     ? report.currentStageIndex
     : 0;
-
-  return (
+return (
     workflowStages[currentStageIndex]
       ?.label ||
     getRoleLabel(
@@ -346,43 +330,36 @@ const getWorkflowStageLabel = (report) => {
     "—"
   );
 };
-
 const snapshotDocuments = (snapshot) => {
-  return snapshot.docs.map(
+return snapshot.docs.map(
     (documentSnapshot) => ({
       id: documentSnapshot.id,
       ...documentSnapshot.data(),
     })
   );
 };
-
 const mergeDocumentLists = (
-  documentLists
+documentLists
 ) => {
   const merged = new Map();
-
   documentLists.flat().forEach((record) => {
-    if (record?.id) {
+if (record?.id) {
       merged.set(record.id, record);
     }
   });
-
-  return Array.from(merged.values());
+return Array.from(merged.values());
 };
-
 const subscribeToMergedReferences = ({
   references,
   onData,
   onError,
 }) => {
-  if (!references.length) {
+if (!references.length) {
     onData([]);
-    return () => {};
+return () => {};
   }
-
   const sourceDocuments = new Map();
   const initializedSources = new Set();
-
   const unsubscribers = references.map(
     (reference, index) =>
       onSnapshot(
@@ -393,10 +370,9 @@ const subscribeToMergedReferences = ({
             snapshotDocuments(snapshot)
           );
           initializedSources.add(index);
-
-          if (
+if (
             initializedSources.size ===
-            references.length
+references.length
           ) {
             onData(
               mergeDocumentLists(
@@ -411,10 +387,9 @@ const subscribeToMergedReferences = ({
           sourceDocuments.set(index, []);
           initializedSources.add(index);
           onError?.(error);
-
-          if (
+if (
             initializedSources.size ===
-            references.length
+references.length
           ) {
             onData(
               mergeDocumentLists(
@@ -427,38 +402,32 @@ const subscribeToMergedReferences = ({
         }
       )
   );
-
-  return () => {
+return () => {
     unsubscribers.forEach(
       (unsubscribe) => unsubscribe()
     );
   };
 };
-
 /*
  * Reporting Tasks follows the same downward hierarchy used elsewhere:
  * Enterprise -> Regions/Branches, Region -> Branches, Branch -> itself.
  */
 const loadScopedOrganizations = async (
-  organization
+organization
 ) => {
   const organizationId =
     getOrganizationId(organization);
-
-  if (!organizationId) {
-    return [];
+if (!organizationId) {
+return [];
   }
-
   const organizationLevel =
     getOrganizationLevel(organization);
-
-  if (organizationLevel === "ministry") {
-    return [organization];
+if (organizationLevel === "ministry") {
+return [organization];
   }
-
-  if (organizationLevel === "enterprise") {
+if (organizationLevel === "enterprise") {
     const descendantsSnapshot =
-      await getDocs(
+await getDocs(
         query(
           collection(db, "organizations"),
           where(
@@ -468,18 +437,16 @@ const loadScopedOrganizations = async (
           )
         )
       );
-
-    return mergeDocumentLists([
+return mergeDocumentLists([
       [organization],
       snapshotDocuments(
         descendantsSnapshot
       ),
     ]);
   }
-
-  if (organizationLevel === "region") {
+if (organizationLevel === "region") {
     const descendantsSnapshot =
-      await getDocs(
+await getDocs(
         query(
           collection(db, "organizations"),
           where(
@@ -489,18 +456,15 @@ const loadScopedOrganizations = async (
           )
         )
       );
-
-    return mergeDocumentLists([
+return mergeDocumentLists([
       [organization],
       snapshotDocuments(
         descendantsSnapshot
       ),
     ]);
   }
-
-  return [organization];
+return [organization];
 };
-
 /*
  * Reporting tasks are Branch-owned throughout the approval workflow.
  *
@@ -510,38 +474,33 @@ const loadScopedOrganizations = async (
  * the same hierarchy metadata enforced by the security rules.
  */
 const getReportReferences = (
-  organization,
-  currentUserRole
+organization,
+currentUserRole
 ) => {
-  if (!currentUserRole) {
-    return [];
+if (!currentUserRole) {
+return [];
   }
-
   const organizationId =
     getOrganizationId(
-      organization
+organization
     );
-
   const organizationLevel =
     getOrganizationLevel(
-      organization
+organization
     );
-
-  if (!organizationId) {
-    return [];
+if (!organizationId) {
+return [];
   }
-
   const reportCollection =
     collection(
       db,
       "reportSubmissions"
     );
-
-  if (
+if (
     organizationLevel ===
     "branch"
   ) {
-    return [
+return [
       query(
         reportCollection,
         where(
@@ -557,12 +516,11 @@ const getReportReferences = (
       ),
     ];
   }
-
-  if (
+if (
     organizationLevel ===
     "region"
   ) {
-    return [
+return [
       query(
         reportCollection,
         where(
@@ -578,12 +536,11 @@ const getReportReferences = (
       ),
     ];
   }
-
-  if (
+if (
     organizationLevel ===
     "enterprise"
   ) {
-    return [
+return [
       query(
         reportCollection,
         where(
@@ -599,32 +556,27 @@ const getReportReferences = (
       ),
     ];
   }
-
-  return [];
+return [];
 };
-
 const getRegionOrganization = (
-  organization,
-  organizationMap
+organization,
+organizationMap
 ) => {
-  if (!organization) {
-    return null;
+if (!organization) {
+return null;
   }
-
-  if (
+if (
     getOrganizationLevel(organization) ===
     "region"
   ) {
-    return organization;
+return organization;
   }
-
   const ancestorIds = Array.isArray(
     organization.ancestorIds
   )
     ? organization.ancestorIds
     : [];
-
-  for (
+for (
     let index =
       ancestorIds.length - 1;
     index >= 0;
@@ -633,59 +585,49 @@ const getRegionOrganization = (
     const ancestor = organizationMap.get(
       ancestorIds[index]
     );
-
-    if (
+if (
       getOrganizationLevel(ancestor) ===
       "region"
     ) {
-      return ancestor;
+return ancestor;
     }
   }
-
   const parent = organizationMap.get(
     organization.parentId
   );
-
-  return getOrganizationLevel(parent) ===
+return getOrganizationLevel(parent) ===
     "region"
     ? parent
     : null;
 };
-
 const getEnterpriseOrganization = (
-  organization,
-  organizationMap
+organization,
+organizationMap
 ) => {
-  if (!organization) {
-    return null;
+if (!organization) {
+return null;
   }
-
-  if (
+if (
     getOrganizationLevel(organization) ===
     "enterprise"
   ) {
-    return organization;
+return organization;
   }
-
   const enterpriseId =
     organization.rootEnterpriseId ||
     "";
-
-  return enterpriseId
+return enterpriseId
     ? organizationMap.get(enterpriseId) ||
         null
     : null;
 };
-
 const isFinalWorkflowRecord = (report) => {
   const status = normalizeStatus(
     report?.status
   );
-
   const stageRole =
     getWorkflowStageRole(report);
-
-  return (
+return (
     stageRole === "ministry" ||
     [
       "approved",
@@ -696,100 +638,106 @@ const isFinalWorkflowRecord = (report) => {
     ].includes(status)
   );
 };
-
 /*
  * A Reporting Task exists only when the workflow has reached the signed-in
  * user's role. Visibility alone does not make a report actionable.
  */
 const isActionableForRole = (
-  report,
-  currentUserRole
+report,
+currentUserRole
 ) => {
-  if (
+if (
     !currentUserRole ||
     isFinalWorkflowRecord(report)
   ) {
-    return false;
+return false;
   }
-
   const status = normalizeStatus(
     report?.status
   );
-
-  if (
+if (
     status === "rejected"
   ) {
-    return false;
+return false;
   }
-
-  return (
+return (
     getWorkflowStageRole(report) ===
-    currentUserRole
+currentUserRole
   );
 };
-
 const isOverdueTask = (report) => {
-  return (
+return (
     normalizeStatus(report?.status) ===
     "overdue"
   );
 };
-
 const isUpcomingTask = (
-  report,
-  today
+report,
+today
 ) => {
   const reportDate = getDateKey(
     report?.reportingDate ||
       report?.deadlineAt
   );
-
-  return (
+return (
     Boolean(reportDate) &&
     reportDate > today &&
     !isOverdueTask(report)
   );
 };
-
 const OperatorsReports = ({
   reports: initialReports = [],
   onUpdateReport = null,
 }) => {
   const [search, setSearch] =
     useState("");
-
   const [statusFilter, setStatusFilter] =
     useState("");
-
   const [openReport, setOpenReport] =
     useState(null);
-
   const [reports, setReports] =
     useState(initialReports);
-
   const [reportsLoading, setReportsLoading] =
     useState(true);
-
   const [reportsError, setReportsError] =
     useState("");
-
   const [currentUserRole, setCurrentUserRole] =
     useState("");
-
   const [currentUserProfile, setCurrentUserProfile] =
     useState(null);
-
   const [currentOrganization, setCurrentOrganization] =
     useState(null);
-
+  const [autoApprovalOpen, setAutoApprovalOpen] =
+    useState(false);
+  const [autoApprovalEnabled, setAutoApprovalEnabled] =
+    useState(false);
+  const [autoApprovalDelayMinutes, setAutoApprovalDelayMinutes] =
+    useState(30);
+  const [autoApprovalSaving, setAutoApprovalSaving] =
+    useState(false);
+  const [autoApprovalError, setAutoApprovalError] =
+    useState("");
   const today = getDateKey(new Date());
-
+  useEffect(() => {
+    const setting =
+      currentOrganization?.reportAutoApproval ||
+      {};
+    setAutoApprovalEnabled(
+      Boolean(setting.enabled)
+    );
+    setAutoApprovalDelayMinutes(
+      Number(setting.delayMinutes) || 30
+    );
+  }, [
+    currentOrganization?.id,
+    currentOrganization?.reportAutoApproval?.enabled,
+    currentOrganization?.reportAutoApproval?.delayMinutes,
+  ]);
   useEffect(() => {
     let unsubscribeMember = () => {};
     let unsubscribeOrganization =
       () => {};
     let unsubscribeReports = () => {};
-
     const unsubscribeAuth =
       onAuthStateChanged(
         auth,
@@ -797,8 +745,7 @@ const OperatorsReports = ({
           unsubscribeMember();
           unsubscribeOrganization();
           unsubscribeReports();
-
-          if (!currentUser?.uid) {
+if (!currentUser?.uid) {
             setCurrentUserRole("");
             setCurrentUserProfile(null);
             setCurrentOrganization(null);
@@ -807,20 +754,18 @@ const OperatorsReports = ({
             setReportsError(
               "Please sign in to view reporting tasks."
             );
-            return;
+return;
           }
-
           setReportsLoading(true);
           setReportsError("");
-
           unsubscribeMember = onSnapshot(
             doc(
               db,
               "organizationMembers",
-              currentUser.uid
+currentUser.uid
             ),
             (memberSnapshot) => {
-              if (!memberSnapshot.exists()) {
+if (!memberSnapshot.exists()) {
                 setCurrentUserProfile(null);
                 setCurrentOrganization(null);
                 setReports([]);
@@ -828,39 +773,31 @@ const OperatorsReports = ({
                 setReportsError(
                   "Your organization membership could not be found."
                 );
-                return;
+return;
               }
-
               const member = {
                 id: memberSnapshot.id,
                 ...memberSnapshot.data(),
               };
-
               setCurrentUserProfile(member);
-
               const role = normalizeValue(
                 member.role ||
                   member.userRole
               );
-
               setCurrentUserRole(role);
-
               const organizationId =
                 member.organizationId;
-
-              if (!organizationId) {
+if (!organizationId) {
                 setCurrentOrganization(null);
                 setReports([]);
                 setReportsLoading(false);
                 setReportsError(
                   "Your account is not linked to an organization."
                 );
-                return;
+return;
               }
-
               unsubscribeOrganization();
               unsubscribeReports();
-
               unsubscribeOrganization =
                 onSnapshot(
                   doc(
@@ -871,7 +808,7 @@ const OperatorsReports = ({
                   async (
                     organizationSnapshot
                   ) => {
-                    if (
+if (
                       !organizationSnapshot.exists()
                     ) {
                       setCurrentOrganization(
@@ -882,20 +819,17 @@ const OperatorsReports = ({
                       setReportsError(
                         "Your linked organization could not be found."
                       );
-                      return;
+return;
                     }
-
                     const organization = {
                       id:
                         organizationSnapshot.id,
                       ...organizationSnapshot.data(),
                     };
-
                     setCurrentOrganization(
                       organization
                     );
-
-                    if (
+if (
                       getOrganizationLevel(
                         organization
                       ) === "ministry"
@@ -903,15 +837,13 @@ const OperatorsReports = ({
                       setReports([]);
                       setReportsLoading(false);
                       setReportsError("");
-                      return;
+return;
                     }
-
-                    try {
+try {
                       const scopedOrganizations =
-                        await loadScopedOrganizations(
+await loadScopedOrganizations(
                           organization
                         );
-
                       const organizationMap =
                         new Map(
                           scopedOrganizations.map(
@@ -925,8 +857,7 @@ const OperatorsReports = ({
                             ]
                           )
                         );
-
-                      /*
+/*
                        * NPA prices are stored once per Enterprise and keyed by the
                        * Enterprise organization ID. Branch and Region accounts use
                        * their canonical rootEnterpriseId to read that exact record.
@@ -935,12 +866,10 @@ const OperatorsReports = ({
                         getOrganizationId(
                           organization
                         );
-
                       const currentOrganizationLevel =
                         getOrganizationLevel(
                           organization
                         );
-
                       const fuelPriceEnterpriseId =
                         currentOrganizationLevel ===
                         "enterprise"
@@ -948,21 +877,18 @@ const OperatorsReports = ({
                           : organization.rootEnterpriseId ||
                             organization.enterpriseId ||
                             "";
-
                       let companyFuelPrice = {};
-
-                      if (fuelPriceEnterpriseId) {
-                        try {
+if (fuelPriceEnterpriseId) {
+try {
                           const priceSnapshot =
-                            await getDoc(
+await getDoc(
                               doc(
                                 db,
                                 COMPANY_FUEL_PRICES_COLLECTION,
                                 fuelPriceEnterpriseId
                               )
                             );
-
-                          if (priceSnapshot.exists()) {
+if (priceSnapshot.exists()) {
                             companyFuelPrice = {
                               id: priceSnapshot.id,
                               ...priceSnapshot.data(),
@@ -975,9 +901,7 @@ const OperatorsReports = ({
                           );
                         }
                       }
-
                       unsubscribeReports();
-
                       unsubscribeReports =
                         subscribeToMergedReferences({
                           references:
@@ -996,28 +920,23 @@ const OperatorsReports = ({
                                       organizationMap.get(
                                         report.organizationId
                                       );
-
                                     const region =
                                       getRegionOrganization(
                                         reportOrganization,
                                         organizationMap
                                       );
-
                                     const enterprise =
                                       getEnterpriseOrganization(
                                         reportOrganization,
                                         organizationMap
                                       );
-
                                     const organizationLevel =
                                       getOrganizationLevel(
                                         reportOrganization
                                       );
-
                                     const pricingSnapshot =
                                       report.pricingSnapshot ||
                                       {};
-
                                     const petrolUnitPrice =
                                       getPriceValue(
                                         pricingSnapshot,
@@ -1027,7 +946,6 @@ const OperatorsReports = ({
                                         companyFuelPrice,
                                         "petrol"
                                       );
-
                                     const dieselUnitPrice =
                                       getPriceValue(
                                         pricingSnapshot,
@@ -1037,7 +955,6 @@ const OperatorsReports = ({
                                         companyFuelPrice,
                                         "diesel"
                                       );
-
                                     const calculatedFallback =
                                       calculateSubmissionMetrics({
                                         fields:
@@ -1054,7 +971,6 @@ const OperatorsReports = ({
                                           dieselUnitPrice,
                                         nationalVolume: 0,
                                       });
-
                                     const enrichedReport = {
                                       ...report,
                                       organizationName:
@@ -1114,12 +1030,11 @@ const OperatorsReports = ({
                                       calculatedMetrics: {
                                         ...calculatedFallback.calculatedMetrics,
                                         ...(report.calculatedMetrics ||
-                                          report.metrics?.calculated ||
+report.metrics?.calculated ||
                                           {}),
                                       },
                                     };
-
-                                    return {
+return {
                                       ...enrichedReport,
                                       fuelMetrics:
                                         getReportFuelMetrics(
@@ -1128,7 +1043,6 @@ const OperatorsReports = ({
                                     };
                                   }
                                 );
-
                               setReports(
                                 enrichedReports
                               );
@@ -1140,7 +1054,7 @@ const OperatorsReports = ({
                           onError: (error) => {
                             console.error(
                               "Unable to load a reporting-task scope:",
-                              error
+error
                             );
                           },
                         });
@@ -1149,7 +1063,6 @@ const OperatorsReports = ({
                         "Unable to resolve reporting-task scope:",
                         error
                       );
-
                       setReports([]);
                       setReportsLoading(false);
                       setReportsError(
@@ -1161,14 +1074,13 @@ const OperatorsReports = ({
                   (error) => {
                     console.error(
                       "Unable to load organization:",
-                      error
+error
                     );
-
                     setCurrentOrganization(null);
                     setReports([]);
                     setReportsLoading(false);
                     setReportsError(
-                      error?.message ||
+error?.message ||
                         "Your organization could not be loaded."
                     );
                   }
@@ -1177,32 +1089,29 @@ const OperatorsReports = ({
             (error) => {
               console.error(
                 "Unable to load organization membership:",
-                error
+error
               );
-
               setCurrentUserProfile(null);
               setCurrentOrganization(null);
               setReports([]);
               setReportsLoading(false);
               setReportsError(
-                error?.message ||
+error?.message ||
                   "Your organization membership could not be loaded."
               );
             }
           );
         }
       );
-
-    return () => {
+return () => {
       unsubscribeAuth();
       unsubscribeMember();
       unsubscribeOrganization();
       unsubscribeReports();
     };
   }, []);
-
   const actionableReports = useMemo(() => {
-    return reports.filter((report) =>
+return reports.filter((report) =>
       isActionableForRole(
         report,
         currentUserRole
@@ -1212,7 +1121,6 @@ const OperatorsReports = ({
     currentUserRole,
     reports,
   ]);
-
   const summaryCards = useMemo(() => {
     const dueToday = actionableReports.filter(
       (report) =>
@@ -1222,17 +1130,14 @@ const OperatorsReports = ({
         ) === today &&
         !isOverdueTask(report)
     ).length;
-
     const overdue = actionableReports.filter(
       isOverdueTask
     ).length;
-
     const upcoming = actionableReports.filter(
       (report) =>
         isUpcomingTask(report, today)
     ).length;
-
-    return [
+return [
       {
         label: "Due Today",
         value: dueToday,
@@ -1272,21 +1177,17 @@ const OperatorsReports = ({
     actionableReports,
     today,
   ]);
-
   const visibleReports = useMemo(() => {
     const normalizedSearch =
       normalizeValue(search);
-
     const normalizedFilter =
       normalizeStatus(statusFilter);
-
-    return actionableReports
+return actionableReports
       .filter((report) => {
         const matchesStatus =
           !normalizedFilter ||
           normalizeStatus(report.status) ===
             normalizedFilter;
-
         const matchesSearch =
           !normalizedSearch ||
           [
@@ -1302,10 +1203,9 @@ const OperatorsReports = ({
               normalizedSearch
             )
           );
-
-        return (
+return (
           matchesStatus &&
-          matchesSearch
+matchesSearch
         );
       })
       .sort((first, second) => {
@@ -1313,13 +1213,11 @@ const OperatorsReports = ({
           isOverdueTask(first);
         const secondOverdue =
           isOverdueTask(second);
-
-        if (
+if (
           firstOverdue !== secondOverdue
         ) {
-          return firstOverdue ? -1 : 1;
+return firstOverdue ? -1 : 1;
         }
-
         const firstDate = getDateKey(
           first.reportingDate ||
             first.deadlineAt
@@ -1328,8 +1226,7 @@ const OperatorsReports = ({
           second.reportingDate ||
             second.deadlineAt
         );
-
-        return firstDate.localeCompare(
+return firstDate.localeCompare(
           secondDate
         );
       });
@@ -1338,18 +1235,15 @@ const OperatorsReports = ({
     search,
     statusFilter,
   ]);
-
   useEffect(() => {
-    if (!openReport) {
-      return;
+if (!openReport) {
+return;
     }
-
     const matchingReport = reports.find(
       (report) =>
         report.id === openReport.id
     );
-
-    if (
+if (
       !matchingReport ||
       !isActionableForRole(
         matchingReport,
@@ -1357,42 +1251,98 @@ const OperatorsReports = ({
       )
     ) {
       setOpenReport(null);
-      return;
+return;
     }
-
     setOpenReport(matchingReport);
   }, [
     currentUserRole,
     reports,
     openReport?.id,
   ]);
-
   const handleReportUpdate = (
-    updatedReport
+updatedReport
   ) => {
-    if (onUpdateReport) {
+if (onUpdateReport) {
       onUpdateReport(updatedReport);
     }
   };
-
   const organizationLevel =
     getOrganizationLevel(
       currentOrganization
     );
-
+  const canConfigureAutoApproval =
+    (
+      organizationLevel === "region" &&
+      currentUserRole === "region_admin"
+    ) ||
+    (
+      organizationLevel === "enterprise" &&
+      currentUserRole === "enterprise_admin"
+    );
+  const savedAutoApproval =
+    currentOrganization?.reportAutoApproval ||
+    {};
+  const autoApprovalButtonLabel =
+    savedAutoApproval.enabled
+      ? `Auto-Approval · ${formatAutoApprovalDelay(
+          savedAutoApproval.delayMinutes
+        )}`
+      : "Auto-Approval";
+  const openAutoApprovalSettings = () => {
+    setAutoApprovalError("");
+    setAutoApprovalEnabled(
+      Boolean(savedAutoApproval.enabled)
+    );
+    setAutoApprovalDelayMinutes(
+      Number(savedAutoApproval.delayMinutes) ||
+        30
+    );
+    setAutoApprovalOpen(true);
+  };
+  const saveAutoApprovalSettings = async () => {
+    const organizationId =
+      getOrganizationId(
+        currentOrganization
+      );
+    if (!organizationId) {
+      setAutoApprovalError(
+        "Your organization could not be identified."
+      );
+      return;
+    }
+    setAutoApprovalSaving(true);
+    setAutoApprovalError("");
+    try {
+      await setReportAutoApprovalCall({
+        organizationId,
+        enabled: autoApprovalEnabled,
+        delayMinutes:
+          autoApprovalDelayMinutes,
+      });
+      setAutoApprovalOpen(false);
+    } catch (error) {
+      console.error(
+        "Unable to save report auto-approval settings:",
+        error
+      );
+      setAutoApprovalError(
+        error?.message ||
+          "Auto-approval settings could not be saved."
+      );
+    } finally {
+      setAutoApprovalSaving(false);
+    }
+  };
   const showRegionColumn =
     organizationLevel === "enterprise";
-
   const showBranchColumn = [
     "enterprise",
     "region",
   ].includes(organizationLevel);
-
   const tableColumnCount =
     6 +
     (showRegionColumn ? 1 : 0) +
     (showBranchColumn ? 1 : 0);
-
   const scopeLabel =
     organizationLevel === "enterprise"
       ? "Enterprise Review Queue"
@@ -1401,16 +1351,14 @@ const OperatorsReports = ({
         : organizationLevel === "branch"
           ? "Branch Reporting Queue"
           : "Reporting Queue";
-
   const scopeDescription =
     organizationLevel === "enterprise"
       ? "Reports appear here only when they have reached Enterprise review and require action from this account."
       : organizationLevel === "region"
         ? "Reports appear here only when they have reached Region review and require action from this account."
         : "Complete reports assigned to this Branch. Submitted reports move to the next workflow stage and leave this queue.";
-
-  if (organizationLevel === "ministry") {
-    return (
+if (organizationLevel === "ministry") {
+return (
       <section className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6">
         <header className="mb-8 border-b border-slate-200 pb-6">
           <div className="mb-2 flex items-center gap-3">
@@ -1420,17 +1368,14 @@ const OperatorsReports = ({
                 backgroundColor: NAVY,
               }}
             />
-
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
               Reporting Tasks
             </h1>
           </div>
-
           <p className="text-sm text-slate-500">
             Ministry accounts manage reporting through Forms and review completed submissions in Reports.
           </p>
         </header>
-
         <Card className="px-6 py-16 text-center">
           <FileText className="mx-auto h-9 w-9 text-slate-300" />
           <p className="mt-3 text-sm font-semibold text-slate-800">
@@ -1443,8 +1388,7 @@ const OperatorsReports = ({
       </section>
     );
   }
-
-  return (
+return (
     <>
       <section className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6">
         <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
@@ -1456,11 +1400,9 @@ const OperatorsReports = ({
                   backgroundColor: NAVY,
                 }}
               />
-
               <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
                 Reporting Tasks
               </h1>
-
               <span
                 className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
                 style={{
@@ -1472,13 +1414,23 @@ const OperatorsReports = ({
                 {scopeLabel}
               </span>
             </div>
-
             <p className="max-w-3xl text-sm text-slate-500">
               {scopeDescription}
             </p>
           </div>
+          {canConfigureAutoApproval && (
+            <Button
+              variant="outline"
+              onClick={
+                openAutoApprovalSettings
+              }
+              className="!border-slate-300 !bg-white !text-slate-800 shadow-sm hover:!bg-slate-50"
+            >
+              <Clock3 className="h-4 w-4" />
+              {autoApprovalButtonLabel}
+            </Button>
+          )}
         </header>
-
         <div className="space-y-6">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {summaryCards.map(
@@ -1498,12 +1450,10 @@ const OperatorsReports = ({
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">
                         {label}
                       </p>
-
                       <p className="mt-2 text-2xl font-bold text-navy-950">
                         {value}
                       </p>
                     </div>
-
                     <div
                       className={`flex h-10 w-10 items-center justify-center rounded-lg ring-1 ${wrapperClassName}`}
                     >
@@ -1516,7 +1466,6 @@ const OperatorsReports = ({
               )
             )}
           </div>
-
           <Card className="overflow-hidden">
             <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center">
               <SearchInput
@@ -1524,19 +1473,16 @@ const OperatorsReports = ({
                 onChange={setSearch}
                 placeholder="Search reporting tasks…"
               />
-
               <Select
                 value={statusFilter}
                 onChange={setStatusFilter}
                 options={TASK_STATUS_OPTIONS}
                 placeholder="All Task Statuses"
               />
-
               <p className="text-xs font-medium text-slate-400 sm:ml-auto">
                 {visibleReports.length} task{visibleReports.length === 1 ? "" : "s"} requiring action
               </p>
             </div>
-
             <div className="overflow-x-auto">
               <table className="w-full min-w-[980px]">
                 <thead>
@@ -1544,41 +1490,33 @@ const OperatorsReports = ({
                     <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                       Report
                     </th>
-
                     <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                       Reporting Date
                     </th>
-
                     {showRegionColumn && (
                       <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                         Region
                       </th>
                     )}
-
                     {showBranchColumn && (
                       <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                         Branch
                       </th>
                     )}
-
                     <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                       Due
                     </th>
-
                     <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                       Status
                     </th>
-
                     <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                       Current Stage
                     </th>
-
                     <th className="whitespace-nowrap px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-600">
                       Action
                     </th>
                   </tr>
                 </thead>
-
                 <tbody>
                   {visibleReports.length > 0 ? (
                     visibleReports.map(
@@ -1587,13 +1525,11 @@ const OperatorsReports = ({
                           isOverdueTask(
                             report
                           );
-
                         const isReviewStage =
                           Number(
                             report.currentStageIndex
                           ) > 0;
-
-                        return (
+return (
                           <tr
                             key={
                               report.id ||
@@ -1615,14 +1551,12 @@ const OperatorsReports = ({
                                   }
                                 />
                               </p>
-
                               {report.organizationName && (
                                 <p className="mt-0.5 text-[11px] font-medium text-slate-400">
                                   {report.organizationName}
                                 </p>
                               )}
                             </td>
-
                             <td className="whitespace-nowrap px-5 py-4 text-sm font-medium text-slate-800">
                               <EmptyCell
                                 value={
@@ -1630,7 +1564,6 @@ const OperatorsReports = ({
                                 }
                               />
                             </td>
-
                             {showRegionColumn && (
                               <td className="whitespace-nowrap px-5 py-4 text-sm font-medium text-slate-800">
                                 <EmptyCell
@@ -1640,7 +1573,6 @@ const OperatorsReports = ({
                                 />
                               </td>
                             )}
-
                             {showBranchColumn && (
                               <td className="whitespace-nowrap px-5 py-4 text-sm font-medium text-slate-800">
                                 <EmptyCell
@@ -1650,7 +1582,6 @@ const OperatorsReports = ({
                                 />
                               </td>
                             )}
-
                             <td className="whitespace-nowrap px-5 py-4 text-sm font-medium text-slate-800">
                               <EmptyCell
                                 value={
@@ -1660,7 +1591,6 @@ const OperatorsReports = ({
                                 }
                               />
                             </td>
-
                             <td className="whitespace-nowrap px-5 py-4">
                               <StatusBadge
                                 status={
@@ -1668,13 +1598,11 @@ const OperatorsReports = ({
                                 }
                               />
                             </td>
-
                             <td className="whitespace-nowrap px-5 py-4 text-sm font-semibold text-slate-800">
                               {getWorkflowStageLabel(
                                 report
                               )}
                             </td>
-
                             <td className="px-5 py-4 text-right">
                               <Button
                                 variant="outline"
@@ -1705,7 +1633,6 @@ const OperatorsReports = ({
                         className="px-5 py-16 text-center"
                       >
                         <FileText className="mx-auto h-9 w-9 text-slate-300" />
-
                         <p className="mt-3 text-sm font-semibold text-slate-800">
                           {reportsLoading
                             ? "Loading reporting tasks..."
@@ -1713,7 +1640,6 @@ const OperatorsReports = ({
                               ? "Unable to load reporting tasks"
                               : "No reporting tasks currently require your attention"}
                         </p>
-
                         <p
                           className={`mx-auto mt-1 max-w-lg text-xs ${
                             reportsError
@@ -1733,8 +1659,127 @@ const OperatorsReports = ({
           </Card>
         </div>
       </section>
-
-      {openReport && (
+      {autoApprovalOpen &&
+        canConfigureAutoApproval &&
+        createPortal(
+          (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="auto-approval-title"
+          >
+            <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white shadow-xl">
+              <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                <div>
+                  <h2
+                    id="auto-approval-title"
+                    className="text-base font-semibold text-slate-900"
+                  >
+                    Auto-Approve Reports
+                  </h2>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                    Automatically approve reports after they reach your review stage and remain untouched for the selected time.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setAutoApprovalOpen(false)
+                  }
+                  className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                  aria-label="Close auto-approval settings"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="space-y-5 px-5 py-5">
+                <label className="flex cursor-pointer items-start justify-between gap-4 rounded-lg border border-slate-200 p-4">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">
+                      Enable auto-approval
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                      Reports can still be reviewed and approved manually before the timer expires.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={autoApprovalEnabled}
+                    onChange={(event) =>
+                      setAutoApprovalEnabled(
+                        event.target.checked
+                      )
+                    }
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                  />
+                </label>
+                <div>
+                  <label
+                    htmlFor="auto-approval-delay"
+                    className="text-xs font-semibold uppercase tracking-wide text-slate-600"
+                  >
+                    Approve after
+                  </label>
+                  <select
+                    id="auto-approval-delay"
+                    value={autoApprovalDelayMinutes}
+                    onChange={(event) =>
+                      setAutoApprovalDelayMinutes(
+                        Number(
+                          event.target.value
+                        )
+                      )
+                    }
+                    disabled={!autoApprovalEnabled}
+                    className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    {AUTO_APPROVAL_DELAY_OPTIONS.map(
+                      (option) => (
+                        <option
+                          key={option.value}
+                          value={option.value}
+                        >
+                          {option.label}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </div>
+                {autoApprovalError && (
+                  <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+                    {autoApprovalError}
+                  </p>
+                )}
+              </div>
+              <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    setAutoApprovalOpen(false)
+                  }
+                  disabled={autoApprovalSaving}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={
+                    saveAutoApprovalSettings
+                  }
+                  disabled={autoApprovalSaving}
+                  className="!bg-navy-950 !text-white hover:!bg-navy-900"
+                >
+                  {autoApprovalSaving
+                    ? "Saving..."
+                    : "Save"}
+                </Button>
+              </div>
+            </div>
+          </div>
+          ),
+          document.body
+        )}
+{openReport && (
         <ReportViewer
           report={openReport}
           currentUserProfile={
@@ -1751,5 +1796,4 @@ const OperatorsReports = ({
     </>
   );
 };
-
 export default OperatorsReports;
