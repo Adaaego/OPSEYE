@@ -337,14 +337,17 @@ const SideBar = ({
           item.id === "reports"
       );
 
+    /*
+     * Forms / Reporting Tasks must always appear immediately before Reports.
+     */
     return [
       ...baseNavigationItems.slice(
         0,
-        reportsIndex + 1
+        reportsIndex
       ),
       accountSpecificItem,
       ...baseNavigationItems.slice(
-        reportsIndex + 1
+        reportsIndex
       ),
     ];
   }, [
