@@ -160,6 +160,171 @@ const BRANCH_TIME_OPTIONS = Array.from(
   }
 );
 
+const BRANCH_DAY_PRESETS = [
+  {
+    id: "weekdays",
+    label: "Weekdays",
+    dayKeys: ["monday", "tuesday", "wednesday", "thursday", "friday"],
+  },
+  {
+    id: "weekdays_saturday",
+    label: "Weekdays + Sat",
+    dayKeys: [
+      "monday",
+      "tuesday",
+      "wednesday",
+      "thursday",
+      "friday",
+      "saturday",
+    ],
+  },
+  {
+    id: "weekdays_sunday",
+    label: "Weekdays + Sun",
+    dayKeys: [
+      "monday",
+      "tuesday",
+      "wednesday",
+      "thursday",
+      "friday",
+      "sunday",
+    ],
+  },
+  {
+    id: "every_day",
+    label: "Every day",
+    dayKeys: BRANCH_OPERATING_DAYS.map((day) => day.key),
+  },
+];
+
+const getOperatingTimeOptions = (
+  openingTime,
+  closingTime
+) => {
+  const openingIndex = BRANCH_TIME_OPTIONS.findIndex(
+    (option) => option.value === openingTime
+  );
+  const closingIndex = BRANCH_TIME_OPTIONS.findIndex(
+    (option) => option.value === closingTime
+  );
+
+  if (
+    openingIndex < 0 ||
+    closingIndex < 0 ||
+    openingIndex === closingIndex
+  ) {
+    return [];
+  }
+
+  if (closingIndex > openingIndex) {
+    return BRANCH_TIME_OPTIONS.slice(
+      openingIndex,
+      closingIndex + 1
+    );
+  }
+
+  return [
+    ...BRANCH_TIME_OPTIONS.slice(openingIndex),
+    ...BRANCH_TIME_OPTIONS.slice(0, closingIndex + 1),
+  ];
+};
+
+const getShiftStartOptions = (
+  openingTime,
+  closingTime,
+  minimumStartTime = ""
+) => {
+  const options = getOperatingTimeOptions(
+    openingTime,
+    closingTime
+  );
+
+  if (!minimumStartTime) {
+    return options.slice(0, -1);
+  }
+
+  const minimumStartIndex = options.findIndex(
+    (option) => option.value === minimumStartTime
+  );
+
+  return minimumStartIndex >= 0
+    ? options.slice(minimumStartIndex, -1)
+    : [];
+};
+
+const getShiftEndOptions = (
+  openingTime,
+  closingTime,
+  startTime
+) => {
+  const options = getOperatingTimeOptions(
+    openingTime,
+    closingTime
+  );
+
+  if (!options.length) {
+    return [];
+  }
+
+  if (!startTime) {
+    return options.slice(1);
+  }
+
+  const startIndex = options.findIndex(
+    (option) => option.value === startTime
+  );
+
+  return startIndex >= 0
+    ? options.slice(startIndex + 1)
+    : [];
+};
+
+const isShiftWithinOperatingHours = (
+  shift,
+  openingTime,
+  closingTime
+) => {
+  const options = getOperatingTimeOptions(
+    openingTime,
+    closingTime
+  );
+
+  const startIndex = options.findIndex(
+    (option) => option.value === shift?.startTime
+  );
+  const endIndex = options.findIndex(
+    (option) => option.value === shift?.endTime
+  );
+
+  return (
+    startIndex >= 0 &&
+    endIndex > startIndex
+  );
+};
+
+const getOperatingDayPreset = (
+  operatingHours = {}
+) => {
+  const selectedDayKeys = BRANCH_OPERATING_DAYS
+    .filter(
+      (day) =>
+        operatingHours?.[day.key]?.isOpen === true
+    )
+    .map((day) => day.key);
+
+  const matchingPreset = BRANCH_DAY_PRESETS.find(
+    (preset) =>
+      preset.dayKeys.length ===
+        selectedDayKeys.length &&
+      preset.dayKeys.every(
+        (dayKey) =>
+          selectedDayKeys.includes(dayKey)
+      )
+  );
+
+  return matchingPreset?.id || "custom";
+};
+
 const createShiftId = () => {
   if (
     typeof crypto !== "undefined" &&
@@ -2460,6 +2625,11 @@ const AccountSettings = ({ roles = [] }) => {
   ]);
 
 
+  const activeOperatingDayPreset =
+    getOperatingDayPreset(
+      branchOperatingSchedule.operatingHours
+    );
+
   const savedBranchShifts = useMemo(() => {
     return createBranchOperatingScheduleForm(
       organization?.operatingSchedule
@@ -2954,6 +3124,16 @@ const AccountSettings = ({ roles = [] }) => {
 
     setBranchOperatingSchedule(
       (currentSchedule) => {
+        const nextOpeningTime =
+          fieldName === "openingTime"
+            ? value
+            : currentSchedule.standardOpeningTime;
+
+        const nextClosingTime =
+          fieldName === "closingTime"
+            ? value
+            : currentSchedule.standardClosingTime;
+
         const nextOperatingHours =
           BRANCH_OPERATING_DAYS.reduce(
             (hours, day) => {
@@ -2974,12 +3154,118 @@ const AccountSettings = ({ roles = [] }) => {
             {}
           );
 
+        const nextShifts =
+          currentSchedule.shifts.map(
+            (shift) => {
+              const startOptions =
+                getShiftStartOptions(
+                  nextOpeningTime,
+                  nextClosingTime
+                );
+
+              const startIsValid =
+                startOptions.some(
+                  (option) =>
+                    option.value ===
+                    shift.startTime
+                );
+
+              const nextStartTime =
+                startIsValid
+                  ? shift.startTime
+                  : "";
+
+              const endOptions =
+                getShiftEndOptions(
+                  nextOpeningTime,
+                  nextClosingTime,
+                  nextStartTime
+                );
+
+              const endIsValid =
+                endOptions.some(
+                  (option) =>
+                    option.value ===
+                    shift.endTime
+                );
+
+              return {
+                ...shift,
+                startTime: nextStartTime,
+                endTime: endIsValid
+                  ? shift.endTime
+                  : "",
+              };
+            }
+          );
+
         return {
           ...currentSchedule,
           [standardFieldName]: value,
           operatingHours: nextOperatingHours,
+          shifts: nextShifts,
         };
       }
+    );
+  };
+
+  const handleOperatingDaysPreset = (
+    presetId
+  ) => {
+    const preset =
+      BRANCH_DAY_PRESETS.find(
+        (item) =>
+          item.id === presetId
+      );
+
+    if (!preset) {
+      return;
+    }
+
+    const selectedDayKeys =
+      new Set(preset.dayKeys);
+
+    setBranchOperatingSchedule(
+      (currentSchedule) => ({
+        ...currentSchedule,
+        operatingHours:
+          BRANCH_OPERATING_DAYS.reduce(
+            (hours, day) => {
+              const currentDay =
+                currentSchedule.operatingHours?.[day.key] || {};
+
+              const isOpen =
+                selectedDayKeys.has(
+                  day.key
+                );
+
+              const keepOverride =
+                isOpen &&
+                currentDay.isOpen === true &&
+                currentDay.usesStandardHours === false;
+
+              hours[day.key] = {
+                ...currentDay,
+                isOpen,
+                usesStandardHours:
+                  keepOverride
+                    ? false
+                    : true,
+                openingTime:
+                  keepOverride
+                    ? currentDay.openingTime
+                    : currentSchedule.standardOpeningTime,
+                closingTime:
+                  keepOverride
+                    ? currentDay.closingTime
+                    : currentSchedule.standardClosingTime,
+              };
+
+              return hours;
+            },
+            {}
+          ),
+      })
     );
   };
 
@@ -3060,35 +3346,147 @@ const AccountSettings = ({ roles = [] }) => {
     value
   ) => {
     setBranchOperatingSchedule(
-      (currentSchedule) => ({
-        ...currentSchedule,
-        shifts: currentSchedule.shifts.map(
-          (shift) =>
-            shift.id === shiftId
-              ? {
+      (currentSchedule) => {
+        const changedShifts =
+          currentSchedule.shifts.map(
+            (shift) => {
+              if (shift.id !== shiftId) {
+                return shift;
+              }
+
+              if (fieldName === "startTime") {
+                const endOptions =
+                  getShiftEndOptions(
+                    currentSchedule.standardOpeningTime,
+                    currentSchedule.standardClosingTime,
+                    value
+                  );
+
+                const endIsValid =
+                  endOptions.some(
+                    (option) =>
+                      option.value ===
+                      shift.endTime
+                  );
+
+                return {
                   ...shift,
-                  [fieldName]: value,
-                }
-              : shift
-        ),
-      })
+                  startTime: value,
+                  endTime: endIsValid
+                    ? shift.endTime
+                    : "",
+                };
+              }
+
+              return {
+                ...shift,
+                [fieldName]: value,
+              };
+            }
+          );
+
+        const nextShifts =
+          changedShifts.reduce(
+            (normalizedShifts, shift, index) => {
+              const previousShift =
+                normalizedShifts[index - 1];
+
+              const minimumStartTime =
+                previousShift?.endTime || "";
+
+              const startOptions =
+                getShiftStartOptions(
+                  currentSchedule.standardOpeningTime,
+                  currentSchedule.standardClosingTime,
+                  minimumStartTime
+                );
+
+              const startIsValid =
+                startOptions.some(
+                  (option) =>
+                    option.value ===
+                    shift.startTime
+                );
+
+              const nextStartTime =
+                startIsValid
+                  ? shift.startTime
+                  : startOptions[0]?.value || "";
+
+              const endOptions =
+                getShiftEndOptions(
+                  currentSchedule.standardOpeningTime,
+                  currentSchedule.standardClosingTime,
+                  nextStartTime
+                );
+
+              const endIsValid =
+                endOptions.some(
+                  (option) =>
+                    option.value ===
+                    shift.endTime
+                );
+
+              normalizedShifts.push({
+                ...shift,
+                startTime: nextStartTime,
+                endTime: endIsValid
+                  ? shift.endTime
+                  : "",
+              });
+
+              return normalizedShifts;
+            },
+            []
+          );
+
+        return {
+          ...currentSchedule,
+          shifts: nextShifts,
+        };
+      }
     );
   };
 
   const handleAddShift = () => {
     setBranchOperatingSchedule(
-      (currentSchedule) => ({
-        ...currentSchedule,
-        shifts: [
-          ...currentSchedule.shifts,
-          {
-            id: createShiftId(),
-            name: `Shift ${currentSchedule.shifts.length + 1}`,
-            startTime: "",
-            endTime: "",
-          },
-        ],
-      })
+      (currentSchedule) => {
+        const previousShift =
+          currentSchedule.shifts[
+            currentSchedule.shifts.length - 1
+          ];
+
+        const startOptions =
+          getShiftStartOptions(
+            currentSchedule.standardOpeningTime,
+            currentSchedule.standardClosingTime,
+            previousShift?.endTime || ""
+          );
+
+        const startTime =
+          startOptions[0]?.value || "";
+
+        const endOptions =
+          getShiftEndOptions(
+            currentSchedule.standardOpeningTime,
+            currentSchedule.standardClosingTime,
+            startTime
+          );
+
+        return {
+          ...currentSchedule,
+          shifts: [
+            ...currentSchedule.shifts,
+            {
+              id: createShiftId(),
+              name: `Shift ${currentSchedule.shifts.length + 1}`,
+              startTime,
+              endTime:
+                endOptions[endOptions.length - 1]?.value || "",
+            },
+          ],
+        };
+      }
     );
   };
 
@@ -3126,6 +3524,17 @@ const AccountSettings = ({ roles = [] }) => {
       return;
     }
 
+    if (
+      branchOperatingSchedule.standardOpeningTime ===
+      branchOperatingSchedule.standardClosingTime
+    ) {
+      setPageError(
+        "Opening and closing time cannot be the same."
+      );
+
+      return;
+    }
+
     const openDays =
       BRANCH_OPERATING_DAYS.filter(
         (day) =>
@@ -3155,6 +3564,25 @@ const AccountSettings = ({ roles = [] }) => {
     if (incompleteOperatingDay) {
       setPageError(
         `Add both opening and closing times for ${incompleteOperatingDay.label}.`
+      );
+
+      return;
+    }
+
+    const invalidOperatingDay =
+      openDays.find((day) => {
+        const daySchedule =
+          branchOperatingSchedule.operatingHours?.[day.key] || {};
+
+        return (
+          daySchedule.openingTime ===
+          daySchedule.closingTime
+        );
+      });
+
+    if (invalidOperatingDay) {
+      setPageError(
+        `${invalidOperatingDay.label} opening and closing time cannot be the same.`
       );
 
       return;
@@ -3196,6 +3624,54 @@ const AccountSettings = ({ roles = [] }) => {
     if (incompleteShift) {
       setPageError(
         "Complete the name, start time and end time for every shift."
+      );
+
+      return;
+    }
+
+    const outOfRangeShift =
+      cleanedShifts.find(
+        (shift) =>
+          !isShiftWithinOperatingHours(
+            shift,
+            branchOperatingSchedule.standardOpeningTime,
+            branchOperatingSchedule.standardClosingTime
+          )
+      );
+
+    if (outOfRangeShift) {
+      setPageError(
+        `${outOfRangeShift.name} must start and end within the branch's normal operating hours.`
+      );
+
+      return;
+    }
+
+    const invalidShiftSequenceIndex =
+      cleanedShifts.findIndex(
+        (shift, index) => {
+          if (index === 0) {
+            return false;
+          }
+
+          const previousShift =
+            cleanedShifts[index - 1];
+
+          return !getShiftStartOptions(
+            branchOperatingSchedule.standardOpeningTime,
+            branchOperatingSchedule.standardClosingTime,
+            previousShift.endTime
+          ).some(
+            (option) =>
+              option.value ===
+              shift.startTime
+          );
+        }
+      );
+
+    if (invalidShiftSequenceIndex >= 0) {
+      setPageError(
+        `${cleanedShifts[invalidShiftSequenceIndex].name} must start at or after the previous shift ends.`
       );
 
       return;
@@ -3449,13 +3925,23 @@ const AccountSettings = ({ roles = [] }) => {
               shiftRosterWeekStart,
               dayIndex
             ),
-          shifts: savedBranchShifts.map(
-            (shift) => {
-              const staffIds = dayIsOpen && Array.isArray(
-                dayForm.assignments?.[shift.id]
-              )
-                ? dayForm.assignments[shift.id]
-                : [];
+          shifts: savedBranchShifts
+            .filter(
+              (shift) =>
+                dayIsOpen &&
+                isShiftWithinOperatingHours(
+                  shift,
+                  branchDay.openingTime,
+                  branchDay.closingTime
+                )
+            )
+            .map(
+              (shift) => {
+                const staffIds = Array.isArray(
+                  dayForm.assignments?.[shift.id]
+                )
+                  ? dayForm.assignments[shift.id]
+                  : [];
 
               const staff = staffIds
                 .map((userId) => {
@@ -4167,8 +4653,7 @@ const AccountSettings = ({ roles = [] }) => {
                     </h2>
 
                     <p className="mt-1 max-w-2xl text-sm text-slate-300">
-                      Set normal branch hours once, define the permanent shift
-                      structure and maintain a weekly staff schedule for each shift.
+                      Set when the branch opens, define its shifts and assign weekly staff.
                     </p>
                   </div>
                 </div>
@@ -4214,37 +4699,6 @@ const AccountSettings = ({ roles = [] }) => {
                   )}
                 </div>
               </div>
-
-              <div className="grid grid-cols-1 divide-y divide-slate-200 border-t border-slate-200 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-                <div className="px-5 py-4">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                    Configuration
-                  </p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">
-                    {branchOperatingSchedule.configured
-                      ? "Configured"
-                      : "Setup required"}
-                  </p>
-                </div>
-
-                <div className="px-5 py-4">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                    Shifts
-                  </p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">
-                    {branchOperatingSchedule.shifts.length}
-                  </p>
-                </div>
-
-                <div className="px-5 py-4">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                    Time zone
-                  </p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">
-                    {branchOperatingSchedule.timezone}
-                  </p>
-                </div>
-              </div>
             </Card>
 
             {!branchOperatingSchedule.configured &&
@@ -4270,142 +4724,241 @@ const AccountSettings = ({ roles = [] }) => {
                       Operating Hours
                     </h3>
                     <p className="mt-0.5 text-sm text-slate-500">
-                      Enter the normal opening and closing time once. Open days use
-                      those hours automatically unless you set a day-specific override.
+                      Choose the days the branch opens and set the normal hours once.
+                      You only need to change a day when its hours are different.
                     </p>
                   </div>
                 </div>
               </div>
 
-              <div className="border-b border-slate-100 bg-slate-50 px-6 py-5">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_180px_180px] sm:items-end">
+              {isEditingBranchOperations ? (
+                <div className="space-y-6 px-6 py-6">
                   <div>
-                    <p className="text-sm font-semibold text-slate-900">
-                      Standard operating hours
-                    </p>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">
-                      These times are applied to every selected operating day.
-                    </p>
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">
+                          Open days
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Use a quick option or select individual days below.
+                        </p>
+                      </div>
+
+                      <span className="text-xs font-semibold text-slate-400">
+                        {activeOperatingDayPreset === "custom"
+                          ? "Custom days"
+                          : BRANCH_DAY_PRESETS.find(
+                              (preset) =>
+                                preset.id === activeOperatingDayPreset
+                            )?.label || "Custom days"}
+                      </span>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {BRANCH_DAY_PRESETS.map((preset) => {
+                        const selected =
+                          activeOperatingDayPreset === preset.id;
+
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() =>
+                              handleOperatingDaysPreset(
+                                preset.id
+                              )
+                            }
+                            className={`rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                              selected
+                                ? "border-navy-950 bg-navy-950 text-white"
+                                : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+                            }`}
+                          >
+                            {preset.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-4 gap-2 sm:grid-cols-7">
+                      {BRANCH_OPERATING_DAYS.map((day) => {
+                        const isOpen =
+                          branchOperatingSchedule.operatingHours?.[
+                            day.key
+                          ]?.isOpen === true;
+
+                        return (
+                          <button
+                            key={day.key}
+                            type="button"
+                            onClick={() =>
+                              handleOperatingDayToggle(
+                                day.key,
+                                !isOpen
+                              )
+                            }
+                            className={`rounded-xl border px-2 py-3 text-center transition ${
+                              isOpen
+                                ? "border-navy-950 bg-slate-50"
+                                : "border-slate-200 bg-white hover:border-slate-300"
+                            }`}
+                          >
+                            <span
+                              className={`block text-xs font-semibold ${
+                                isOpen
+                                  ? "text-navy-950"
+                                  : "text-slate-400"
+                              }`}
+                            >
+                              {day.label.slice(0, 3)}
+                            </span>
+                            <span
+                              className={`mt-1 block text-[10px] font-semibold uppercase tracking-wide ${
+                                isOpen
+                                  ? "text-emerald-600"
+                                  : "text-slate-400"
+                              }`}
+                            >
+                              {isOpen ? "Open" : "Closed"}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
-                  <label className="block">
-                    <span className="mb-1.5 block text-xs font-semibold text-slate-500">
-                      Opens
-                    </span>
-                    {isEditingBranchOperations ? (
-                      <TimeSelect
-                        value={branchOperatingSchedule.standardOpeningTime}
-                        onChange={(value) =>
-                          handleStandardOperatingTimeChange(
-                            "openingTime",
-                            value
-                          )
-                        }
-                      />
-                    ) : (
-                      <div className="flex h-10 items-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800">
-                        {formatScheduleTime(
-                          branchOperatingSchedule.standardOpeningTime
-                        )}
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_180px_180px] sm:items-end">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">
+                          Normal hours
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-slate-500">
+                          These hours are automatically used for every open day unless
+                          you change that day below.
+                        </p>
                       </div>
-                    )}
-                  </label>
 
-                  <label className="block">
-                    <span className="mb-1.5 block text-xs font-semibold text-slate-500">
-                      Closes
-                    </span>
-                    {isEditingBranchOperations ? (
-                      <TimeSelect
-                        value={branchOperatingSchedule.standardClosingTime}
-                        onChange={(value) =>
-                          handleStandardOperatingTimeChange(
-                            "closingTime",
-                            value
-                          )
-                        }
-                      />
-                    ) : (
-                      <div className="flex h-10 items-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800">
-                        {formatScheduleTime(
-                          branchOperatingSchedule.standardClosingTime
-                        )}
-                      </div>
-                    )}
-                  </label>
-                </div>
-              </div>
+                      <label className="block">
+                        <span className="mb-1.5 block text-xs font-semibold text-slate-500">
+                          Opens
+                        </span>
+                        <TimePicker
+                          value={branchOperatingSchedule.standardOpeningTime}
+                          onChange={(value) =>
+                            handleStandardOperatingTimeChange(
+                              "openingTime",
+                              value
+                            )
+                          }
+                        />
+                      </label>
 
-              <div className="divide-y divide-slate-100">
-                {BRANCH_OPERATING_DAYS.map((day) => {
-                  const daySchedule =
-                    branchOperatingSchedule.operatingHours?.[day.key] || {
-                      isOpen: false,
-                      openingTime: branchOperatingSchedule.standardOpeningTime,
-                      closingTime: branchOperatingSchedule.standardClosingTime,
-                      usesStandardHours: true,
-                    };
+                      <label className="block">
+                        <span className="mb-1.5 block text-xs font-semibold text-slate-500">
+                          Closes
+                        </span>
+                        <TimePicker
+                          value={branchOperatingSchedule.standardClosingTime}
+                          onChange={(value) =>
+                            handleStandardOperatingTimeChange(
+                              "closingTime",
+                              value
+                            )
+                          }
+                        />
+                      </label>
+                    </div>
+                  </div>
 
-                  const hasOverride =
-                    daySchedule.isOpen === true &&
-                    daySchedule.usesStandardHours === false;
+                  <div>
+                    <div className="mb-3">
+                      <p className="text-sm font-semibold text-slate-900">
+                        Day-specific hours
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Only change a day when it does not follow the normal hours.
+                      </p>
+                    </div>
 
-                  return (
-                    <div
-                      key={day.key}
-                      className="px-6 py-4"
-                    >
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="flex items-center gap-3">
-                          {isEditingBranchOperations ? (
-                            <input
-                              type="checkbox"
-                              checked={daySchedule.isOpen}
-                              onChange={(event) =>
-                                handleOperatingDayToggle(
-                                  day.key,
-                                  event.target.checked
-                                )
-                              }
-                              className="h-4 w-4 rounded border-slate-300 text-navy-950 focus:ring-navy-400"
-                            />
-                          ) : (
-                            <span
-                              className={`h-2.5 w-2.5 rounded-full ${
-                                daySchedule.isOpen
-                                  ? "bg-emerald-500"
-                                  : "bg-slate-300"
-                              }`}
-                            />
-                          )}
+                    <div className="space-y-2">
+                      {BRANCH_OPERATING_DAYS.filter(
+                        (day) =>
+                          branchOperatingSchedule.operatingHours?.[
+                            day.key
+                          ]?.isOpen === true
+                      ).map((day) => {
+                        const daySchedule =
+                          branchOperatingSchedule.operatingHours?.[
+                            day.key
+                          ] || {};
 
-                          <div>
-                            <p className="text-sm font-semibold text-slate-900">
-                              {day.label}
-                            </p>
-                            <p className="mt-0.5 text-xs text-slate-500">
-                              {daySchedule.isOpen
-                                ? hasOverride
-                                  ? "Custom hours"
-                                  : "Standard hours"
-                                : "Closed"}
-                            </p>
-                          </div>
-                        </div>
+                        const hasOverride =
+                          daySchedule.usesStandardHours === false;
 
-                        <div className="flex flex-wrap items-center gap-3">
-                          <span className="text-sm font-semibold text-slate-800">
-                            {daySchedule.isOpen
-                              ? `${formatScheduleTime(
-                                  daySchedule.openingTime
-                                )} – ${formatScheduleTime(
-                                  daySchedule.closingTime
-                                )}`
-                              : "Closed"}
-                          </span>
+                        return (
+                          <div
+                            key={day.key}
+                            className="rounded-xl border border-slate-200 bg-white p-4"
+                          >
+                            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                              <div className="min-w-[130px]">
+                                <p className="text-sm font-semibold text-slate-900">
+                                  {day.label}
+                                </p>
+                                <p className="mt-0.5 text-xs text-slate-500">
+                                  {hasOverride
+                                    ? "Different hours"
+                                    : "Normal hours"}
+                                </p>
+                              </div>
 
-                          {isEditingBranchOperations &&
-                            daySchedule.isOpen && (
+                              {hasOverride ? (
+                                <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-2 lg:max-w-md">
+                                  <label className="block">
+                                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                                      Opens
+                                    </span>
+                                    <TimePicker
+                                      value={daySchedule.openingTime}
+                                      onChange={(value) =>
+                                        handleOperatingTimeChange(
+                                          day.key,
+                                          "openingTime",
+                                          value
+                                        )
+                                      }
+                                    />
+                                  </label>
+
+                                  <label className="block">
+                                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                                      Closes
+                                    </span>
+                                    <TimePicker
+                                      value={daySchedule.closingTime}
+                                      onChange={(value) =>
+                                        handleOperatingTimeChange(
+                                          day.key,
+                                          "closingTime",
+                                          value
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                </div>
+                              ) : (
+                                <div className="text-sm font-semibold text-slate-800">
+                                  {formatScheduleTime(
+                                    branchOperatingSchedule.standardOpeningTime
+                                  )}{" "}
+                                  –{" "}
+                                  {formatScheduleTime(
+                                    branchOperatingSchedule.standardClosingTime
+                                  )}
+                                </div>
+                              )}
+
                               <button
                                 type="button"
                                 onClick={() =>
@@ -4417,52 +4970,75 @@ const AccountSettings = ({ roles = [] }) => {
                                 className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
                               >
                                 {hasOverride
-                                  ? "Use standard hours"
-                                  : "Edit hours"}
+                                  ? "Use normal hours"
+                                  : "Change hours"}
                               </button>
-                            )}
-                        </div>
-                      </div>
-
-                      {isEditingBranchOperations && hasOverride && (
-                        <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
-                          <label className="block">
-                            <span className="mb-1.5 block text-xs font-semibold text-slate-500">
-                              Opens
-                            </span>
-                            <TimeSelect
-                              value={daySchedule.openingTime}
-                              onChange={(value) =>
-                                handleOperatingTimeChange(
-                                  day.key,
-                                  "openingTime",
-                                  value
-                                )
-                              }
-                            />
-                          </label>
-
-                          <label className="block">
-                            <span className="mb-1.5 block text-xs font-semibold text-slate-500">
-                              Closes
-                            </span>
-                            <TimeSelect
-                              value={daySchedule.closingTime}
-                              onChange={(value) =>
-                                handleOperatingTimeChange(
-                                  day.key,
-                                  "closingTime",
-                                  value
-                                )
-                              }
-                            />
-                          </label>
-                        </div>
-                      )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="px-6 py-6">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+                    {BRANCH_OPERATING_DAYS.map((day) => {
+                      const daySchedule =
+                        branchOperatingSchedule.operatingHours?.[
+                          day.key
+                        ] || {};
+
+                      const isOpen =
+                        daySchedule.isOpen === true;
+
+                      return (
+                        <div
+                          key={day.key}
+                          className={`rounded-xl border p-4 ${
+                            isOpen
+                              ? "border-slate-200 bg-white"
+                              : "border-slate-100 bg-slate-50"
+                          }`}
+                        >
+                          <p
+                            className={`text-xs font-semibold ${
+                              isOpen
+                                ? "text-slate-900"
+                                : "text-slate-400"
+                            }`}
+                          >
+                            {day.label}
+                          </p>
+
+                          <p
+                            className={`mt-2 text-xs font-semibold ${
+                              isOpen
+                                ? "text-slate-700"
+                                : "text-slate-400"
+                            }`}
+                          >
+                            {isOpen
+                              ? formatScheduleTime(
+                                  daySchedule.openingTime
+                                )
+                              : "Closed"}
+                          </p>
+
+                          {isOpen && (
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              to{" "}
+                              {formatScheduleTime(
+                                daySchedule.closingTime
+                              )}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </Card>
 
             <Card className="overflow-hidden">
@@ -4477,8 +5053,8 @@ const AccountSettings = ({ roles = [] }) => {
                       Shift Setup
                     </h3>
                     <p className="mt-0.5 text-sm text-slate-500">
-                      Define the permanent shifts used by this branch. Staff are
-                      assigned separately in the weekly schedule below.
+                      Define the permanent shifts used by this branch. Start and end
+                      choices are limited to the branch's normal operating hours.
                     </p>
                   </div>
                 </div>
@@ -4528,6 +5104,17 @@ const AccountSettings = ({ roles = [] }) => {
                             </span>
                             <TimeSelect
                               value={shift.startTime}
+                              options={getShiftStartOptions(
+                                branchOperatingSchedule.standardOpeningTime,
+                                branchOperatingSchedule.standardClosingTime,
+                                index > 0
+                                  ? branchOperatingSchedule.shifts[index - 1]?.endTime
+                                  : ""
+                              )}
+                              disabled={
+                                index > 0 &&
+                                !branchOperatingSchedule.shifts[index - 1]?.endTime
+                              }
                               onChange={(value) =>
                                 handleShiftChange(
                                   shift.id,
@@ -4544,6 +5131,12 @@ const AccountSettings = ({ roles = [] }) => {
                             </span>
                             <TimeSelect
                               value={shift.endTime}
+                              options={getShiftEndOptions(
+                                branchOperatingSchedule.standardOpeningTime,
+                                branchOperatingSchedule.standardClosingTime,
+                                shift.startTime
+                              )}
+                              disabled={!shift.startTime}
                               onChange={(value) =>
                                 handleShiftChange(
                                   shift.id,
@@ -4747,7 +5340,12 @@ const AccountSettings = ({ roles = [] }) => {
                 </div>
               ) : (
                 <div className="divide-y divide-slate-100">
-                  {BRANCH_OPERATING_DAYS.map((day) => {
+                  {BRANCH_OPERATING_DAYS.filter(
+                    (day) =>
+                      organization?.operatingSchedule?.operatingHours?.[
+                        day.key
+                      ]?.isOpen === true
+                  ).map((day) => {
                     const dayRoster =
                       branchShiftRoster.days?.[day.key] || {};
                     const branchDay =
@@ -4783,7 +5381,16 @@ const AccountSettings = ({ roles = [] }) => {
 
                         {branchDay.isOpen === true ? (
                           <div className="space-y-3">
-                            {savedBranchShifts.map((shift) => {
+                            {savedBranchShifts
+                              .filter(
+                                (shift) =>
+                                  isShiftWithinOperatingHours(
+                                    shift,
+                                    branchDay.openingTime,
+                                    branchDay.closingTime
+                                  )
+                              )
+                              .map((shift) => {
                             const assignmentKey = `${day.key}_${shift.id}`;
                             const assignedUserIds =
                               dayRoster.assignments?.[shift.id] || [];
@@ -5248,32 +5855,41 @@ const AccountSettings = ({ roles = [] }) => {
   );
 };
 
-const TimeSelect = ({
+const TimePicker = ({
   value,
   onChange,
   disabled = false,
 }) => {
-  const selectedValue = String(value || "");
-  const valueExists = BRANCH_TIME_OPTIONS.some(
-    (option) => option.value === selectedValue
+  return (
+    <input
+      type="time"
+      step="900"
+      value={String(value || "")}
+      onChange={(event) => onChange(event.target.value)}
+      disabled={disabled}
+      className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+    />
   );
+};
+
+const TimeSelect = ({
+  value,
+  onChange,
+  options = [],
+  disabled = false,
+}) => {
+  const selectedValue = String(value || "");
 
   return (
     <select
       value={selectedValue}
       onChange={(event) => onChange(event.target.value)}
       disabled={disabled}
-      className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+      className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100 disabled:cursor-not-allowed disabled:bg-slate-100"
     >
       <option value="">Select time</option>
 
-      {selectedValue && !valueExists && (
-        <option value={selectedValue}>
-          {formatScheduleTime(selectedValue)}
-        </option>
-      )}
-
-      {BRANCH_TIME_OPTIONS.map((option) => (
+      {options.map((option) => (
         <option
           key={option.value}
           value={option.value}
