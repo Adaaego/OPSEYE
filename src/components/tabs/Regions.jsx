@@ -92,6 +92,9 @@ const REPORT_SUBMISSIONS_COLLECTION =
 const COMPANY_FUEL_PRICES_COLLECTION =
   "companyFuelPrices";
 
+const WORKFORCE_COLLECTION =
+  "workforce";
+
 /*
  * These workflow statuses mean the Ministry has received report data.
  *
@@ -3288,71 +3291,87 @@ const calculateAccountability = (
   };
 };
 
-const calculateWorkforceSummary = (
-  reports
+const getWorkforceOrganizationId = (
+  record
 ) => {
-  const latestByOrganization =
-    new Map();
+  return (
+    record?.organizationId ||
+    record?.orgId ||
+    record?.branchId ||
+    ""
+  );
+};
 
-  reports
-    .filter(
-      (report) =>
-        isReportSubmitted(
-          report
-        ) &&
-        (
-          toNumber(
-            report.sourceMetrics
-              ?.local_employee_count
-          ) >
-            0 ||
-          toNumber(
-            report.sourceMetrics
-              ?.expat_employee_count
-          ) >
-            0
-        )
-    )
-    .forEach(
-      (report) => {
-        const current =
-          latestByOrganization.get(
-            report.organizationId
-          );
+const getWorkforceTotalEmployees = (
+  record
+) => {
+  return toNumber(
+    record?.totalEmployees ??
+      record?.totalWorkforce ??
+      record?.headcount ??
+      record?.employeeCount ??
+      record?.total
+  );
+};
 
-        if (
-          isNewerReport(
-            report,
-            current
-          )
-        ) {
-          latestByOrganization.set(
-            report.organizationId,
-            report
-          );
-        }
-      }
+const getWorkforceLocalEmployees = (
+  record
+) => {
+  return toNumber(
+    record?.localEmployees ??
+      record?.localWorkforce ??
+      record?.local
+  );
+};
+
+const getWorkforceExpatriateEmployees = (
+  record
+) => {
+  const savedExpatriates =
+    record?.expatriateEmployees ??
+    record?.expatEmployees ??
+    record?.expatWorkforce ??
+    record?.expat;
+
+  if (
+    savedExpatriates !== null &&
+    savedExpatriates !== undefined &&
+    savedExpatriates !== ""
+  ) {
+    return toNumber(
+      savedExpatriates
     );
+  }
 
+  return Math.max(
+    getWorkforceTotalEmployees(
+      record
+    ) -
+      getWorkforceLocalEmployees(
+        record
+      ),
+    0
+  );
+};
+
+const calculateWorkforceSummary = (
+  records
+) => {
   const totals =
-    Array.from(
-      latestByOrganization.values()
-    ).reduce(
+    records.reduce(
       (
         currentTotals,
-        report
+        record
       ) => ({
         local:
           currentTotals.local +
-          toNumber(
-            report.sourceMetrics
-              ?.local_employee_count
+          getWorkforceLocalEmployees(
+            record
           ),
         expat:
           currentTotals.expat +
-          toNumber(
-            report.sourceMetrics
-              ?.expat_employee_count
+          getWorkforceExpatriateEmployees(
+            record
           ),
       }),
       {
@@ -4051,6 +4070,159 @@ const getScopedReportReferences = ({
   return references;
 };
 
+const getScopedWorkforceReferences = ({
+  organization,
+  scopedOrganizations = [],
+}) => {
+  const organizationId =
+    getOrganizationId(
+      organization
+    );
+
+  const organizationLevel =
+    getOrganizationLevel(
+      organization
+    );
+
+  const organizationCategory =
+    getOrganizationCategory(
+      organization
+    );
+
+  if (!organizationId) {
+    return [];
+  }
+
+  /*
+   * Workforce records are maintained separately from report submissions.
+   * Query them using the same hierarchy fields already enforced by Firestore.
+   */
+  if (
+    organizationCategory ===
+      "ministry" ||
+    organizationLevel ===
+      "ministry"
+  ) {
+    const enterpriseIds =
+      Array.from(
+        new Set(
+          scopedOrganizations
+            .filter(
+              (item) =>
+                isEnterpriseOrganization(
+                  item
+                )
+            )
+            .map(
+              getOrganizationId
+            )
+            .filter(Boolean)
+        )
+      );
+
+    return enterpriseIds.flatMap(
+      (enterpriseId) => [
+        query(
+          collection(
+            db,
+            WORKFORCE_COLLECTION
+          ),
+          where(
+            "organizationId",
+            "==",
+            enterpriseId
+          )
+        ),
+        query(
+          collection(
+            db,
+            WORKFORCE_COLLECTION
+          ),
+          where(
+            "rootEnterpriseId",
+            "==",
+            enterpriseId
+          )
+        ),
+      ]
+    );
+  }
+
+  if (
+    organizationLevel ===
+    "enterprise"
+  ) {
+    return [
+      query(
+        collection(
+          db,
+          WORKFORCE_COLLECTION
+        ),
+        where(
+          "organizationId",
+          "==",
+          organizationId
+        )
+      ),
+      query(
+        collection(
+          db,
+          WORKFORCE_COLLECTION
+        ),
+        where(
+          "rootEnterpriseId",
+          "==",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  if (
+    organizationLevel ===
+    "region"
+  ) {
+    return [
+      query(
+        collection(
+          db,
+          WORKFORCE_COLLECTION
+        ),
+        where(
+          "organizationId",
+          "==",
+          organizationId
+        )
+      ),
+      query(
+        collection(
+          db,
+          WORKFORCE_COLLECTION
+        ),
+        where(
+          "parentId",
+          "==",
+          organizationId
+        )
+      ),
+    ];
+  }
+
+  return [
+    query(
+      collection(
+        db,
+        WORKFORCE_COLLECTION
+      ),
+      where(
+        "organizationId",
+        "==",
+        organizationId
+      )
+    ),
+  ];
+};
+
 /*
  * Fuel-price records are enterprise-level records whose document ID is the
  * enterprise organization ID. Reading those exact documents avoids a broad
@@ -4152,6 +4324,11 @@ const Regions = ({
   ] = useState([]);
 
   const [
+    workforceRecords,
+    setWorkforceRecords,
+  ] = useState([]);
+
+  const [
     selectedRegionId,
     setSelectedRegionId,
   ] = useState("");
@@ -4239,6 +4416,7 @@ const Regions = ({
     organizations: false,
     reports: false,
     prices: false,
+    workforce: false,
   });
 
   /*
@@ -4363,6 +4541,7 @@ const Regions = ({
       setOrganizations([]);
       setReportSubmissions([]);
       setCompanyFuelPrices([]);
+      setWorkforceRecords([]);
 
       setLoadedSources(
         (current) => ({
@@ -4372,6 +4551,8 @@ const Regions = ({
           reports:
             false,
           prices:
+            false,
+          workforce:
             false,
         })
       );
@@ -4388,6 +4569,7 @@ const Regions = ({
       setOrganizations([]);
       setReportSubmissions([]);
       setCompanyFuelPrices([]);
+      setWorkforceRecords([]);
 
       setLoadedSources(
         (current) => ({
@@ -4397,6 +4579,8 @@ const Regions = ({
           reports:
             true,
           prices:
+            true,
+          workforce:
             true,
         })
       );
@@ -4416,6 +4600,8 @@ const Regions = ({
         reports:
           false,
         prices:
+          false,
+        workforce:
           false,
       })
     );
@@ -4441,6 +4627,7 @@ const Regions = ({
             setOrganizations([]);
             setReportSubmissions([]);
             setCompanyFuelPrices([]);
+            setWorkforceRecords([]);
 
             setLoadedSources(
               (current) => ({
@@ -4478,6 +4665,7 @@ const Regions = ({
             setOrganizations([]);
             setReportSubmissions([]);
             setCompanyFuelPrices([]);
+            setWorkforceRecords([]);
 
             setLoadedSources(
               (current) => ({
@@ -4693,6 +4881,7 @@ const Regions = ({
           setOrganizations([]);
           setReportSubmissions([]);
           setCompanyFuelPrices([]);
+          setWorkforceRecords([]);
 
           setLoadedSources(
             (current) => ({
@@ -4762,6 +4951,92 @@ const Regions = ({
       currentUserProfile,
       organizationMap,
     ]);
+
+  useEffect(() => {
+    if (
+      !loadedSources.organizations
+    ) {
+      return undefined;
+    }
+
+    if (
+      !currentOrganization
+    ) {
+      setWorkforceRecords([]);
+
+      setLoadedSources(
+        (current) => ({
+          ...current,
+          workforce: true,
+        })
+      );
+
+      return undefined;
+    }
+
+    setLoadedSources(
+      (current) => ({
+        ...current,
+        workforce: false,
+      })
+    );
+
+    const unsubscribeWorkforce =
+      subscribeToScopedReferences({
+        references:
+          getScopedWorkforceReferences({
+            organization:
+              currentOrganization,
+            scopedOrganizations:
+              organizations,
+          }),
+
+        onData:
+          (
+            scopedWorkforce
+          ) => {
+            setWorkforceRecords(
+              scopedWorkforce
+            );
+
+            setLoadedSources(
+              (current) => ({
+                ...current,
+                workforce: true,
+              })
+            );
+          },
+
+        onError:
+          (
+            error
+          ) => {
+            console.error(
+              "Unable to load workforce records:",
+              error
+            );
+
+            setWorkforceRecords(
+              []
+            );
+
+            setLoadedSources(
+              (current) => ({
+                ...current,
+                workforce: true,
+              })
+            );
+          },
+      });
+
+    return () => {
+      unsubscribeWorkforce();
+    };
+  }, [
+    currentOrganization,
+    loadedSources.organizations,
+    organizations,
+  ]);
 
   const isMinistryUser =
     useMemo(() => {
@@ -4866,6 +5141,62 @@ const Regions = ({
 
       return "";
     };
+
+  const enrichedWorkforceRecords =
+    useMemo(() => {
+      return workforceRecords
+        .map(
+          (record) => {
+            const organizationId =
+              getWorkforceOrganizationId(
+                record
+              );
+
+            const organization =
+              organizationMap.get(
+                organizationId
+              );
+
+            if (!organization) {
+              return null;
+            }
+
+            /*
+             * The Regions page is geographical. Enterprise/head-office workforce
+             * has no regional attribution and is intentionally excluded here.
+             * Region- and Branch-owned workforce records retain their region.
+             */
+            const regionId =
+              getOrganizationRegionId(
+                organization
+              );
+
+            if (!regionId) {
+              return null;
+            }
+
+            const enterpriseId =
+              getEnterpriseIdForOrganization(
+                organization
+              ) ||
+              record.rootEnterpriseId ||
+              record.enterpriseId ||
+              "";
+
+            return {
+              ...record,
+              organization,
+              organizationId,
+              enterpriseId,
+              regionId,
+            };
+          }
+        )
+        .filter(Boolean);
+    }, [
+      organizationMap,
+      workforceRecords,
+    ]);
 
   const visibleOrganizations =
     useMemo(() => {
@@ -5767,91 +6098,17 @@ const Regions = ({
                   })
                 : null;
 
-            const latestWorkforceByOrganization =
-              new Map();
-
-            regionReports
-              .filter(
-                (report) =>
-                  isReportSubmitted(
-                    report
-                  ) &&
-                  (
-                    toNumber(
-                      report
-                        .sourceMetrics
-                        .local_employee_count
-                    ) >
-                      0 ||
-                    toNumber(
-                      report
-                        .sourceMetrics
-                        .expat_employee_count
-                    ) >
-                      0
-                  )
-              )
-              .forEach(
-                (report) => {
-                  const current =
-                    latestWorkforceByOrganization.get(
-                      report
-                        .organizationId
-                    );
-
-                  if (
-                    isNewerReport(
-                      report,
-                      current
-                    )
-                  ) {
-                    latestWorkforceByOrganization.set(
-                      report
-                        .organizationId,
-                      report
-                    );
-                  }
-                }
+            const regionWorkforceRecords =
+              enrichedWorkforceRecords.filter(
+                (record) =>
+                  record.regionId ===
+                  regionId
               );
 
-            const workforceTotals =
-              Array.from(
-                latestWorkforceByOrganization
-                  .values()
-              ).reduce(
-                (
-                  totals,
-                  report
-                ) => ({
-                  local:
-                    totals.local +
-                    toNumber(
-                      report
-                        .sourceMetrics
-                        .local_employee_count
-                    ),
-
-                  expat:
-                    totals.expat +
-                    toNumber(
-                      report
-                        .sourceMetrics
-                        .expat_employee_count
-                    ),
-                }),
-                {
-                  local: 0,
-                  expat: 0,
-                }
+            const workforceSummary =
+              calculateWorkforceSummary(
+                regionWorkforceRecords
               );
-
-            const workforcePercentages =
-              calculateWorkforcePercentages({
-                localEmployees:
-                  workforceTotals.local,
-                expatEmployees:
-                  workforceTotals.expat,
-              });
 
             const operators =
               new Map();
@@ -6185,6 +6442,12 @@ const Regions = ({
                     organization.updatedAt ||
                     organization.createdAt
                 ),
+
+                ...regionWorkforceRecords.map(
+                  (record) =>
+                    record.updatedAt ||
+                    record.createdAt
+                ),
               ]
                 .filter(Boolean)
                 .sort(
@@ -6244,6 +6507,8 @@ const Regions = ({
                 regionReports,
               rawOrganizations:
                 regionOrganizations,
+              rawWorkforceRecords:
+                regionWorkforceRecords,
 
               overdueReports,
               overdueReportCount:
@@ -6252,21 +6517,8 @@ const Regions = ({
               status:
                 healthStatus,
 
-              workforce: {
-                local:
-                  workforceTotals.local,
-                expat:
-                  workforceTotals.expat,
-                total:
-                  workforcePercentages
-                    .totalWorkforce,
-                localPercentage:
-                  workforcePercentages
-                    .localWorkforcePercentage,
-                expatPercentage:
-                  workforcePercentages
-                    .expatWorkforcePercentage,
-              },
+              workforce:
+                workforceSummary,
 
               productionCaption:
                 productionReports.length
@@ -6367,6 +6619,7 @@ const Regions = ({
           })
         );
     }, [
+      enrichedWorkforceRecords,
       filteredOrganizations,
       filteredReports,
       organizationMap,
@@ -7389,6 +7642,17 @@ export const RegionDetail = ({
       region,
     ]);
 
+  const rawWorkforceRecords =
+    useMemo(() => {
+      return Array.isArray(
+        region?.rawWorkforceRecords
+      )
+        ? region.rawWorkforceRecords
+        : [];
+    }, [
+      region,
+    ]);
+
   const productLabel =
     getProductLabel(
       productFilter
@@ -7563,9 +7827,16 @@ export const RegionDetail = ({
                 now
               );
 
+            const operatorWorkforceRecords =
+              rawWorkforceRecords.filter(
+                (record) =>
+                  record.enterpriseId ===
+                  identity.id
+              );
+
             const workforce =
               calculateWorkforceSummary(
-                operatorReports
+                operatorWorkforceRecords
               );
 
             const operationalOutstandingCount =
@@ -7661,6 +7932,7 @@ export const RegionDetail = ({
       productFilter,
       rawOrganizations,
       rawReports,
+      rawWorkforceRecords,
     ]);
 
   const fullRegionProductTotals =
@@ -7708,6 +7980,19 @@ export const RegionDetail = ({
       scopedOperatorIds,
     ]);
 
+  const scopedWorkforceRecords =
+    useMemo(() => {
+      return rawWorkforceRecords.filter(
+        (record) =>
+          scopedOperatorIds.has(
+            record.enterpriseId
+          )
+      );
+    }, [
+      rawWorkforceRecords,
+      scopedOperatorIds,
+    ]);
+
   const scopedOrganizations =
     useMemo(() => {
       return rawOrganizations.filter(
@@ -7752,7 +8037,7 @@ export const RegionDetail = ({
 
       const workforce =
         calculateWorkforceSummary(
-          scopedReports
+          scopedWorkforceRecords
         );
 
       return {
@@ -7777,6 +8062,7 @@ export const RegionDetail = ({
       scopedOperatorIds,
       scopedOrganizations,
       scopedReports,
+      scopedWorkforceRecords,
     ]);
 
   const displayedOperators =

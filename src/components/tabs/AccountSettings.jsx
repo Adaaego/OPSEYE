@@ -6,9 +6,11 @@ import {
   Bell,
   Briefcase,
   Building2,
+  CalendarDays,
   Check,
   CheckCircle2,
   ChevronRight,
+  Clock3,
   Copy,
   Globe,
   KeyRound,
@@ -21,6 +23,7 @@ import {
   Send,
   ShieldCheck,
   Store,
+  Trash2,
   User,
   Users,
   X,
@@ -37,6 +40,9 @@ import {
   getDoc,
   getDocs,
   query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
   where,
 } from "firebase/firestore";
 import {
@@ -80,6 +86,10 @@ const SETTINGS_TABS = [
     label: "Team",
   },
   {
+    id: "branch_operations",
+    label: "Branch Operations",
+  },
+  {
     id: "organization",
     label: "Organizations",
   },
@@ -92,6 +102,343 @@ const createProfileForm = (profile = {}) => ({
   twoFactor: Boolean(profile.twoFactor),
   loginAlert: Boolean(profile.loginAlert),
 });
+
+const BRANCH_OPERATING_DAYS = [
+  {
+    key: "monday",
+    label: "Monday",
+  },
+  {
+    key: "tuesday",
+    label: "Tuesday",
+  },
+  {
+    key: "wednesday",
+    label: "Wednesday",
+  },
+  {
+    key: "thursday",
+    label: "Thursday",
+  },
+  {
+    key: "friday",
+    label: "Friday",
+  },
+  {
+    key: "saturday",
+    label: "Saturday",
+  },
+  {
+    key: "sunday",
+    label: "Sunday",
+  },
+];
+
+const BRANCH_SHIFT_SCHEDULES_COLLECTION =
+  "branchShiftSchedules";
+
+const BRANCH_TIME_OPTIONS = Array.from(
+  {
+    length: 96,
+  },
+  (_, index) => {
+    const totalMinutes = index * 15;
+    const hour = Math.floor(totalMinutes / 60);
+    const minute = totalMinutes % 60;
+
+    const value = `${String(hour).padStart(2, "0")}:${String(
+      minute
+    ).padStart(2, "0")}`;
+
+    const displayHour = hour % 12 || 12;
+    const period = hour < 12 ? "AM" : "PM";
+
+    return {
+      value,
+      label: `${displayHour}:${String(minute).padStart(2, "0")} ${period}`,
+    };
+  }
+);
+
+const createShiftId = () => {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return `shift_${crypto.randomUUID()}`;
+  }
+
+  return `shift_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+};
+
+const getStoredStandardHours = (operatingHours = {}) => {
+  const frequency = new Map();
+
+  BRANCH_OPERATING_DAYS.forEach((day) => {
+    const daySchedule = operatingHours?.[day.key] || {};
+
+    if (
+      daySchedule.isOpen === true &&
+      daySchedule.openingTime &&
+      daySchedule.closingTime
+    ) {
+      const key = `${daySchedule.openingTime}|${daySchedule.closingTime}`;
+
+      frequency.set(
+        key,
+        (frequency.get(key) || 0) + 1
+      );
+    }
+  });
+
+  const mostCommon = Array.from(frequency.entries()).sort(
+    (first, second) => second[1] - first[1]
+  )[0]?.[0];
+
+  if (!mostCommon) {
+    return {
+      openingTime: "08:00",
+      closingTime: "17:00",
+    };
+  }
+
+  const [openingTime, closingTime] = mostCommon.split("|");
+
+  return {
+    openingTime,
+    closingTime,
+  };
+};
+
+const createBranchOperatingScheduleForm = (
+  operatingSchedule = {}
+) => {
+  const storedOperatingHours =
+    operatingSchedule?.operatingHours || {};
+
+  const standardHours =
+    getStoredStandardHours(storedOperatingHours);
+
+  const operatingHours =
+    BRANCH_OPERATING_DAYS.reduce(
+      (schedule, day) => {
+        const storedDay =
+          storedOperatingHours?.[day.key] || {};
+
+        const isOpen =
+          storedDay.isOpen === true;
+
+        const openingTime =
+          storedDay.openingTime ||
+          standardHours.openingTime;
+
+        const closingTime =
+          storedDay.closingTime ||
+          standardHours.closingTime;
+
+        schedule[day.key] = {
+          isOpen,
+          openingTime,
+          closingTime,
+          usesStandardHours:
+            !isOpen ||
+            (
+              openingTime === standardHours.openingTime &&
+              closingTime === standardHours.closingTime
+            ),
+        };
+
+        return schedule;
+      },
+      {}
+    );
+
+  const shifts = Array.isArray(
+    operatingSchedule?.shifts
+  )
+    ? operatingSchedule.shifts.map(
+        (shift, index) => ({
+          id:
+            shift?.id ||
+            `shift_${index + 1}`,
+          name:
+            shift?.name ||
+            `Shift ${index + 1}`,
+          startTime:
+            shift?.startTime || "",
+          endTime:
+            shift?.endTime || "",
+        })
+      )
+    : [];
+
+  return {
+    configured:
+      operatingSchedule?.configured ===
+      true,
+    standardOpeningTime:
+      standardHours.openingTime,
+    standardClosingTime:
+      standardHours.closingTime,
+    operatingHours,
+    shifts,
+    timezone:
+      operatingSchedule?.timezone ||
+      "Africa/Accra",
+  };
+};
+
+const parseDateValue = (value) => {
+  if (value instanceof Date) {
+    return new Date(
+      value.getFullYear(),
+      value.getMonth(),
+      value.getDate(),
+      12,
+      0,
+      0,
+      0
+    );
+  }
+
+  const normalizedValue = String(value || "").trim();
+
+  if (!normalizedValue) {
+    return new Date();
+  }
+
+  const parsed = new Date(`${normalizedValue}T12:00:00`);
+
+  return Number.isNaN(parsed.getTime())
+    ? new Date()
+    : parsed;
+};
+
+const formatDateValue = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+};
+
+const getWeekStartValue = (value = new Date()) => {
+  const date = parseDateValue(value);
+  const dayOfWeek = date.getDay();
+  const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+
+  date.setDate(date.getDate() - daysSinceMonday);
+
+  return formatDateValue(date);
+};
+
+const addDaysToDateValue = (value, days) => {
+  const date = parseDateValue(value);
+  date.setDate(date.getDate() + days);
+  return formatDateValue(date);
+};
+
+const getWeekEndValue = (weekStart) => {
+  return addDaysToDateValue(weekStart, 6);
+};
+
+const formatRosterDate = (value) => {
+  const date = parseDateValue(value);
+
+  return date.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+  });
+};
+
+const createBranchShiftRosterForm = ({
+  weekStart,
+  shifts = [],
+  storedSchedule = null,
+}) => {
+  const normalizedWeekStart = getWeekStartValue(weekStart);
+
+  const days = BRANCH_OPERATING_DAYS.reduce(
+    (schedule, day, dayIndex) => {
+      const storedDay = storedSchedule?.days?.[day.key] || {};
+      const storedShifts = Array.isArray(storedDay.shifts)
+        ? storedDay.shifts
+        : [];
+
+      const assignments = shifts.reduce(
+        (shiftAssignments, shift) => {
+          const storedShift = storedShifts.find(
+            (item) => item.shiftId === shift.id
+          );
+
+          shiftAssignments[shift.id] = Array.isArray(
+            storedShift?.staffIds
+          )
+            ? storedShift.staffIds.filter(Boolean)
+            : Array.isArray(storedShift?.staff)
+            ? storedShift.staff
+                .map((person) => person?.userId || person?.uid || "")
+                .filter(Boolean)
+            : [];
+
+          return shiftAssignments;
+        },
+        {}
+      );
+
+      schedule[day.key] = {
+        date: addDaysToDateValue(
+          normalizedWeekStart,
+          dayIndex
+        ),
+        assignments,
+      };
+
+      return schedule;
+    },
+    {}
+  );
+
+  return {
+    weekStart: normalizedWeekStart,
+    weekEnd: getWeekEndValue(normalizedWeekStart),
+    days,
+  };
+};
+
+const formatScheduleTime = (value) => {
+  const time = String(value || "").trim();
+
+  if (!time) {
+    return "—";
+  }
+
+  const matchingOption = BRANCH_TIME_OPTIONS.find(
+    (option) => option.value === time
+  );
+
+  if (matchingOption) {
+    return matchingOption.label;
+  }
+
+  const [hourValue, minuteValue] = time.split(":");
+  const hour = Number(hourValue);
+  const minute = Number(minuteValue);
+
+  if (
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute)
+  ) {
+    return time;
+  }
+
+  const displayHour = hour % 12 || 12;
+  const period = hour < 12 ? "AM" : "PM";
+
+  return `${displayHour}:${String(minute).padStart(2, "0")} ${period}`;
+};
 
 const normalizeText = (value) => {
   return String(value ?? "")
@@ -1243,6 +1590,65 @@ const AccountSettings = ({ roles = [] }) => {
   const [createChildOpen, setCreateChildOpen] = useState(false);
   const [formData, setFormData] = useState(createProfileForm());
 
+  const [
+    branchOperatingSchedule,
+    setBranchOperatingSchedule,
+  ] = useState(
+    createBranchOperatingScheduleForm()
+  );
+
+  const [
+    isEditingBranchOperations,
+    setIsEditingBranchOperations,
+  ] = useState(false);
+
+  const [
+    isSavingBranchOperations,
+    setIsSavingBranchOperations,
+  ] = useState(false);
+
+  const [
+    shiftRosterWeekStart,
+    setShiftRosterWeekStart,
+  ] = useState(
+    getWeekStartValue()
+  );
+
+  const [
+    branchShiftRoster,
+    setBranchShiftRoster,
+  ] = useState(
+    createBranchShiftRosterForm({
+      weekStart: getWeekStartValue(),
+      shifts: [],
+    })
+  );
+
+  const [
+    shiftRosterExists,
+    setShiftRosterExists,
+  ] = useState(false);
+
+  const [
+    isLoadingShiftRoster,
+    setIsLoadingShiftRoster,
+  ] = useState(false);
+
+  const [
+    isSavingShiftRoster,
+    setIsSavingShiftRoster,
+  ] = useState(false);
+
+  const [
+    shiftRosterError,
+    setShiftRosterError,
+  ] = useState("");
+
+  const [
+    openRosterAssignmentKey,
+    setOpenRosterAssignmentKey,
+  ] = useState("");
+
   /*
    * Account Settings loads the signed-in user, their organization, the real
    * default team, descendants and pending invitations from Firestore.
@@ -1343,6 +1749,14 @@ const AccountSettings = ({ roles = [] }) => {
       setOrganization(normalizedOrganization);
       setOrganizationMetadata(brandMetadata || null);
       setOrganizationLogo(resolvedOrganizationLogo);
+
+      setBranchOperatingSchedule(
+        createBranchOperatingScheduleForm(
+          normalizedOrganization.operatingSchedule
+        )
+      );
+
+      setIsEditingBranchOperations(false);
 
       /*
        * Team lookup:
@@ -2003,17 +2417,122 @@ const AccountSettings = ({ roles = [] }) => {
 
   const isBranchContext = organizationType === "branch";
 
+  const isBranchAdmin =
+    currentRole === "branch_admin" &&
+    isBranchContext;
+
   const visibleSettingsTabs = useMemo(() => {
-    return isBranchContext
-      ? SETTINGS_TABS.filter((tab) => tab.id !== "organization")
-      : SETTINGS_TABS;
-  }, [isBranchContext]);
+    if (isBranchContext) {
+      return SETTINGS_TABS.filter(
+        (tab) =>
+          tab.id !== "organization" &&
+          (
+            tab.id !==
+              "branch_operations" ||
+            isBranchAdmin
+          )
+      );
+    }
+
+    return SETTINGS_TABS.filter(
+      (tab) =>
+        tab.id !==
+        "branch_operations"
+    );
+  }, [
+    isBranchAdmin,
+    isBranchContext,
+  ]);
 
   useEffect(() => {
-    if (isBranchContext && activeTab === "organization") {
+    const activeTabIsVisible =
+      visibleSettingsTabs.some(
+        (tab) =>
+          tab.id === activeTab
+      );
+
+    if (!activeTabIsVisible) {
       setActiveTab("account");
     }
-  }, [activeTab, isBranchContext]);
+  }, [
+    activeTab,
+    visibleSettingsTabs,
+  ]);
+
+
+  const savedBranchShifts = useMemo(() => {
+    return createBranchOperatingScheduleForm(
+      organization?.operatingSchedule
+    ).shifts;
+  }, [organization?.operatingSchedule]);
+
+  const loadBranchShiftRoster = useCallback(async () => {
+    if (
+      !isBranchAdmin ||
+      !currentOrganizationId
+    ) {
+      return;
+    }
+
+    try {
+      setIsLoadingShiftRoster(true);
+      setShiftRosterError("");
+      setOpenRosterAssignmentKey("");
+
+      const scheduleId = `${currentOrganizationId}_${shiftRosterWeekStart}`;
+
+      const scheduleSnapshot = await getDoc(
+        doc(
+          db,
+          BRANCH_SHIFT_SCHEDULES_COLLECTION,
+          scheduleId
+        )
+      );
+
+      const storedSchedule = scheduleSnapshot.exists()
+        ? scheduleSnapshot.data()
+        : null;
+
+      setShiftRosterExists(scheduleSnapshot.exists());
+
+      setBranchShiftRoster(
+        createBranchShiftRosterForm({
+          weekStart: shiftRosterWeekStart,
+          shifts: savedBranchShifts,
+          storedSchedule,
+        })
+      );
+    } catch (error) {
+      console.error(
+        "Unable to load the weekly shift schedule:",
+        error
+      );
+
+      setShiftRosterExists(false);
+      setShiftRosterError(
+        error?.message ||
+          "The weekly shift schedule could not be loaded."
+      );
+
+      setBranchShiftRoster(
+        createBranchShiftRosterForm({
+          weekStart: shiftRosterWeekStart,
+          shifts: savedBranchShifts,
+        })
+      );
+    } finally {
+      setIsLoadingShiftRoster(false);
+    }
+  }, [
+    currentOrganizationId,
+    isBranchAdmin,
+    savedBranchShifts,
+    shiftRosterWeekStart,
+  ]);
+
+  useEffect(() => {
+    loadBranchShiftRoster();
+  }, [loadBranchShiftRoster]);
 
   const isEnterpriseAdmin =
     currentRole === "enterprise_admin" ||
@@ -2401,6 +2920,657 @@ const AccountSettings = ({ roles = [] }) => {
     });
   };
 
+  const handleEditBranchOperations = () => {
+    setBranchOperatingSchedule(
+      createBranchOperatingScheduleForm(
+        organization?.operatingSchedule
+      )
+    );
+
+    setPageError("");
+    setPageNotice(null);
+    setIsEditingBranchOperations(true);
+  };
+
+  const handleCancelBranchOperations = () => {
+    setBranchOperatingSchedule(
+      createBranchOperatingScheduleForm(
+        organization?.operatingSchedule
+      )
+    );
+
+    setPageError("");
+    setIsEditingBranchOperations(false);
+  };
+
+  const handleStandardOperatingTimeChange = (
+    fieldName,
+    value
+  ) => {
+    const standardFieldName =
+      fieldName === "openingTime"
+        ? "standardOpeningTime"
+        : "standardClosingTime";
+
+    setBranchOperatingSchedule(
+      (currentSchedule) => {
+        const nextOperatingHours =
+          BRANCH_OPERATING_DAYS.reduce(
+            (hours, day) => {
+              const currentDay =
+                currentSchedule.operatingHours?.[day.key] || {};
+
+              hours[day.key] = {
+                ...currentDay,
+                [fieldName]:
+                  currentDay.isOpen === true &&
+                  currentDay.usesStandardHours !== false
+                    ? value
+                    : currentDay[fieldName] || value,
+              };
+
+              return hours;
+            },
+            {}
+          );
+
+        return {
+          ...currentSchedule,
+          [standardFieldName]: value,
+          operatingHours: nextOperatingHours,
+        };
+      }
+    );
+  };
+
+  const handleOperatingDayToggle = (
+    dayKey,
+    isOpen
+  ) => {
+    setBranchOperatingSchedule(
+      (currentSchedule) => ({
+        ...currentSchedule,
+        operatingHours: {
+          ...currentSchedule.operatingHours,
+          [dayKey]: {
+            ...currentSchedule.operatingHours?.[dayKey],
+            isOpen,
+            usesStandardHours: true,
+            openingTime: isOpen
+              ? currentSchedule.standardOpeningTime
+              : currentSchedule.standardOpeningTime,
+            closingTime: isOpen
+              ? currentSchedule.standardClosingTime
+              : currentSchedule.standardClosingTime,
+          },
+        },
+      })
+    );
+  };
+
+  const handleOperatingOverrideToggle = (
+    dayKey,
+    useOverride
+  ) => {
+    setBranchOperatingSchedule(
+      (currentSchedule) => ({
+        ...currentSchedule,
+        operatingHours: {
+          ...currentSchedule.operatingHours,
+          [dayKey]: {
+            ...currentSchedule.operatingHours?.[dayKey],
+            usesStandardHours: !useOverride,
+            openingTime: useOverride
+              ? currentSchedule.operatingHours?.[dayKey]?.openingTime ||
+                currentSchedule.standardOpeningTime
+              : currentSchedule.standardOpeningTime,
+            closingTime: useOverride
+              ? currentSchedule.operatingHours?.[dayKey]?.closingTime ||
+                currentSchedule.standardClosingTime
+              : currentSchedule.standardClosingTime,
+          },
+        },
+      })
+    );
+  };
+
+  const handleOperatingTimeChange = (
+    dayKey,
+    fieldName,
+    value
+  ) => {
+    setBranchOperatingSchedule(
+      (currentSchedule) => ({
+        ...currentSchedule,
+        operatingHours: {
+          ...currentSchedule.operatingHours,
+          [dayKey]: {
+            ...currentSchedule.operatingHours?.[dayKey],
+            usesStandardHours: false,
+            [fieldName]: value,
+          },
+        },
+      })
+    );
+  };
+
+  const handleShiftChange = (
+    shiftId,
+    fieldName,
+    value
+  ) => {
+    setBranchOperatingSchedule(
+      (currentSchedule) => ({
+        ...currentSchedule,
+        shifts: currentSchedule.shifts.map(
+          (shift) =>
+            shift.id === shiftId
+              ? {
+                  ...shift,
+                  [fieldName]: value,
+                }
+              : shift
+        ),
+      })
+    );
+  };
+
+  const handleAddShift = () => {
+    setBranchOperatingSchedule(
+      (currentSchedule) => ({
+        ...currentSchedule,
+        shifts: [
+          ...currentSchedule.shifts,
+          {
+            id: createShiftId(),
+            name: `Shift ${currentSchedule.shifts.length + 1}`,
+            startTime: "",
+            endTime: "",
+          },
+        ],
+      })
+    );
+  };
+
+  const handleRemoveShift = (shiftId) => {
+    setBranchOperatingSchedule(
+      (currentSchedule) => ({
+        ...currentSchedule,
+        shifts: currentSchedule.shifts.filter(
+          (shift) => shift.id !== shiftId
+        ),
+      })
+    );
+  };
+
+  const handleSaveBranchOperations = async () => {
+    if (
+      !isBranchAdmin ||
+      !currentOrganizationId
+    ) {
+      setPageError(
+        "Only the Branch Administrator can update Branch Operations."
+      );
+
+      return;
+    }
+
+    if (
+      !branchOperatingSchedule.standardOpeningTime ||
+      !branchOperatingSchedule.standardClosingTime
+    ) {
+      setPageError(
+        "Set the standard opening and closing time."
+      );
+
+      return;
+    }
+
+    const openDays =
+      BRANCH_OPERATING_DAYS.filter(
+        (day) =>
+          branchOperatingSchedule.operatingHours?.[day.key]
+            ?.isOpen === true
+      );
+
+    if (openDays.length === 0) {
+      setPageError(
+        "Select at least one operating day."
+      );
+
+      return;
+    }
+
+    const incompleteOperatingDay =
+      openDays.find((day) => {
+        const daySchedule =
+          branchOperatingSchedule.operatingHours?.[day.key] || {};
+
+        return (
+          !daySchedule.openingTime ||
+          !daySchedule.closingTime
+        );
+      });
+
+    if (incompleteOperatingDay) {
+      setPageError(
+        `Add both opening and closing times for ${incompleteOperatingDay.label}.`
+      );
+
+      return;
+    }
+
+    const cleanedShifts =
+      branchOperatingSchedule.shifts.map(
+        (shift, index) => ({
+          id:
+            shift.id ||
+            `shift_${index + 1}`,
+          name: String(
+            shift.name || ""
+          ).trim(),
+          startTime: String(
+            shift.startTime || ""
+          ).trim(),
+          endTime: String(
+            shift.endTime || ""
+          ).trim(),
+        })
+      );
+
+    if (cleanedShifts.length === 0) {
+      setPageError(
+        "Add at least one shift."
+      );
+
+      return;
+    }
+
+    const incompleteShift = cleanedShifts.find(
+      (shift) =>
+        !shift.name ||
+        !shift.startTime ||
+        !shift.endTime
+    );
+
+    if (incompleteShift) {
+      setPageError(
+        "Complete the name, start time and end time for every shift."
+      );
+
+      return;
+    }
+
+    const operatingHours =
+      BRANCH_OPERATING_DAYS.reduce(
+        (schedule, day) => {
+          const daySchedule =
+            branchOperatingSchedule.operatingHours?.[day.key] || {};
+
+          const isOpen =
+            daySchedule.isOpen === true;
+
+          schedule[day.key] = {
+            isOpen,
+            openingTime: isOpen
+              ? daySchedule.openingTime
+              : null,
+            closingTime: isOpen
+              ? daySchedule.closingTime
+              : null,
+          };
+
+          return schedule;
+        },
+        {}
+      );
+
+    const operatingSchedule = {
+      configured: true,
+      operatingHours,
+      shifts: cleanedShifts,
+      shiftCount: cleanedShifts.length,
+      timezone:
+        branchOperatingSchedule.timezone ||
+        "Africa/Accra",
+      updatedAt: serverTimestamp(),
+      updatedBy: currentUserId,
+    };
+
+    try {
+      setIsSavingBranchOperations(true);
+      setPageError("");
+
+      await updateDoc(
+        doc(
+          db,
+          "organizations",
+          currentOrganizationId
+        ),
+        {
+          operatingSchedule,
+        }
+      );
+
+      const localOperatingSchedule = {
+        ...operatingSchedule,
+        updatedAt: new Date(),
+      };
+
+      setOrganization(
+        (currentOrganization) => ({
+          ...currentOrganization,
+          operatingSchedule:
+            localOperatingSchedule,
+        })
+      );
+
+      setBranchOperatingSchedule(
+        createBranchOperatingScheduleForm(
+          localOperatingSchedule
+        )
+      );
+
+      setIsEditingBranchOperations(false);
+
+      setPageNotice({
+        type: "success",
+        message:
+          "Branch operating hours and shift setup have been updated.",
+      });
+    } catch (error) {
+      console.error(
+        "Unable to save Branch Operations:",
+        error
+      );
+
+      setPageError(
+        error?.message ||
+          "Branch Operations could not be updated."
+      );
+    } finally {
+      setIsSavingBranchOperations(false);
+    }
+  };
+
+  const handleRosterWeekChange = (value) => {
+    setShiftRosterWeekStart(
+      getWeekStartValue(value)
+    );
+  };
+
+  const handleRosterStaffToggle = ({
+    dayKey,
+    shiftId,
+    userId,
+    checked,
+  }) => {
+    setBranchShiftRoster(
+      (currentRoster) => {
+        const currentAssignments =
+          currentRoster.days?.[dayKey]?.assignments?.[shiftId] || [];
+
+        const nextAssignments = checked
+          ? Array.from(
+              new Set([
+                ...currentAssignments,
+                userId,
+              ])
+            )
+          : currentAssignments.filter(
+              (assignedUserId) =>
+                assignedUserId !== userId
+            );
+
+        return {
+          ...currentRoster,
+          days: {
+            ...currentRoster.days,
+            [dayKey]: {
+              ...currentRoster.days?.[dayKey],
+              assignments: {
+                ...currentRoster.days?.[dayKey]?.assignments,
+                [shiftId]: nextAssignments,
+              },
+            },
+          },
+        };
+      }
+    );
+  };
+
+  const handleCopyPreviousWeek = async () => {
+    if (
+      !isBranchAdmin ||
+      !currentOrganizationId
+    ) {
+      return;
+    }
+
+    const previousWeekStart = addDaysToDateValue(
+      shiftRosterWeekStart,
+      -7
+    );
+
+    try {
+      setIsLoadingShiftRoster(true);
+      setShiftRosterError("");
+
+      const previousScheduleId = `${currentOrganizationId}_${previousWeekStart}`;
+
+      const previousSnapshot = await getDoc(
+        doc(
+          db,
+          BRANCH_SHIFT_SCHEDULES_COLLECTION,
+          previousScheduleId
+        )
+      );
+
+      if (!previousSnapshot.exists()) {
+        setShiftRosterError(
+          "There is no saved shift schedule for the previous week."
+        );
+
+        return;
+      }
+
+      setBranchShiftRoster(
+        createBranchShiftRosterForm({
+          weekStart: shiftRosterWeekStart,
+          shifts: savedBranchShifts,
+          storedSchedule: previousSnapshot.data(),
+        })
+      );
+
+      setOpenRosterAssignmentKey("");
+
+      setPageNotice({
+        type: "success",
+        message:
+          "Previous week's staff assignments were copied. Review them and save this week when ready.",
+      });
+    } catch (error) {
+      console.error(
+        "Unable to copy the previous week's shift schedule:",
+        error
+      );
+
+      setShiftRosterError(
+        error?.message ||
+          "The previous week's shift schedule could not be copied."
+      );
+    } finally {
+      setIsLoadingShiftRoster(false);
+    }
+  };
+
+  const handleSaveShiftRoster = async () => {
+    if (
+      !isBranchAdmin ||
+      !currentOrganizationId
+    ) {
+      setShiftRosterError(
+        "Only the Branch Administrator can update the weekly shift schedule."
+      );
+
+      return;
+    }
+
+    if (savedBranchShifts.length === 0) {
+      setShiftRosterError(
+        "Configure the branch's shifts before creating a weekly schedule."
+      );
+
+      return;
+    }
+
+    const memberById = new Map(
+      teamMembers.map((member) => [
+        member.uid || member.id,
+        member,
+      ])
+    );
+
+    const days = BRANCH_OPERATING_DAYS.reduce(
+      (schedule, day, dayIndex) => {
+        const dayForm =
+          branchShiftRoster.days?.[day.key] || {};
+
+        const branchDay =
+          organization?.operatingSchedule?.operatingHours?.[day.key] || {};
+
+        const dayIsOpen =
+          branchDay.isOpen === true;
+
+        schedule[day.key] = {
+          date:
+            dayForm.date ||
+            addDaysToDateValue(
+              shiftRosterWeekStart,
+              dayIndex
+            ),
+          shifts: savedBranchShifts.map(
+            (shift) => {
+              const staffIds = dayIsOpen && Array.isArray(
+                dayForm.assignments?.[shift.id]
+              )
+                ? dayForm.assignments[shift.id]
+                : [];
+
+              const staff = staffIds
+                .map((userId) => {
+                  const member = memberById.get(userId);
+
+                  if (!member) {
+                    return null;
+                  }
+
+                  return {
+                    userId,
+                    name:
+                      member.fullName ||
+                      member.displayName ||
+                      member.email ||
+                      "Team member",
+                    email: member.email || "",
+                    role: member.role || "",
+                  };
+                })
+                .filter(Boolean);
+
+              return {
+                shiftId: shift.id,
+                shiftName: shift.name,
+                startTime: shift.startTime,
+                endTime: shift.endTime,
+                staffIds: staff.map(
+                  (person) => person.userId
+                ),
+                staff,
+              };
+            }
+          ),
+        };
+
+        return schedule;
+      },
+      {}
+    );
+
+    const scheduleId = `${currentOrganizationId}_${shiftRosterWeekStart}`;
+
+    const payload = {
+      organizationId: currentOrganizationId,
+      organizationName: organization?.name || "",
+      organizationType: "branch",
+      parentId: organization?.parentId || "",
+      parentOrganizationId: organization?.parentId || "",
+      rootEnterpriseId: organization?.rootEnterpriseId || "",
+      ancestorIds: Array.isArray(organization?.ancestorIds)
+        ? organization.ancestorIds
+        : [],
+      companyId: organization?.companyId || "",
+      regionId: organization?.regionId || "",
+      sector: organization?.sector || "",
+      industrySegment: organization?.industrySegment || "",
+      country: organization?.country || "",
+      weekStart: shiftRosterWeekStart,
+      weekEnd: getWeekEndValue(shiftRosterWeekStart),
+      timezone:
+        organization?.operatingSchedule?.timezone ||
+        "Africa/Accra",
+      days,
+      updatedBy: currentUserId,
+      updatedAt: serverTimestamp(),
+    };
+
+    if (!shiftRosterExists) {
+      payload.createdBy = currentUserId;
+      payload.createdAt = serverTimestamp();
+    }
+
+    try {
+      setIsSavingShiftRoster(true);
+      setShiftRosterError("");
+
+      await setDoc(
+        doc(
+          db,
+          BRANCH_SHIFT_SCHEDULES_COLLECTION,
+          scheduleId
+        ),
+        payload,
+        {
+          merge: true,
+        }
+      );
+
+      setShiftRosterExists(true);
+      setOpenRosterAssignmentKey("");
+
+      setPageNotice({
+        type: "success",
+        message: `Shift schedule saved for ${formatRosterDate(
+          shiftRosterWeekStart
+        )} – ${formatRosterDate(
+          getWeekEndValue(shiftRosterWeekStart)
+        )}.`,
+      });
+    } catch (error) {
+      console.error(
+        "Unable to save the weekly shift schedule:",
+        error
+      );
+
+      setShiftRosterError(
+        error?.message ||
+          "The weekly shift schedule could not be saved."
+      );
+    } finally {
+      setIsSavingShiftRoster(false);
+    }
+  };
+
   if (loadingPage) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
@@ -2453,7 +3623,9 @@ const AccountSettings = ({ roles = [] }) => {
           </div>
 
           <p className="text-sm text-slate-500">
-            Manage your profile, shared team access and organization hierarchy.
+            {isBranchContext
+              ? "Manage your profile, shared team access and branch operations."
+              : "Manage your profile, shared team access and organization hierarchy."}
           </p>
         </div>
       </header>
@@ -2962,6 +4134,806 @@ const AccountSettings = ({ roles = [] }) => {
         </div>
       )}
 
+      {activeTab === "branch_operations" &&
+        isBranchAdmin && (
+          <div className="space-y-6">
+            <Card className="overflow-hidden">
+              <div
+                className="flex flex-col gap-5 px-6 py-6 text-white lg:flex-row lg:items-center lg:justify-between"
+                style={{
+                  backgroundColor: NAVY,
+                }}
+              >
+                <div className="flex min-w-0 items-center gap-4">
+                  {organizationLogo ? (
+                    <img
+                      src={organizationLogo}
+                      alt={`${organization?.name || "Branch"} logo`}
+                      className="h-14 w-14 rounded-xl border border-white/20 bg-white object-contain p-1.5"
+                    />
+                  ) : (
+                    <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-white/10">
+                      <Store className="h-6 w-6" />
+                    </div>
+                  )}
+
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">
+                      Branch Operations
+                    </p>
+
+                    <h2 className="mt-1 truncate text-xl font-semibold">
+                      {organization?.name || "Branch"}
+                    </h2>
+
+                    <p className="mt-1 max-w-2xl text-sm text-slate-300">
+                      Set normal branch hours once, define the permanent shift
+                      structure and maintain a weekly staff schedule for each shift.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {!isEditingBranchOperations ? (
+                    <Button
+                      variant="outline"
+                      onClick={handleEditBranchOperations}
+                      className="border-white/30 bg-white text-navy-950 hover:bg-slate-100"
+                    >
+                      Edit Hours & Shifts
+                    </Button>
+                  ) : (
+                    <>
+                      <Button
+                        variant="outline"
+                        onClick={handleCancelBranchOperations}
+                        disabled={isSavingBranchOperations}
+                        className="border-white/30 bg-transparent text-white hover:bg-white/10"
+                      >
+                        Cancel
+                      </Button>
+
+                      <Button
+                        onClick={handleSaveBranchOperations}
+                        disabled={isSavingBranchOperations}
+                        className="bg-white text-navy-950 hover:bg-slate-100"
+                      >
+                        {isSavingBranchOperations ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          <>
+                            <Check className="h-4 w-4" />
+                            Save Changes
+                          </>
+                        )}
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 divide-y divide-slate-200 border-t border-slate-200 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+                <div className="px-5 py-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                    Configuration
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                    {branchOperatingSchedule.configured
+                      ? "Configured"
+                      : "Setup required"}
+                  </p>
+                </div>
+
+                <div className="px-5 py-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                    Shifts
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                    {branchOperatingSchedule.shifts.length}
+                  </p>
+                </div>
+
+                <div className="px-5 py-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                    Time zone
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                    {branchOperatingSchedule.timezone}
+                  </p>
+                </div>
+              </div>
+            </Card>
+
+            {!branchOperatingSchedule.configured &&
+              !isEditingBranchOperations && (
+                <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <p>
+                    Configure the branch's operating hours and shifts before
+                    creating the weekly staff schedule.
+                  </p>
+                </div>
+              )}
+
+            <Card className="overflow-hidden">
+              <div className="border-b border-slate-100 px-6 py-5">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                    <CalendarDays className="h-5 w-5" />
+                  </div>
+
+                  <div>
+                    <h3 className="text-base font-semibold text-navy-950">
+                      Operating Hours
+                    </h3>
+                    <p className="mt-0.5 text-sm text-slate-500">
+                      Enter the normal opening and closing time once. Open days use
+                      those hours automatically unless you set a day-specific override.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-b border-slate-100 bg-slate-50 px-6 py-5">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_180px_180px] sm:items-end">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">
+                      Standard operating hours
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      These times are applied to every selected operating day.
+                    </p>
+                  </div>
+
+                  <label className="block">
+                    <span className="mb-1.5 block text-xs font-semibold text-slate-500">
+                      Opens
+                    </span>
+                    {isEditingBranchOperations ? (
+                      <TimeSelect
+                        value={branchOperatingSchedule.standardOpeningTime}
+                        onChange={(value) =>
+                          handleStandardOperatingTimeChange(
+                            "openingTime",
+                            value
+                          )
+                        }
+                      />
+                    ) : (
+                      <div className="flex h-10 items-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800">
+                        {formatScheduleTime(
+                          branchOperatingSchedule.standardOpeningTime
+                        )}
+                      </div>
+                    )}
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1.5 block text-xs font-semibold text-slate-500">
+                      Closes
+                    </span>
+                    {isEditingBranchOperations ? (
+                      <TimeSelect
+                        value={branchOperatingSchedule.standardClosingTime}
+                        onChange={(value) =>
+                          handleStandardOperatingTimeChange(
+                            "closingTime",
+                            value
+                          )
+                        }
+                      />
+                    ) : (
+                      <div className="flex h-10 items-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800">
+                        {formatScheduleTime(
+                          branchOperatingSchedule.standardClosingTime
+                        )}
+                      </div>
+                    )}
+                  </label>
+                </div>
+              </div>
+
+              <div className="divide-y divide-slate-100">
+                {BRANCH_OPERATING_DAYS.map((day) => {
+                  const daySchedule =
+                    branchOperatingSchedule.operatingHours?.[day.key] || {
+                      isOpen: false,
+                      openingTime: branchOperatingSchedule.standardOpeningTime,
+                      closingTime: branchOperatingSchedule.standardClosingTime,
+                      usesStandardHours: true,
+                    };
+
+                  const hasOverride =
+                    daySchedule.isOpen === true &&
+                    daySchedule.usesStandardHours === false;
+
+                  return (
+                    <div
+                      key={day.key}
+                      className="px-6 py-4"
+                    >
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex items-center gap-3">
+                          {isEditingBranchOperations ? (
+                            <input
+                              type="checkbox"
+                              checked={daySchedule.isOpen}
+                              onChange={(event) =>
+                                handleOperatingDayToggle(
+                                  day.key,
+                                  event.target.checked
+                                )
+                              }
+                              className="h-4 w-4 rounded border-slate-300 text-navy-950 focus:ring-navy-400"
+                            />
+                          ) : (
+                            <span
+                              className={`h-2.5 w-2.5 rounded-full ${
+                                daySchedule.isOpen
+                                  ? "bg-emerald-500"
+                                  : "bg-slate-300"
+                              }`}
+                            />
+                          )}
+
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">
+                              {day.label}
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              {daySchedule.isOpen
+                                ? hasOverride
+                                  ? "Custom hours"
+                                  : "Standard hours"
+                                : "Closed"}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-3">
+                          <span className="text-sm font-semibold text-slate-800">
+                            {daySchedule.isOpen
+                              ? `${formatScheduleTime(
+                                  daySchedule.openingTime
+                                )} – ${formatScheduleTime(
+                                  daySchedule.closingTime
+                                )}`
+                              : "Closed"}
+                          </span>
+
+                          {isEditingBranchOperations &&
+                            daySchedule.isOpen && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleOperatingOverrideToggle(
+                                    day.key,
+                                    !hasOverride
+                                  )
+                                }
+                                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+                              >
+                                {hasOverride
+                                  ? "Use standard hours"
+                                  : "Edit hours"}
+                              </button>
+                            )}
+                        </div>
+                      </div>
+
+                      {isEditingBranchOperations && hasOverride && (
+                        <div className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
+                          <label className="block">
+                            <span className="mb-1.5 block text-xs font-semibold text-slate-500">
+                              Opens
+                            </span>
+                            <TimeSelect
+                              value={daySchedule.openingTime}
+                              onChange={(value) =>
+                                handleOperatingTimeChange(
+                                  day.key,
+                                  "openingTime",
+                                  value
+                                )
+                              }
+                            />
+                          </label>
+
+                          <label className="block">
+                            <span className="mb-1.5 block text-xs font-semibold text-slate-500">
+                              Closes
+                            </span>
+                            <TimeSelect
+                              value={daySchedule.closingTime}
+                              onChange={(value) =>
+                                handleOperatingTimeChange(
+                                  day.key,
+                                  "closingTime",
+                                  value
+                                )
+                              }
+                            />
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+
+            <Card className="overflow-hidden">
+              <div className="flex flex-col gap-4 border-b border-slate-100 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                    <Clock3 className="h-5 w-5" />
+                  </div>
+
+                  <div>
+                    <h3 className="text-base font-semibold text-navy-950">
+                      Shift Setup
+                    </h3>
+                    <p className="mt-0.5 text-sm text-slate-500">
+                      Define the permanent shifts used by this branch. Staff are
+                      assigned separately in the weekly schedule below.
+                    </p>
+                  </div>
+                </div>
+
+                {isEditingBranchOperations && (
+                  <Button
+                    variant="outline"
+                    onClick={handleAddShift}
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add Shift
+                  </Button>
+                )}
+              </div>
+
+              {branchOperatingSchedule.shifts.length > 0 ? (
+                <div className="divide-y divide-slate-100">
+                  {branchOperatingSchedule.shifts.map((shift, index) => (
+                    <div
+                      key={shift.id}
+                      className="px-6 py-5"
+                    >
+                      {isEditingBranchOperations ? (
+                        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(180px,1fr)_180px_180px_auto] lg:items-end">
+                          <label className="block">
+                            <span className="mb-1.5 block text-xs font-semibold text-slate-500">
+                              Shift name
+                            </span>
+                            <input
+                              type="text"
+                              value={shift.name}
+                              onChange={(event) =>
+                                handleShiftChange(
+                                  shift.id,
+                                  "name",
+                                  event.target.value
+                                )
+                              }
+                              placeholder={`Shift ${index + 1}`}
+                              className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+                            />
+                          </label>
+
+                          <label className="block">
+                            <span className="mb-1.5 block text-xs font-semibold text-slate-500">
+                              Starts
+                            </span>
+                            <TimeSelect
+                              value={shift.startTime}
+                              onChange={(value) =>
+                                handleShiftChange(
+                                  shift.id,
+                                  "startTime",
+                                  value
+                                )
+                              }
+                            />
+                          </label>
+
+                          <label className="block">
+                            <span className="mb-1.5 block text-xs font-semibold text-slate-500">
+                              Ends
+                            </span>
+                            <TimeSelect
+                              value={shift.endTime}
+                              onChange={(value) =>
+                                handleShiftChange(
+                                  shift.id,
+                                  "endTime",
+                                  value
+                                )
+                              }
+                            />
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleRemoveShift(shift.id)
+                            }
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-red-200 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-50"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Remove
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">
+                              {shift.name || `Shift ${index + 1}`}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500">
+                              Shift {index + 1}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                            <Clock3 className="h-4 w-4 text-slate-400" />
+                            {formatScheduleTime(shift.startTime)} –{" "}
+                            {formatScheduleTime(shift.endTime)}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="px-6 py-12 text-center">
+                  <Clock3 className="mx-auto h-8 w-8 text-slate-300" />
+                  <p className="mt-3 text-sm font-semibold text-slate-700">
+                    No shifts configured
+                  </p>
+                  <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-400">
+                    {isEditingBranchOperations
+                      ? "Add the first shift and enter its start and end time."
+                      : "Edit Branch Operations to add the branch's shifts."}
+                  </p>
+                </div>
+              )}
+            </Card>
+
+            <Card className="overflow-hidden">
+              <div className="flex flex-col gap-4 border-b border-slate-100 px-6 py-5 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                    <Users className="h-5 w-5" />
+                  </div>
+
+                  <div>
+                    <h3 className="text-base font-semibold text-navy-950">
+                      Weekly Shift Schedule
+                    </h3>
+                    <p className="mt-0.5 max-w-2xl text-sm text-slate-500">
+                      Assign branch team members to each shift for the selected week.
+                      The saved roster is kept as a dated historical record for reconciliation.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={handleCopyPreviousWeek}
+                    disabled={
+                      isLoadingShiftRoster ||
+                      isSavingShiftRoster ||
+                      savedBranchShifts.length === 0
+                    }
+                  >
+                    <Copy className="h-4 w-4" />
+                    Copy Previous Week
+                  </Button>
+
+                  <Button
+                    onClick={handleSaveShiftRoster}
+                    disabled={
+                      isLoadingShiftRoster ||
+                      isSavingShiftRoster ||
+                      savedBranchShifts.length === 0
+                    }
+                    className="bg-navy-950 text-white hover:bg-navy-900"
+                  >
+                    {isSavingShiftRoster ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Check className="h-4 w-4" />
+                        Save Weekly Schedule
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-4 border-b border-slate-100 bg-slate-50 px-6 py-4 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Schedule week
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                    {formatRosterDate(shiftRosterWeekStart)} –{" "}
+                    {formatRosterDate(
+                      getWeekEndValue(shiftRosterWeekStart)
+                    )}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      handleRosterWeekChange(
+                        addDaysToDateValue(
+                          shiftRosterWeekStart,
+                          -7
+                        )
+                      )
+                    }
+                    disabled={isLoadingShiftRoster}
+                  >
+                    Previous
+                  </Button>
+
+                  <input
+                    type="date"
+                    value={shiftRosterWeekStart}
+                    onChange={(event) =>
+                      handleRosterWeekChange(event.target.value)
+                    }
+                    className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100"
+                  />
+
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      handleRosterWeekChange(
+                        getWeekStartValue()
+                      )
+                    }
+                    disabled={isLoadingShiftRoster}
+                  >
+                    This Week
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      handleRosterWeekChange(
+                        addDaysToDateValue(
+                          shiftRosterWeekStart,
+                          7
+                        )
+                      )
+                    }
+                    disabled={isLoadingShiftRoster}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+
+              {shiftRosterError && (
+                <div className="border-b border-red-100 bg-red-50 px-6 py-3 text-sm text-red-700">
+                  {shiftRosterError}
+                </div>
+              )}
+
+              {savedBranchShifts.length === 0 ? (
+                <div className="px-6 py-12 text-center">
+                  <Users className="mx-auto h-8 w-8 text-slate-300" />
+                  <p className="mt-3 text-sm font-semibold text-slate-700">
+                    Configure shifts first
+                  </p>
+                  <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-400">
+                    Add and save the branch's shifts above before assigning people to them.
+                  </p>
+                </div>
+              ) : isLoadingShiftRoster ? (
+                <div className="flex items-center justify-center gap-2 px-6 py-12 text-sm text-slate-500">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  Loading weekly schedule...
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {BRANCH_OPERATING_DAYS.map((day) => {
+                    const dayRoster =
+                      branchShiftRoster.days?.[day.key] || {};
+                    const branchDay =
+                      organization?.operatingSchedule?.operatingHours?.[
+                        day.key
+                      ] || {};
+
+                    return (
+                      <div
+                        key={day.key}
+                        className="px-6 py-5"
+                      >
+                        <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">
+                              {day.label} ·{" "}
+                              {formatRosterDate(dayRoster.date)}
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              {branchDay.isOpen === false
+                                ? "Branch normally closed"
+                                : "Branch operating day"}
+                            </p>
+                          </div>
+
+                          {branchDay.isOpen !== false && (
+                            <span className="text-xs font-semibold text-slate-500">
+                              {formatScheduleTime(branchDay.openingTime)} –{" "}
+                              {formatScheduleTime(branchDay.closingTime)}
+                            </span>
+                          )}
+                        </div>
+
+                        {branchDay.isOpen === true ? (
+                          <div className="space-y-3">
+                            {savedBranchShifts.map((shift) => {
+                            const assignmentKey = `${day.key}_${shift.id}`;
+                            const assignedUserIds =
+                              dayRoster.assignments?.[shift.id] || [];
+                            const assignedMembers = assignedUserIds
+                              .map((userId) =>
+                                teamMembers.find(
+                                  (member) =>
+                                    (member.uid || member.id) === userId
+                                )
+                              )
+                              .filter(Boolean);
+                            const assignmentOpen =
+                              openRosterAssignmentKey === assignmentKey;
+
+                            return (
+                              <div
+                                key={assignmentKey}
+                                className="rounded-xl border border-slate-200 bg-white"
+                              >
+                                <div className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
+                                  <div className="min-w-0">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <p className="text-sm font-semibold text-slate-900">
+                                        {shift.name}
+                                      </p>
+                                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                                        {formatScheduleTime(shift.startTime)} –{" "}
+                                        {formatScheduleTime(shift.endTime)}
+                                      </span>
+                                    </div>
+
+                                    <div className="mt-2 flex flex-wrap gap-1.5">
+                                      {assignedMembers.length > 0 ? (
+                                        assignedMembers.map((member) => (
+                                          <span
+                                            key={member.uid || member.id}
+                                            className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700"
+                                          >
+                                            {member.fullName ||
+                                              member.displayName ||
+                                              member.email}
+                                          </span>
+                                        ))
+                                      ) : (
+                                        <span className="text-xs font-medium text-slate-400">
+                                          No staff assigned
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setOpenRosterAssignmentKey(
+                                        assignmentOpen ? "" : assignmentKey
+                                      )
+                                    }
+                                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+                                  >
+                                    {assignmentOpen
+                                      ? "Done"
+                                      : assignedMembers.length > 0
+                                      ? "Edit People"
+                                      : "Assign People"}
+                                  </button>
+                                </div>
+
+                                {assignmentOpen && (
+                                  <div className="border-t border-slate-100 bg-slate-50 p-4">
+                                    {teamMembers.length > 0 ? (
+                                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                                        {teamMembers.map((member) => {
+                                          const memberId =
+                                            member.uid || member.id || "";
+                                          const memberName =
+                                            member.fullName ||
+                                            member.displayName ||
+                                            member.email ||
+                                            "Team member";
+
+                                          return (
+                                            <label
+                                              key={memberId}
+                                              className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 transition hover:border-slate-300"
+                                            >
+                                              <input
+                                                type="checkbox"
+                                                checked={assignedUserIds.includes(
+                                                  memberId
+                                                )}
+                                                onChange={(event) =>
+                                                  handleRosterStaffToggle({
+                                                    dayKey: day.key,
+                                                    shiftId: shift.id,
+                                                    userId: memberId,
+                                                    checked:
+                                                      event.target.checked,
+                                                  })
+                                                }
+                                                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-navy-950 focus:ring-navy-400"
+                                              />
+
+                                              <span className="min-w-0">
+                                                <span className="block truncate text-sm font-semibold text-slate-800">
+                                                  {memberName}
+                                                </span>
+                                                <span className="mt-0.5 block truncate text-xs text-slate-500">
+                                                  {formatRole(member.role)}
+                                                </span>
+                                              </span>
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
+                                    ) : (
+                                      <p className="text-sm text-slate-500">
+                                        No branch team members are available to assign.
+                                      </p>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                            No shift assignments are required because the branch is
+                            configured as closed on this day.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="border-t border-slate-200 bg-slate-50 px-6 py-4">
+                <p className="text-xs leading-5 text-slate-500">
+                  This is a weekly schedule, not a permanent staff assignment. You
+                  can edit and save it at any time during the week. Each saved week
+                  remains in Firestore so reconciliation can resolve who was scheduled
+                  for a particular shift and date.
+                </p>
+              </div>
+            </Card>
+          </div>
+        )}
+
       {activeTab === "organization" && !isBranchContext && (
         <div className="space-y-7">
           <Card className="overflow-hidden">
@@ -3273,6 +5245,43 @@ const AccountSettings = ({ roles = [] }) => {
         onCreate={handleCreateChildOrganization}
       />
     </section>
+  );
+};
+
+const TimeSelect = ({
+  value,
+  onChange,
+  disabled = false,
+}) => {
+  const selectedValue = String(value || "");
+  const valueExists = BRANCH_TIME_OPTIONS.some(
+    (option) => option.value === selectedValue
+  );
+
+  return (
+    <select
+      value={selectedValue}
+      onChange={(event) => onChange(event.target.value)}
+      disabled={disabled}
+      className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-navy-400 focus:ring-2 focus:ring-navy-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+    >
+      <option value="">Select time</option>
+
+      {selectedValue && !valueExists && (
+        <option value={selectedValue}>
+          {formatScheduleTime(selectedValue)}
+        </option>
+      )}
+
+      {BRANCH_TIME_OPTIONS.map((option) => (
+        <option
+          key={option.value}
+          value={option.value}
+        >
+          {option.label}
+        </option>
+      ))}
+    </select>
   );
 };
 
