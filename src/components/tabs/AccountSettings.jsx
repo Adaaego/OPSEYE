@@ -44,6 +44,7 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import {
   getOrganizationDocument,
@@ -133,6 +134,9 @@ const BRANCH_OPERATING_DAYS = [
     label: "Sunday",
   },
 ];
+
+const BRANCH_SHIFTS_COLLECTION =
+  "shifts";
 
 const BRANCH_SHIFT_SCHEDULES_COLLECTION =
   "branchShiftSchedules";
@@ -378,7 +382,8 @@ const getStoredStandardHours = (operatingHours = {}) => {
 };
 
 const createBranchOperatingScheduleForm = (
-  operatingSchedule = {}
+  operatingSchedule = {},
+  shiftDefinitions = []
 ) => {
   const storedOperatingHours =
     operatingSchedule?.operatingHours || {};
@@ -420,24 +425,33 @@ const createBranchOperatingScheduleForm = (
       {}
     );
 
-  const shifts = Array.isArray(
-    operatingSchedule?.shifts
-  )
-    ? operatingSchedule.shifts.map(
-        (shift, index) => ({
-          id:
-            shift?.id ||
-            `shift_${index + 1}`,
-          name:
-            shift?.name ||
-            `Shift ${index + 1}`,
-          startTime:
-            shift?.startTime || "",
-          endTime:
-            shift?.endTime || "",
-        })
-      )
-    : [];
+  const shiftSource =
+    Array.isArray(shiftDefinitions) &&
+    shiftDefinitions.length > 0
+      ? shiftDefinitions
+      : Array.isArray(operatingSchedule?.shifts)
+      ? operatingSchedule.shifts
+      : [];
+
+  const shifts = shiftSource.map(
+    (shift, index) => ({
+      id:
+        shift?.shiftId ||
+        shift?.id ||
+        `shift_${index + 1}`,
+      name:
+        shift?.name ||
+        `Shift ${index + 1}`,
+      startTime:
+        shift?.startTime || "",
+      endTime:
+        shift?.endTime || "",
+      sequence:
+        Number.isInteger(shift?.sequence)
+          ? shift.sequence
+          : index,
+    })
+  );
 
   return {
     configured:
@@ -1763,14 +1777,14 @@ const AccountSettings = ({ roles = [] }) => {
   );
 
   const [
-    isEditingBranchOperations,
-    setIsEditingBranchOperations,
-  ] = useState(false);
+    branchShiftDefinitions,
+    setBranchShiftDefinitions,
+  ] = useState([]);
 
-  const [
-    isSavingBranchOperations,
-    setIsSavingBranchOperations,
-  ] = useState(false);
+  const [isEditingOperatingHours, setIsEditingOperatingHours] = useState(false);
+  const [isSavingOperatingHours, setIsSavingOperatingHours] = useState(false);
+  const [isEditingBranchShifts, setIsEditingBranchShifts] = useState(false);
+  const [isSavingBranchShifts, setIsSavingBranchShifts] = useState(false);
 
   const [
     shiftRosterWeekStart,
@@ -1898,7 +1912,10 @@ const AccountSettings = ({ roles = [] }) => {
 
       const normalizedOrganization = {
         ...currentOrganization,
-        organizationId: getOrganizationId(currentOrganization),
+        id:
+          organizationMember.organizationId,
+        organizationId:
+          organizationMember.organizationId,
       };
 
       const brandMetadata = getOrganizationBrandMetadata(
@@ -1915,13 +1932,63 @@ const AccountSettings = ({ roles = [] }) => {
       setOrganizationMetadata(brandMetadata || null);
       setOrganizationLogo(resolvedOrganizationLogo);
 
+      let loadedBranchShifts = [];
+
+      if (
+        getOrganizationLevel(
+          normalizedOrganization
+        ) === "branch"
+      ) {
+        const shiftSnapshot = await getDocs(
+          query(
+            collection(
+              db,
+              BRANCH_SHIFTS_COLLECTION
+            ),
+            where(
+              "organizationId",
+              "==",
+              normalizedOrganization.organizationId
+            )
+          )
+        );
+
+        loadedBranchShifts = shiftSnapshot.docs
+          .map((documentSnapshot) => ({
+            id:
+              documentSnapshot.data()?.shiftId ||
+              documentSnapshot.id,
+            ...documentSnapshot.data(),
+          }))
+          .sort(
+            (first, second) =>
+              (Number(first.sequence) || 0) -
+              (Number(second.sequence) || 0)
+          );
+      }
+
+      const resolvedBranchShifts =
+        loadedBranchShifts.length > 0
+          ? loadedBranchShifts
+          : Array.isArray(
+              normalizedOrganization.operatingSchedule?.shifts
+            )
+          ? normalizedOrganization.operatingSchedule.shifts
+          : [];
+
+      setBranchShiftDefinitions(
+        resolvedBranchShifts
+      );
+
       setBranchOperatingSchedule(
         createBranchOperatingScheduleForm(
-          normalizedOrganization.operatingSchedule
+          normalizedOrganization.operatingSchedule,
+          resolvedBranchShifts
         )
       );
 
-      setIsEditingBranchOperations(false);
+      setIsEditingOperatingHours(false);
+      setIsEditingBranchShifts(false);
 
       /*
        * Team lookup:
@@ -2568,7 +2635,7 @@ const AccountSettings = ({ roles = [] }) => {
   const currentRole = normalizeRoleCode(profile.role);
 
   const currentUserId =
-    profile.uid || profile.id || auth.currentUser?.uid || "";
+    auth.currentUser?.uid || profile.uid || profile.id || "";
 
   const organizationType = normalizeText(organization?.type);
 
@@ -2586,6 +2653,10 @@ const AccountSettings = ({ roles = [] }) => {
     currentRole === "branch_admin" &&
     isBranchContext;
 
+  const isBranchOperationsAdmin =
+    Boolean(auth.currentUser?.uid) &&
+    organization?.primaryAdminUserId === auth.currentUser.uid;
+
   const visibleSettingsTabs = useMemo(() => {
     if (isBranchContext) {
       return SETTINGS_TABS.filter(
@@ -2594,7 +2665,7 @@ const AccountSettings = ({ roles = [] }) => {
           (
             tab.id !==
               "branch_operations" ||
-            isBranchAdmin
+            isBranchOperationsAdmin
           )
       );
     }
@@ -2605,7 +2676,7 @@ const AccountSettings = ({ roles = [] }) => {
         "branch_operations"
     );
   }, [
-    isBranchAdmin,
+    isBranchOperationsAdmin,
     isBranchContext,
   ]);
 
@@ -2631,10 +2702,26 @@ const AccountSettings = ({ roles = [] }) => {
     );
 
   const savedBranchShifts = useMemo(() => {
-    return createBranchOperatingScheduleForm(
-      organization?.operatingSchedule
-    ).shifts;
-  }, [organization?.operatingSchedule]);
+    return branchShiftDefinitions.map(
+      (shift, index) => ({
+        id:
+          shift?.shiftId ||
+          shift?.id ||
+          `shift_${index + 1}`,
+        name:
+          shift?.name ||
+          `Shift ${index + 1}`,
+        startTime:
+          shift?.startTime || "",
+        endTime:
+          shift?.endTime || "",
+        sequence:
+          Number.isInteger(shift?.sequence)
+            ? shift.sequence
+            : index,
+      })
+    );
+  }, [branchShiftDefinitions]);
 
   const loadBranchShiftRoster = useCallback(async () => {
     if (
@@ -3090,27 +3177,53 @@ const AccountSettings = ({ roles = [] }) => {
     });
   };
 
-  const handleEditBranchOperations = () => {
-    setBranchOperatingSchedule(
-      createBranchOperatingScheduleForm(
-        organization?.operatingSchedule
-      )
-    );
-
+  /*
+   * Each editor resets only its own fields when cancelled or reopened.
+   */
+  const handleEditOperatingHours = () => {
+    setBranchOperatingSchedule((current) => ({
+      ...current,
+      ...createBranchOperatingScheduleForm(organization?.operatingSchedule, current.shifts),
+      shifts: current.shifts,
+    }));
     setPageError("");
     setPageNotice(null);
-    setIsEditingBranchOperations(true);
+    setIsEditingOperatingHours(true);
   };
 
-  const handleCancelBranchOperations = () => {
-    setBranchOperatingSchedule(
-      createBranchOperatingScheduleForm(
-        organization?.operatingSchedule
-      )
-    );
-
+  const handleCancelOperatingHours = () => {
+    setBranchOperatingSchedule((current) => ({
+      ...current,
+      ...createBranchOperatingScheduleForm(organization?.operatingSchedule, current.shifts),
+      shifts: current.shifts,
+    }));
     setPageError("");
-    setIsEditingBranchOperations(false);
+    setIsEditingOperatingHours(false);
+  };
+
+  const handleEditBranchShifts = () => {
+    setBranchOperatingSchedule((current) => ({
+      ...current,
+      shifts: createBranchOperatingScheduleForm(
+        organization?.operatingSchedule,
+        branchShiftDefinitions
+      ).shifts,
+    }));
+    setPageError("");
+    setPageNotice(null);
+    setIsEditingBranchShifts(true);
+  };
+
+  const handleCancelBranchShifts = () => {
+    setBranchOperatingSchedule((current) => ({
+      ...current,
+      shifts: createBranchOperatingScheduleForm(
+        organization?.operatingSchedule,
+        branchShiftDefinitions
+      ).shifts,
+    }));
+    setPageError("");
+    setIsEditingBranchShifts(false);
   };
 
   const handleStandardOperatingTimeChange = (
@@ -3154,56 +3267,14 @@ const AccountSettings = ({ roles = [] }) => {
             {}
           );
 
-        const nextShifts =
-          currentSchedule.shifts.map(
-            (shift) => {
-              const startOptions =
-                getShiftStartOptions(
-                  nextOpeningTime,
-                  nextClosingTime
-                );
-
-              const startIsValid =
-                startOptions.some(
-                  (option) =>
-                    option.value ===
-                    shift.startTime
-                );
-
-              const nextStartTime =
-                startIsValid
-                  ? shift.startTime
-                  : "";
-
-              const endOptions =
-                getShiftEndOptions(
-                  nextOpeningTime,
-                  nextClosingTime,
-                  nextStartTime
-                );
-
-              const endIsValid =
-                endOptions.some(
-                  (option) =>
-                    option.value ===
-                    shift.endTime
-                );
-
-              return {
-                ...shift,
-                startTime: nextStartTime,
-                endTime: endIsValid
-                  ? shift.endTime
-                  : "",
-              };
-            }
-          );
-
+        /*
+         * Changing operating hours must not change unsaved shift definitions.
+         * Shift validation takes place when shifts are saved separately.
+         */
         return {
           ...currentSchedule,
           [standardFieldName]: value,
           operatingHours: nextOperatingHours,
-          shifts: nextShifts,
         };
       }
     );
@@ -3269,29 +3340,20 @@ const AccountSettings = ({ roles = [] }) => {
     );
   };
 
-  const handleOperatingDayToggle = (
-    dayKey,
-    isOpen
-  ) => {
-    setBranchOperatingSchedule(
-      (currentSchedule) => ({
-        ...currentSchedule,
-        operatingHours: {
-          ...currentSchedule.operatingHours,
-          [dayKey]: {
-            ...currentSchedule.operatingHours?.[dayKey],
-            isOpen,
-            usesStandardHours: true,
-            openingTime: isOpen
-              ? currentSchedule.standardOpeningTime
-              : currentSchedule.standardOpeningTime,
-            closingTime: isOpen
-              ? currentSchedule.standardClosingTime
-              : currentSchedule.standardClosingTime,
-          },
+  const handleOperatingDayToggle = (dayKey, isOpen) => {
+    setBranchOperatingSchedule((currentSchedule) => ({
+      ...currentSchedule,
+      operatingHours: {
+        ...currentSchedule.operatingHours,
+        [dayKey]: {
+          ...currentSchedule.operatingHours?.[dayKey],
+          isOpen,
+          usesStandardHours: true,
+          openingTime: currentSchedule.standardOpeningTime,
+          closingTime: currentSchedule.standardClosingTime,
         },
-      })
-    );
+      },
+    }));
   };
 
   const handleOperatingOverrideToggle = (
@@ -3501,15 +3563,15 @@ const AccountSettings = ({ roles = [] }) => {
     );
   };
 
-  const handleSaveBranchOperations = async () => {
-    if (
-      !isBranchAdmin ||
-      !currentOrganizationId
-    ) {
-      setPageError(
-        "Only the Branch Administrator can update Branch Operations."
-      );
+  /*
+   * Operating hours and shifts save independently so a permission error in one
+   * operation cannot prevent the other configuration from being saved.
+   */
+  const handleSaveOperatingHours = async () => {
+    const currentUser = auth.currentUser;
 
+    if (!currentUser?.uid || !currentOrganizationId) {
+      setPageError("The signed-in user or branch organization could not be resolved.");
       return;
     }
 
@@ -3585,6 +3647,81 @@ const AccountSettings = ({ roles = [] }) => {
         `${invalidOperatingDay.label} opening and closing time cannot be the same.`
       );
 
+      return;
+    }
+
+    const operatingHours =
+      BRANCH_OPERATING_DAYS.reduce(
+        (schedule, day) => {
+          const daySchedule =
+            branchOperatingSchedule.operatingHours?.[day.key] || {};
+
+          const isOpen =
+            daySchedule.isOpen === true;
+
+          schedule[day.key] = {
+            isOpen,
+            openingTime: isOpen
+              ? daySchedule.openingTime
+              : null,
+            closingTime: isOpen
+              ? daySchedule.closingTime
+              : null,
+          };
+
+          return schedule;
+        },
+        {}
+      );
+
+    try {
+      setIsSavingOperatingHours(true);
+      setPageError("");
+
+      /*
+       * Update only the operating hours fields. Existing shift definitions in
+       * the organization document and the shifts collection remain untouched.
+       */
+      await updateDoc(doc(db, "organizations", currentOrganizationId), {
+        "operatingSchedule.operatingHours": operatingHours,
+        "operatingSchedule.configured": true,
+        "operatingSchedule.timezone": branchOperatingSchedule.timezone || "Africa/Accra",
+        "operatingSchedule.updatedAt": serverTimestamp(),
+        "operatingSchedule.updatedBy": currentUser.uid,
+      });
+
+      const nextSchedule = {
+        ...(organization?.operatingSchedule || {}),
+        operatingHours,
+        configured: true,
+        timezone: branchOperatingSchedule.timezone || "Africa/Accra",
+        updatedAt: new Date(),
+        updatedBy: currentUser.uid,
+      };
+      setOrganization((current) => ({ ...current, operatingSchedule: nextSchedule }));
+      setBranchOperatingSchedule((current) => ({ ...current, configured: true }));
+      setIsEditingOperatingHours(false);
+      setPageNotice({ type: "success", message: "Operating hours saved successfully." });
+    } catch (error) {
+      console.error("Unable to save Operating Hours:", error);
+      setPageError(`Operating hours update failed: ${error?.message || "Permission denied."}`);
+    } finally {
+      setIsSavingOperatingHours(false);
+    }
+  };
+
+  const handleSaveBranchShifts = async () => {
+    const currentUser = auth.currentUser;
+
+    if (!currentUser?.uid || !currentOrganizationId) {
+      setPageError("The signed-in user or branch organization could not be resolved.");
+      return;
+    }
+
+    const branchOrganizationId = currentOrganizationId;
+
+    if (!branchOperatingSchedule.standardOpeningTime || !branchOperatingSchedule.standardClosingTime) {
+      setPageError("Set normal opening and closing times before configuring shifts.");
       return;
     }
 
@@ -3677,95 +3814,153 @@ const AccountSettings = ({ roles = [] }) => {
       return;
     }
 
-    const operatingHours =
-      BRANCH_OPERATING_DAYS.reduce(
-        (schedule, day) => {
-          const daySchedule =
-            branchOperatingSchedule.operatingHours?.[day.key] || {};
-
-          const isOpen =
-            daySchedule.isOpen === true;
-
-          schedule[day.key] = {
-            isOpen,
-            openingTime: isOpen
-              ? daySchedule.openingTime
-              : null,
-            closingTime: isOpen
-              ? daySchedule.closingTime
-              : null,
-          };
-
-          return schedule;
-        },
-        {}
-      );
-
-    const operatingSchedule = {
-      configured: true,
-      operatingHours,
-      shifts: cleanedShifts,
-      shiftCount: cleanedShifts.length,
-      timezone:
-        branchOperatingSchedule.timezone ||
-        "Africa/Accra",
-      updatedAt: serverTimestamp(),
-      updatedBy: currentUserId,
-    };
-
     try {
-      setIsSavingBranchOperations(true);
+      setIsSavingBranchShifts(true);
       setPageError("");
 
-      await updateDoc(
-        doc(
-          db,
-          "organizations",
-          currentOrganizationId
-        ),
-        {
-          operatingSchedule,
+      let existingShiftSnapshot;
+
+      try {
+        existingShiftSnapshot =
+          await getDocs(
+            query(
+              collection(
+                db,
+                BRANCH_SHIFTS_COLLECTION
+              ),
+              where(
+                "organizationId",
+                "==",
+                branchOrganizationId
+              )
+            )
+          );
+      } catch (error) {
+        throw new Error(
+          `Shift read permission failed: ${
+            error?.message ||
+            "Unable to read this branch's shifts."
+          }`
+        );
+      }
+
+      const existingShiftDocuments =
+        new Map(
+          existingShiftSnapshot.docs.map(
+            (documentSnapshot) => [
+              documentSnapshot.data()?.shiftId ||
+                documentSnapshot.id,
+              documentSnapshot,
+            ]
+          )
+        );
+
+      /*
+       * Shift definitions are saved independently of the operating hours.
+       * No organization document update is required to save shifts.
+       */
+      const shiftBatch = writeBatch(db);
+
+      cleanedShifts.forEach(
+        (shift, index) => {
+          const shiftDocumentId =
+            `${branchOrganizationId}_${shift.id}`;
+
+          const existingShift =
+            existingShiftDocuments.get(
+              shift.id
+            );
+
+          const shiftReference =
+            existingShift?.ref ||
+            doc(
+              db,
+              BRANCH_SHIFTS_COLLECTION,
+              shiftDocumentId
+            );
+
+          const shiftPayload = {
+            shiftId: shift.id,
+            organizationId:
+              branchOrganizationId,
+            branchId:
+              branchOrganizationId,
+            branchAdminId:
+              currentUser.uid,
+            organizationName:
+              organization?.name || "",
+            organizationType: "branch",
+            name: shift.name,
+            startTime: shift.startTime,
+            endTime: shift.endTime,
+            sequence: index,
+            updatedBy: currentUser.uid,
+            updatedAt: serverTimestamp(),
+          };
+
+          if (!existingShift) {
+            shiftPayload.createdBy =
+              currentUser.uid;
+            shiftPayload.createdAt =
+              serverTimestamp();
+          }
+
+          shiftBatch.set(
+            shiftReference,
+            shiftPayload,
+            {
+              merge: true,
+            }
+          );
         }
       );
 
-      const localOperatingSchedule = {
-        ...operatingSchedule,
-        updatedAt: new Date(),
-      };
+      const currentShiftIds =
+        new Set(
+          cleanedShifts.map(
+            (shift) => shift.id
+          )
+        );
 
-      setOrganization(
-        (currentOrganization) => ({
-          ...currentOrganization,
-          operatingSchedule:
-            localOperatingSchedule,
-        })
+      existingShiftDocuments.forEach(
+        (documentSnapshot, shiftId) => {
+          if (!currentShiftIds.has(shiftId)) {
+            shiftBatch.delete(
+              documentSnapshot.ref
+            );
+          }
+        }
       );
 
-      setBranchOperatingSchedule(
-        createBranchOperatingScheduleForm(
-          localOperatingSchedule
-        )
-      );
+      try {
+        await shiftBatch.commit();
+      } catch (error) {
+        throw new Error(
+          `Shift write failed: ${
+            error?.message ||
+            "The branch shift records could not be saved."
+          }`
+        );
+      }
 
-      setIsEditingBranchOperations(false);
+      const localShiftDefinitions = cleanedShifts.map((shift, index) => ({
+        ...shift,
+        shiftId: shift.id,
+        sequence: index,
+      }));
 
-      setPageNotice({
-        type: "success",
-        message:
-          "Branch operating hours and shift setup have been updated.",
-      });
+      setBranchShiftDefinitions(localShiftDefinitions);
+      setBranchOperatingSchedule((current) => ({
+        ...current,
+        shifts: localShiftDefinitions.map((shift) => ({ ...shift, id: shift.shiftId })),
+      }));
+      setIsEditingBranchShifts(false);
+      setPageNotice({ type: "success", message: "Shifts saved successfully." });
     } catch (error) {
-      console.error(
-        "Unable to save Branch Operations:",
-        error
-      );
-
-      setPageError(
-        error?.message ||
-          "Branch Operations could not be updated."
-      );
+      console.error("Unable to save Branch Shifts:", error);
+      setPageError(error?.message || "Branch shifts could not be updated.");
     } finally {
-      setIsSavingBranchOperations(false);
+      setIsSavingBranchShifts(false);
     }
   };
 
@@ -4621,7 +4816,7 @@ const AccountSettings = ({ roles = [] }) => {
       )}
 
       {activeTab === "branch_operations" &&
-        isBranchAdmin && (
+        isBranchOperationsAdmin && (
           <div className="space-y-6">
             <Card className="overflow-hidden">
               <div
@@ -4658,51 +4853,12 @@ const AccountSettings = ({ roles = [] }) => {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  {!isEditingBranchOperations ? (
-                    <Button
-                      variant="outline"
-                      onClick={handleEditBranchOperations}
-                      className="border-white/30 bg-white text-navy-950 hover:bg-slate-100"
-                    >
-                      Edit Hours & Shifts
-                    </Button>
-                  ) : (
-                    <>
-                      <Button
-                        variant="outline"
-                        onClick={handleCancelBranchOperations}
-                        disabled={isSavingBranchOperations}
-                        className="border-white/30 bg-transparent text-white hover:bg-white/10"
-                      >
-                        Cancel
-                      </Button>
-
-                      <Button
-                        onClick={handleSaveBranchOperations}
-                        disabled={isSavingBranchOperations}
-                        className="bg-white text-navy-950 hover:bg-slate-100"
-                      >
-                        {isSavingBranchOperations ? (
-                          <>
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                            Saving...
-                          </>
-                        ) : (
-                          <>
-                            <Check className="h-4 w-4" />
-                            Save Changes
-                          </>
-                        )}
-                      </Button>
-                    </>
-                  )}
-                </div>
+                <p className="text-xs text-slate-300">Opening hours and shifts are saved separately.</p>
               </div>
             </Card>
 
             {!branchOperatingSchedule.configured &&
-              !isEditingBranchOperations && (
+              !isEditingOperatingHours && (
                 <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                   <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                   <p>
@@ -4729,9 +4885,21 @@ const AccountSettings = ({ roles = [] }) => {
                     </p>
                   </div>
                 </div>
+                <div className="mt-4 flex flex-wrap gap-2 sm:mt-0">
+                  {isEditingOperatingHours ? (
+                    <>
+                      <Button variant="outline" onClick={handleCancelOperatingHours} disabled={isSavingOperatingHours}>Cancel</Button>
+                      <Button onClick={handleSaveOperatingHours} disabled={isSavingOperatingHours}>
+                        {isSavingOperatingHours ? "Saving Hours..." : "Save Operating Hours"}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button variant="outline" onClick={handleEditOperatingHours}>Set Operating Hours</Button>
+                  )}
+                </div>
               </div>
 
-              {isEditingBranchOperations ? (
+              {isEditingOperatingHours ? (
                 <div className="space-y-6 px-6 py-6">
                   <div>
                     <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -5059,15 +5227,21 @@ const AccountSettings = ({ roles = [] }) => {
                   </div>
                 </div>
 
-                {isEditingBranchOperations && (
-                  <Button
-                    variant="outline"
-                    onClick={handleAddShift}
-                  >
-                    <Plus className="h-4 w-4" />
-                    Add Shift
-                  </Button>
-                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  {isEditingBranchShifts ? (
+                    <>
+                      <Button variant="outline" onClick={handleAddShift} disabled={isSavingBranchShifts}>
+                        <Plus className="h-4 w-4" /> Add Shift
+                      </Button>
+                      <Button variant="outline" onClick={handleCancelBranchShifts} disabled={isSavingBranchShifts}>Cancel</Button>
+                      <Button onClick={handleSaveBranchShifts} disabled={isSavingBranchShifts}>
+                        {isSavingBranchShifts ? "Saving Shifts..." : "Save Shifts"}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button variant="outline" onClick={handleEditBranchShifts}>Set Shifts</Button>
+                  )}
+                </div>
               </div>
 
               {branchOperatingSchedule.shifts.length > 0 ? (
@@ -5077,7 +5251,7 @@ const AccountSettings = ({ roles = [] }) => {
                       key={shift.id}
                       className="px-6 py-5"
                     >
-                      {isEditingBranchOperations ? (
+                      {isEditingBranchShifts ? (
                         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(180px,1fr)_180px_180px_auto] lg:items-end">
                           <label className="block">
                             <span className="mb-1.5 block text-xs font-semibold text-slate-500">
@@ -5186,7 +5360,7 @@ const AccountSettings = ({ roles = [] }) => {
                     No shifts configured
                   </p>
                   <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-400">
-                    {isEditingBranchOperations
+                    {isEditingBranchShifts
                       ? "Add the first shift and enter its start and end time."
                       : "Edit Branch Operations to add the branch's shifts."}
                   </p>
