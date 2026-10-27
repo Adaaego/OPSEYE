@@ -15,7 +15,7 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase
-const app = getApps.length > 0 ? getApp() : initializeApp(firebaseConfig); //checks if firebase has been set  up in the application - this prevents errors
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig); //checks if firebase has been set  up in the application - this prevents errors
 const auth = getAuth(app);
 const db = getFirestore(app);
 

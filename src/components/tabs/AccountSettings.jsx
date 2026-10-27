@@ -1910,8 +1910,25 @@ const AccountSettings = ({ roles = [] }) => {
         throw new Error("Your organization record could not be found.");
       }
 
+      let branchHoursSnapshot = null;
+      if (currentOrganization.type === "branch") {
+        try {
+          branchHoursSnapshot = await getDoc(
+            doc(db, "branchOperatingHours", organizationMember.organizationId)
+          );
+        } catch (error) {
+          if (error?.code !== "permission-denied") {
+            throw error;
+          }
+        }
+      }
+      const effectiveOperatingSchedule = branchHoursSnapshot?.exists()
+        ? { ...(currentOrganization.operatingSchedule || {}), ...branchHoursSnapshot.data() }
+        : currentOrganization.operatingSchedule;
+
       const normalizedOrganization = {
         ...currentOrganization,
+        operatingSchedule: effectiveOperatingSchedule,
         id:
           organizationMember.organizationId,
         organizationId:
@@ -3678,17 +3695,45 @@ const AccountSettings = ({ roles = [] }) => {
       setIsSavingOperatingHours(true);
       setPageError("");
 
-      /*
-       * Update only the operating hours fields. Existing shift definitions in
-       * the organization document and the shifts collection remain untouched.
-       */
-      await updateDoc(doc(db, "organizations", currentOrganizationId), {
-        "operatingSchedule.operatingHours": operatingHours,
-        "operatingSchedule.configured": true,
-        "operatingSchedule.timezone": branchOperatingSchedule.timezone || "Africa/Accra",
-        "operatingSchedule.updatedAt": serverTimestamp(),
-        "operatingSchedule.updatedBy": currentUser.uid,
-      });
+      const operatingHoursRef = doc(db, "branchOperatingHours", currentOrganizationId);
+      const timezone = branchOperatingSchedule.timezone || "Africa/Accra";
+      const organizationData = organization || {};
+      const hierarchy = {
+        organizationId: currentOrganizationId,
+        organizationType: "branch",
+        parentId: organizationData.parentId || "",
+        rootEnterpriseId: organizationData.rootEnterpriseId || "",
+        ancestorIds: Array.isArray(organizationData.ancestorIds) ? organizationData.ancestorIds : [],
+        regionId: organizationData.regionId || "",
+        sector: organizationData.sector || "",
+        companyId: organizationData.companyId || "",
+      };
+
+      const currentSnapshot = await getDoc(operatingHoursRef);
+      const now = serverTimestamp();
+      const currentPayload = {
+        ...hierarchy,
+        configured: true,
+        timezone,
+        operatingHours,
+        createdAt: currentSnapshot.exists() ? currentSnapshot.data().createdAt : now,
+        createdBy: currentSnapshot.exists() ? currentSnapshot.data().createdBy : currentUser.uid,
+        updatedAt: now,
+        updatedBy: currentUser.uid,
+      };
+      const historyPayload = {
+        ...hierarchy,
+        configured: true,
+        timezone,
+        operatingHours,
+        changedAt: now,
+        changedBy: currentUser.uid,
+        changeSource: "account_settings",
+      };
+      const hoursBatch = writeBatch(db);
+      hoursBatch.set(operatingHoursRef, currentPayload, { merge: true });
+      hoursBatch.set(doc(collection(db, "branchOperatingHoursHistory")), historyPayload);
+      await hoursBatch.commit();
 
       const nextSchedule = {
         ...(organization?.operatingSchedule || {}),
@@ -3890,6 +3935,12 @@ const AccountSettings = ({ roles = [] }) => {
             organizationName:
               organization?.name || "",
             organizationType: "branch",
+            parentId: organization?.parentId || "",
+            rootEnterpriseId: organization?.rootEnterpriseId || "",
+            ancestorIds: Array.isArray(organization?.ancestorIds) ? organization.ancestorIds : [],
+            regionId: organization?.regionId || "",
+            sector: organization?.sector || "",
+            companyId: organization?.companyId || "",
             name: shift.name,
             startTime: shift.startTime,
             endTime: shift.endTime,
@@ -4869,7 +4920,7 @@ const AccountSettings = ({ roles = [] }) => {
               )}
 
             <Card className="overflow-hidden">
-              <div className="border-b border-slate-100 px-6 py-5">
+              <div className="flex flex-col gap-4 border-b border-slate-100 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-start gap-3">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
                     <CalendarDays className="h-5 w-5" />
@@ -4885,7 +4936,7 @@ const AccountSettings = ({ roles = [] }) => {
                     </p>
                   </div>
                 </div>
-                <div className="mt-4 flex flex-wrap gap-2 sm:mt-0">
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
                   {isEditingOperatingHours ? (
                     <>
                       <Button variant="outline" onClick={handleCancelOperatingHours} disabled={isSavingOperatingHours}>Cancel</Button>
@@ -5497,7 +5548,20 @@ const AccountSettings = ({ roles = [] }) => {
                 </div>
               )}
 
-              {savedBranchShifts.length === 0 ? (
+              {!BRANCH_OPERATING_DAYS.some(
+                (day) => organization?.operatingSchedule?.operatingHours?.[day.key]?.isOpen === true
+              ) ? (
+                <div className="px-6 py-12 text-center">
+                  <CalendarDays className="mx-auto h-8 w-8 text-slate-300" />
+                  <p className="mt-3 text-sm font-semibold text-slate-700">
+                    No operating days configured
+                  </p>
+                  <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-500">
+                    Weekly staff assignments appear after at least one operating day has been saved.
+                    Set Operating Hours above to enable the roster.
+                  </p>
+                </div>
+              ) : savedBranchShifts.length === 0 ? (
                 <div className="px-6 py-12 text-center">
                   <Users className="mx-auto h-8 w-8 text-slate-300" />
                   <p className="mt-3 text-sm font-semibold text-slate-700">
