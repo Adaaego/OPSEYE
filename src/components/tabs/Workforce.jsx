@@ -6630,6 +6630,11 @@ const Workforce = () => {
         return;
       }
 
+      if (editingRecord?.headcountSource === "branch_staff") {
+        setFormError("This role's headcount is managed through Branch Members in Account Settings.");
+        return;
+      }
+
       const duplicateRecord =
         enrichedRecords.find(
           (record) =>

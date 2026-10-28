@@ -26,6 +26,7 @@ import {
   Trash2,
   User,
   Users,
+  Pencil,
   X,
 } from "lucide-react";
 
@@ -39,6 +40,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
   query,
   serverTimestamp,
   setDoc,
@@ -63,6 +65,7 @@ import {
   inviteOrganizationTeamMember,
 } from "../../lib/organization-workflows";
 import { TEAM_INVITABLE_ROLES } from "../../lib/types";
+import { WORKFORCE_ROLE_OPTIONS, getWorkforceRoleById } from "../../lib/workforce-roles";
 import {
   getCompanyById,
   getCompanyByNormalizedName,
@@ -134,6 +137,8 @@ const BRANCH_OPERATING_DAYS = [
     label: "Sunday",
   },
 ];
+
+const BRANCH_STAFF_COLLECTION = "branchStaff";
 
 const BRANCH_SHIFTS_COLLECTION =
   "shifts";
@@ -1741,6 +1746,15 @@ const AccountSettings = ({ roles = [] }) => {
   const [defaultTeam, setDefaultTeam] = useState(null);
 
   const [teamMembers, setTeamMembers] = useState([]);
+  const [branchStaff, setBranchStaff] = useState([]);
+  const [branchStaffError, setBranchStaffError] = useState("");
+  const [editingBranchStaffId, setEditingBranchStaffId] = useState("");
+  const [showBranchStaffForm, setShowBranchStaffForm] = useState(false);
+  const [isSavingBranchStaff, setIsSavingBranchStaff] = useState(false);
+  const [branchStaffForm, setBranchStaffForm] = useState({
+    fullName: "", phoneNumber: "", roleId: "fuel_station_attendant",
+    employmentType: "local",
+  });
   const [pendingInvites, setPendingInvites] = useState([]);
   const [hierarchyLevels, setHierarchyLevels] = useState([]);
 
@@ -2641,6 +2655,25 @@ const AccountSettings = ({ roles = [] }) => {
       setInviteRole(roleOptions[0]?.value || "");
     }
   }, [inviteRole, roleOptions]);
+
+  useEffect(() => {
+    const branchId = getOrganizationId(organization);
+    if (!branchId || organization?.type !== "branch") {
+      setBranchStaff([]);
+      return undefined;
+    }
+    const staffQuery = query(
+      collection(db, BRANCH_STAFF_COLLECTION),
+      where("organizationId", "==", branchId)
+    );
+    return onSnapshot(staffQuery, (snapshot) => {
+      setBranchStaff(snapshot.docs.map((record) => ({ id: record.id, ...record.data() })));
+      setBranchStaffError("");
+    }, (error) => {
+      console.error("Unable to load Branch Members:", error);
+      setBranchStaffError(error.message || "Unable to load Branch Members.");
+    });
+  }, [organization?.organizationId, organization?.type]);
 
   const currentOrganizationId = getOrganizationId(organization);
   const teamId = defaultTeam?.teamId || defaultTeam?.id || "";
@@ -4027,6 +4060,13 @@ const AccountSettings = ({ roles = [] }) => {
     userId,
     checked,
   }) => {
+    if (checked && Object.entries(branchShiftRoster.days?.[dayKey]?.assignments || {}).some(
+      ([otherShiftId, assigned]) => otherShiftId !== shiftId && assigned.includes(userId)
+    )) {
+      setShiftRosterError("This Branch Member is already assigned to another shift on this day.");
+      return;
+    }
+    setShiftRosterError("");
     setBranchShiftRoster(
       (currentRoster) => {
         const currentAssignments =
@@ -4126,6 +4166,98 @@ const AccountSettings = ({ roles = [] }) => {
     }
   };
 
+  const resetBranchStaffForm = () => {
+    setEditingBranchStaffId("");
+    setBranchStaffForm({
+      fullName: "", phoneNumber: "", roleId: "fuel_station_attendant",
+      employmentType: "local",
+    });
+    setShowBranchStaffForm(false);
+    setBranchStaffError("");
+  };
+
+  const handleSaveBranchStaff = async (event) => {
+    event.preventDefault();
+    const name = branchStaffForm.fullName.trim().replace(/\s+/g, " ");
+    const phone = branchStaffForm.phoneNumber.trim();
+    if (!isBranchAdmin || !currentOrganizationId) {
+      setBranchStaffError("Only a Branch Admin may manage Branch Members.");
+      return;
+    }
+    if (!name || !/^0\d{9}$/.test(phone) || !getWorkforceRoleById(branchStaffForm.roleId)) {
+      setBranchStaffError("Enter a name, a valid 10-digit Ghana number and a workforce role.");
+      return;
+    }
+    if (branchStaff.some((staff) => staff.id !== editingBranchStaffId && staff.phoneNumber === phone && staff.status === "active")) {
+      setBranchStaffError("An active Branch Member already uses this phone number.");
+      return;
+    }
+    try {
+      setIsSavingBranchStaff(true);
+      setBranchStaffError("");
+      const memberRef = editingBranchStaffId
+        ? doc(db, BRANCH_STAFF_COLLECTION, editingBranchStaffId)
+        : doc(collection(db, BRANCH_STAFF_COLLECTION));
+      const existingMember = branchStaff.find((item) => item.id === editingBranchStaffId);
+      const nextMember = {
+        fullName: name, phoneNumber: phone, roleId: branchStaffForm.roleId,
+        employmentType: branchStaffForm.employmentType, status: existingMember?.status || "active",
+        organizationId: currentOrganizationId, organizationType: "branch",
+        organizationName: organization?.name || "",
+        parentId: organization?.parentId || "",
+        parentOrganizationId: organization?.parentId || "",
+        rootEnterpriseId: organization?.rootEnterpriseId || organization?.enterpriseId || "",
+        enterpriseId: organization?.rootEnterpriseId || organization?.enterpriseId || "",
+        ancestorIds: organization?.ancestorIds || [],
+        regionId: organization?.regionId || "",
+        sector: organization?.sector || profile?.sector || "",
+        companyId: organization?.companyId || "",
+        country: organization?.country || profile?.country || "",
+        industrySegment: organization?.industrySegment || "",
+        updatedAt: serverTimestamp(), updatedBy: currentUserId,
+      };
+      if (!existingMember) {
+        nextMember.createdAt = serverTimestamp();
+        nextMember.createdBy = currentUserId;
+      }
+      if (existingMember) {
+        await updateDoc(memberRef, {
+          fullName: name,
+          phoneNumber: phone,
+          roleId: branchStaffForm.roleId,
+          employmentType: branchStaffForm.employmentType,
+          updatedAt: serverTimestamp(),
+          updatedBy: currentUserId,
+        });
+      } else {
+        await setDoc(memberRef, nextMember);
+      }
+      resetBranchStaffForm();
+      setPageNotice({ type: "success", message: "Branch Member saved." });
+    } catch (error) {
+      console.error("Unable to save Branch Member:", error);
+      setBranchStaffError(error.message || "Branch Member could not be saved.");
+    } finally {
+      setIsSavingBranchStaff(false);
+    }
+  };
+
+  const handleSetBranchStaffStatus = async (member, status) => {
+    try {
+      setBranchStaffError("");
+      if (!isBranchAdmin || member.organizationId !== currentOrganizationId) {
+        throw new Error("Only the Branch Admin can update members of their Branch.");
+      }
+      await updateDoc(doc(db, BRANCH_STAFF_COLLECTION, member.id), {
+        status,
+        updatedAt: serverTimestamp(),
+        updatedBy: currentUserId,
+      });
+    } catch (error) {
+      setBranchStaffError(error.message || "Could not update staff status.");
+    }
+  };
+
   const handleSaveShiftRoster = async () => {
     if (
       !isBranchAdmin ||
@@ -4147,11 +4279,23 @@ const AccountSettings = ({ roles = [] }) => {
     }
 
     const memberById = new Map(
-      teamMembers.map((member) => [
-        member.uid || member.id,
+      branchStaff.map((member) => [
+        member.id,
         member,
       ])
     );
+
+    for (const day of BRANCH_OPERATING_DAYS) {
+      const assignments = Object.values(branchShiftRoster.days?.[day.key]?.assignments || {}).flat();
+      if (new Set(assignments).size !== assignments.length) {
+        setShiftRosterError(`A Branch Member cannot be assigned to two shifts on ${day.label}.`);
+        return;
+      }
+      if (assignments.some((id) => !branchStaff.some((member) => member.id === id && member.status === "active"))) {
+        setShiftRosterError(`Remove inactive or unknown staff from ${day.label} before saving.`);
+        return;
+      }
+    }
 
     const days = BRANCH_OPERATING_DAYS.reduce(
       (schedule, day, dayIndex) => {
@@ -4202,10 +4346,9 @@ const AccountSettings = ({ roles = [] }) => {
                     name:
                       member.fullName ||
                       member.displayName ||
-                      member.email ||
-                      "Team member",
-                    email: member.email || "",
-                    role: member.role || "",
+                      "Branch Member",
+                    phoneNumber: member.phoneNumber || "",
+                    roleId: member.roleId || "",
                   };
                 })
                 .filter(Boolean);
@@ -4863,6 +5006,230 @@ const AccountSettings = ({ roles = [] }) => {
               </div>
             )}
           </Card>
+
+          {isBranchContext && (
+            <Card className="p-6">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <SectionHeader>Branch Members</SectionHeader>
+                  <p className="-mt-2 text-sm text-slate-500">
+                    Operational staff who do not need an email invitation. Active Branch Members are available for shift scheduling. Workforce totals remain manually managed.
+                  </p>
+                </div>
+                {isBranchAdmin && (
+                  <Button
+                    onClick={() => {
+                      resetBranchStaffForm();
+                      setShowBranchStaffForm(true);
+                    }}
+                    className="bg-navy-950 text-white hover:bg-navy-900"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add Branch Member
+                  </Button>
+                )}
+              </div>
+
+              {branchStaffError && (
+                <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+                  <p className="text-sm font-medium text-red-700">{branchStaffError}</p>
+                </div>
+              )}
+
+              {showBranchStaffForm && isBranchAdmin && (
+                <Card className="mt-5 border border-slate-200 bg-slate-50 p-6">
+                  <div className="mb-5">
+                    <h3 className="text-base font-semibold text-slate-900">
+                      {editingBranchStaffId ? "Edit Branch Member" : "Add Branch Member"}
+                    </h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Add operational staff who can be assigned to shifts. Workforce headcounts are maintained separately.
+                    </p>
+                  </div>
+
+                  <form onSubmit={handleSaveBranchStaff} className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div>
+                      <label
+                        htmlFor="branchStaffFullName"
+                        className="mb-1.5 block text-sm font-medium text-slate-700"
+                      >
+                        Full Name
+                      </label>
+                      <input
+                        id="branchStaffFullName"
+                        required
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-navy-950 focus:ring-2 focus:ring-navy-100"
+                        placeholder="e.g. Kwame Mensah"
+                        value={branchStaffForm.fullName}
+                        onChange={(event) =>
+                          setBranchStaffForm((current) => ({
+                            ...current,
+                            fullName: event.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="branchStaffPhone"
+                        className="mb-1.5 block text-sm font-medium text-slate-700"
+                      >
+                        Phone Number
+                      </label>
+                      <input
+                        id="branchStaffPhone"
+                        required
+                        type="tel"
+                        inputMode="numeric"
+                        maxLength={10}
+                        pattern="0[0-9]{9}"
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-navy-950 focus:ring-2 focus:ring-navy-100"
+                        placeholder="0241234567"
+                        value={branchStaffForm.phoneNumber}
+                        onChange={(event) =>
+                          setBranchStaffForm((current) => ({
+                            ...current,
+                            phoneNumber: event.target.value.replace(/\D/g, "").slice(0, 10),
+                          }))
+                        }
+                      />
+                      <p className="mt-1 text-xs text-slate-500">
+                        Ghana phone numbers should be 10 digits.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="branchStaffRole"
+                        className="mb-1.5 block text-sm font-medium text-slate-700"
+                      >
+                        Workforce Role
+                      </label>
+                      <select
+                        id="branchStaffRole"
+                        required
+                        value={branchStaffForm.roleId}
+                        onChange={(event) =>
+                          setBranchStaffForm((current) => ({
+                            ...current,
+                            roleId: event.target.value,
+                          }))
+                        }
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-navy-950 focus:ring-2 focus:ring-navy-100"
+                      >
+                        {WORKFORCE_ROLE_OPTIONS.map((role) => (
+                          <option key={role.value} value={role.value}>
+                            {role.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="branchStaffClassification"
+                        className="mb-1.5 block text-sm font-medium text-slate-700"
+                      >
+                        Workforce Classification
+                      </label>
+                      <select
+                        id="branchStaffClassification"
+                        value={branchStaffForm.employmentType}
+                        onChange={(event) =>
+                          setBranchStaffForm((current) => ({
+                            ...current,
+                            employmentType: event.target.value,
+                          }))
+                        }
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-navy-950 focus:ring-2 focus:ring-navy-100"
+                      >
+                        <option value="local">Local</option>
+                        <option value="expatriate">Expatriate</option>
+                      </select>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 md:col-span-2">
+                      <Button
+                        type="submit"
+                        disabled={isSavingBranchStaff}
+                        className="bg-navy-950 text-white hover:bg-navy-900"
+                      >
+                        {isSavingBranchStaff ? "Saving..." : editingBranchStaffId ? "Update Branch Member" : "Save Branch Member"}
+                      </Button>
+                      <Button type="button" variant="outline" onClick={resetBranchStaffForm}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </form>
+                </Card>
+              )}
+
+              <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200">
+                {branchStaff.length === 0 ? (
+                  <div className="px-5 py-6 text-sm text-slate-500">
+                    No Branch Members registered.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-200">
+                    {branchStaff.map((member) => (
+                      <div
+                        key={member.id}
+                        className="flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center lg:justify-between"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold text-slate-900">
+                              {member.fullName}
+                            </p>
+                            <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${member.status === "inactive" ? "bg-slate-100 text-slate-600" : "bg-emerald-100 text-emerald-700"}`}>
+                              {member.status === "inactive" ? "Inactive" : "Active"}
+                            </span>
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                            <span>Phone: {member.phoneNumber}</span>
+                            <span>Role: {getWorkforceRoleById(member.roleId)?.name || member.roleId}</span>
+                            <span>Classification: {member.employmentType === "expatriate" ? "Expatriate" : "Local"}</span>
+                          </div>
+                        </div>
+
+                        {isBranchAdmin && (
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              variant="outline"
+                              onClick={() => {
+                                setEditingBranchStaffId(member.id);
+                                setBranchStaffForm({
+                                  fullName: member.fullName,
+                                  phoneNumber: member.phoneNumber,
+                                  roleId: member.roleId,
+                                  employmentType: member.employmentType || "local",
+                                });
+                                setShowBranchStaffForm(true);
+                              }}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              variant="outline"
+                              onClick={() =>
+                                handleSetBranchStaffStatus(
+                                  member,
+                                  member.status === "inactive" ? "active" : "inactive"
+                                )
+                              }
+                            >
+                              {member.status === "inactive" ? "Reactivate" : "Deactivate"}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </Card>
+          )}
         </div>
       )}
 
@@ -5634,9 +6001,9 @@ const AccountSettings = ({ roles = [] }) => {
                               dayRoster.assignments?.[shift.id] || [];
                             const assignedMembers = assignedUserIds
                               .map((userId) =>
-                                teamMembers.find(
+                                branchStaff.find(
                                   (member) =>
-                                    (member.uid || member.id) === userId
+                                    member.id === userId
                                 )
                               )
                               .filter(Boolean);
@@ -5664,12 +6031,12 @@ const AccountSettings = ({ roles = [] }) => {
                                       {assignedMembers.length > 0 ? (
                                         assignedMembers.map((member) => (
                                           <span
-                                            key={member.uid || member.id}
+                                            key={member.id}
                                             className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700"
                                           >
                                             {member.fullName ||
                                               member.displayName ||
-                                              member.email}
+                                              member.phoneNumber}
                                           </span>
                                         ))
                                       ) : (
@@ -5699,16 +6066,15 @@ const AccountSettings = ({ roles = [] }) => {
 
                                 {assignmentOpen && (
                                   <div className="border-t border-slate-100 bg-slate-50 p-4">
-                                    {teamMembers.length > 0 ? (
+                                    {branchStaff.filter((member) => member.status === "active").length > 0 ? (
                                       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                                        {teamMembers.map((member) => {
+                                        {branchStaff.filter((member) => member.status === "active").map((member) => {
                                           const memberId =
-                                            member.uid || member.id || "";
+                                            member.id || "";
                                           const memberName =
                                             member.fullName ||
                                             member.displayName ||
-                                            member.email ||
-                                            "Team member";
+                                            "Branch Member";
 
                                           return (
                                             <label
@@ -5737,7 +6103,7 @@ const AccountSettings = ({ roles = [] }) => {
                                                   {memberName}
                                                 </span>
                                                 <span className="mt-0.5 block truncate text-xs text-slate-500">
-                                                  {formatRole(member.role)}
+                                                  {getWorkforceRoleById(member.roleId)?.name || member.roleId}
                                                 </span>
                                               </span>
                                             </label>
@@ -5746,7 +6112,7 @@ const AccountSettings = ({ roles = [] }) => {
                                       </div>
                                     ) : (
                                       <p className="text-sm text-slate-500">
-                                        No branch team members are available to assign.
+                                        Add active Branch Members under the Team tab before assigning shifts.
                                       </p>
                                     )}
                                   </div>
