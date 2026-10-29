@@ -1920,6 +1920,7 @@ const buildReportTimeline = (
     currentStageRole &&
     currentStageRole !==
       "—" &&
+    !["ministry", "ministry_admin", "agency", "agency_admin"].includes(normalizeStatus(currentStageRole)) &&
     !events.some(
       (event) =>
         Math.abs(
@@ -2844,6 +2845,7 @@ const EmptyState = ({
 const SubmissionViewer = ({
   report,
   onClose,
+  isMinistryUser = false,
 }) => {
   const [
     visible,
@@ -2915,12 +2917,40 @@ const SubmissionViewer = ({
       report
     );
 
-  const timeline =
-    Array.isArray(
-      report.timeline
-    )
-      ? report.timeline
-      : [];
+  /*
+   * Company viewers follow the internal Branch -> Region -> Enterprise audit.
+   * Ministry/agency viewers can inspect the full recorded history. Reaching a
+   * regulatory stage does not constitute an additional approval/submission.
+   */
+  const timeline = useMemo(() => {
+    const recorded = Array.isArray(report?.timeline) ? report.timeline : [];
+    const visible = recorded.filter((event) => {
+      const role = normalizeStatus(event?.role);
+      const action = normalizeStatus(event?.action);
+      const title = normalizeStatus(event?.title);
+      // A standalone transfer-to-Ministry notification is not an approval.
+      if (/(?:sent|submitted|forwarded|moved)_to_(?:the_)?ministry/.test(action) ||
+          (/(?:sent|submitted|forwarded)_to_(?:the_)?ministry/.test(title) &&
+           !/(?:approved|approval)/.test(title))) return false;
+      if (isMinistryUser) return true;
+      return !["ministry", "ministry_admin", "agency", "agency_admin"].includes(role);
+    });
+
+    return visible.map((event, index) => {
+      const previous = visible[index - 1];
+      const title = !isMinistryUser
+        ? String(event.title || "").replace(/(?:auto[ -]?)?approved\s+to\s+(?:the\s+)?ministry/gi, "approved — internal review complete").replace(/\b(?:sent|submitted|forwarded)\s+to\s+(?:the\s+)?ministry\b/gi, "internal review complete")
+        : event.title;
+      return {
+        ...event,
+        title,
+        note: !isMinistryUser
+          ? String(event.note || "").replace(/\b(?:sent|submitted|forwarded)\s+to\s+(?:the\s+)?ministry\b/gi, "internal review completed")
+          : event.note,
+        durationFromPrevious: previous ? event.timestamp - previous.timestamp : 0,
+      };
+    });
+  }, [report?.timeline, isMinistryUser]);
 
   const longestDelayEvent =
     timeline.find(
@@ -5036,8 +5066,7 @@ const Reports = ({
                 value:
                   report.organizationId,
                 label:
-                  report.organizationName ===
-                  report.operator
+                  !isMinistryUser || report.organizationName === report.operator
                     ? report.organizationName
                     : `${report.operator} — ${report.organizationName}`,
               }
@@ -5056,6 +5085,7 @@ const Reports = ({
     }, [
       operatorFilter,
       submittedReports,
+      isMinistryUser,
     ]);
 
   const regionOptions =
@@ -5649,7 +5679,7 @@ const Reports = ({
       if (
         currentOrganization
       ) {
-        return `Showing submitted reports from reporting organizations within ${currentOrganization.name || "your organisation"} and its hierarchy.`;
+        return `Showing submitted reports from branches within ${currentOrganization.name || "your company"} and its reporting scope.`;
       }
 
       return "";
@@ -5968,7 +5998,7 @@ const Reports = ({
           placeholder="Search reports, branches or enterprises…"
         />
 
-        <FilterSelect
+        {isMinistryUser && <FilterSelect
           value={
             operatorFilter
           }
@@ -5988,7 +6018,7 @@ const Reports = ({
           }
           placeholder="All Operators"
           className="w-44"
-        />
+        />}
 
         <FilterSelect
           value={
@@ -6005,7 +6035,7 @@ const Reports = ({
           options={
             organizationOptions
           }
-          placeholder="All Organisations"
+          placeholder={isMinistryUser ? "All Organisations" : "All Branches"}
           className="w-52"
         />
 
@@ -6625,7 +6655,9 @@ const Reports = ({
                               {report.organizationName}
                             </p>
 
-                            {report.operator &&
+                            {/* Show the parent operator only in regulatory cross-company views. */}
+                            {isMinistryUser &&
+                              report.operator &&
                               normalizeText(
                                 report.operator
                               ) !==
@@ -6787,6 +6819,7 @@ const Reports = ({
           report={
             selectedReport
           }
+          isMinistryUser={isMinistryUser}
           onClose={
             closeSelectedReport
           }
