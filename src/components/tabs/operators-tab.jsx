@@ -1558,7 +1558,7 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
           </div>
 
           <p className="text-sm text-slate-500">
-            Monitor production, estimated revenue, reporting compliance and workforce performance across this scope.
+            Monitor sales volume, estimated revenue, reporting compliance and workforce allocation across this scope.
           </p>
         </div>
 
@@ -1619,7 +1619,7 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
 
                 <SortHeader label={listLabel.singular} sortKey="name" activeSortKey={sortKey} sortDirection={sortDirection} onSort={toggleSort}/>
 
-                <SortHeader label="Latest Production" sortKey="productionToday" activeSortKey={sortKey} sortDirection={sortDirection} onSort={toggleSort}/>
+                <SortHeader label="Latest Sales Volume (L)" sortKey="productionToday" activeSortKey={sortKey} sortDirection={sortDirection} onSort={toggleSort}/>
 
                 <SortHeader label="Latest Estimated Revenue" sortKey="estimatedDailyRevenue" activeSortKey={sortKey} sortDirection={sortDirection} onSort={toggleSort}/>
 
@@ -1807,10 +1807,10 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
                               <div className="ml-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
                                 {operatorBranches.length >
                         0 ? (<Table headers={[
-                            "Organization",
+                            (operator.organizationLevel === "enterprise" ? "Region / Branch" : "Station / Branch"),
                             "Region",
                             "Administrator",
-                            "Latest Production",
+                            "Latest Sales Volume (L)",
                             "Local Workforce",
                             "Estimated Revenue",
                             "On-time Compliance",

@@ -277,7 +277,7 @@ const toNumber = (value) => {
         : 0;
 };
 /*
- * Product filters use the stable reporting metric keys rather than form labels.
+ * Sales volume filters use the stable reporting metric keys rather than form labels.
  * Petrol and Diesel isolate product performance; the empty value preserves the
  * existing combined fuel view.
  */
@@ -376,7 +376,7 @@ const getWorkforceFutureNeed = (record) => {
 };
 const getWorkforceShortage = (record) => {
     /*
-     * The current workforce gap is the combination of positions already vacant
+     * The reported workforce gap combines positions already vacant
      * and additional positions expected to be required in the future.
      */
     return (getWorkforceVacancies(record) +
@@ -493,7 +493,7 @@ const buildProductionTrend = (reports, range, product = "") => {
         0) {
         return {
             data: [],
-            title: `Production Trend — ${range.label}`,
+            title: `Sales Volume by Day — ${range.label}`,
             granularity: "day",
         };
     }
@@ -514,7 +514,7 @@ const buildProductionTrend = (reports, range, product = "") => {
     /*
      * Do not keep adding one bar per calendar day forever.
      *
-     * Short ranges remain daily because individual reporting days matter.
+     * Short ranges remain daily because individual station reporting days matter.
      * Medium ranges roll up by week, and long ranges roll up by month. This
      * keeps an all-time chart readable as years of reporting data accumulate.
      */
@@ -610,7 +610,7 @@ const buildProductionTrend = (reports, range, product = "") => {
             : "Day";
     return {
         data,
-        title: `Production by ${granularityLabel} — ${range.label}`,
+        title: `Sales Volume by ${granularityLabel} — ${range.label}`,
         granularity,
     };
 };
@@ -1533,7 +1533,7 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
             </div>
 
             <p className="text-sm text-slate-500">
-              Monitor production, estimated revenue, reporting compliance and workforce performance for this organization.
+              Monitor sales volume, estimated revenue, reporting compliance and workforce allocation across this scope.
             </p>
           </div>
         </div>
@@ -1682,12 +1682,12 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
           </div>)}
 
         <p className="mt-2 pl-1 text-[11px] text-slate-400">
-          Product filtering recalculates production, estimated revenue, charts, reporting history and child-organization product performance. Compliance remains report-level because the reporting obligation itself is not product-specific. Region also filters the dedicated workforce records. Current period: {selectedPeriodLabel}.
+          Product filtering recalculates sales volume, estimated revenue, charts, reporting history and station/branch product performance. Compliance remains report-level because the reporting obligation itself is not product-specific. Region also filters the dedicated workforce records. Current period: {selectedPeriodLabel}.
         </p>
       </div>
 
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <KpiCard label={`${getProductLabel(reportingProduct)} Production for Period`} value={productionToday >
+        <KpiCard label={reportingProduct ? `${getProductLabel(reportingProduct)} Volume Sold (Period)` : "Total Volume Sold (Period)"} value={productionToday >
             0
             ? `${formatNumber(productionToday)} L`
             : "—"} caption={reportingProduct ===
@@ -1701,7 +1701,7 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
         <KpiCard label={`${getProductLabel(reportingProduct)} Estimated Revenue for Period`} value={estimatedDailyRevenue >
             0
             ? formatCurrency(estimatedDailyRevenue)
-            : "—"} caption={`Calculated for ${getProductLabel(reportingProduct).toLowerCase()} from submitted volumes and linked company fuel prices · ${selectedPeriodLabel}`} icon={Banknote}/>
+            : "—"} caption={`Estimated from submitted sales volumes and linked company retail pump prices · ${selectedPeriodLabel}`} icon={Banknote}/>
 
         <KpiCard label="Submission Completion" value={reportsExpected >
             0 ? (<span style={{
@@ -1757,7 +1757,7 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
 
       <div className="mb-8">
         <SectionHeader>
-          {filteredSummary.productionTrendTitle} · {getProductLabel(reportingProduct)}
+          {filteredSummary.productionTrendTitle}{reportingProduct ? ` · ${getProductLabel(reportingProduct)}` : ""}
         </SectionHeader>
 
         <Card className="p-5">
@@ -1789,7 +1789,7 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
 
                 <Tooltip formatter={(value) => [
                 `${formatNumber(value)} litres`,
-                `${getProductLabel(reportingProduct)} Production`,
+                "Sales volume",
             ]} contentStyle={{
                 fontSize: 13,
                 borderRadius: 8,
@@ -1803,13 +1803,13 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
                 0,
             ]} maxBarSize={48}/>
               </BarChart>
-            </ResponsiveContainer>) : (<EmptyState message="Production trend data will appear here"/>)}
+            </ResponsiveContainer>) : (<EmptyState message="Sales volume trends will appear when sales reports are submitted"/>)}
         </Card>
       </div>
 
       <div className="mb-8">
         <SectionHeader>
-          Monthly Production Trend — {selectedPeriodLabel} · {getProductLabel(reportingProduct)}
+          Monthly Sales Volume Trend — {selectedPeriodLabel}{reportingProduct ? ` · ${getProductLabel(reportingProduct)}` : ""}
         </SectionHeader>
 
         <Card className="p-5">
@@ -1841,7 +1841,7 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
 
                 <Tooltip formatter={(value) => [
                 `${formatNumber(value)} litres`,
-                "Production",
+                "Sales volume",
             ]} contentStyle={{
                 fontSize: 13,
                 borderRadius: 8,
@@ -1855,7 +1855,7 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
                 0,
             ]} maxBarSize={48}/>
               </BarChart>
-            </ResponsiveContainer>) : (<EmptyState message="Six-month production data will appear here"/>)}
+            </ResponsiveContainer>) : (<EmptyState message="Monthly sales volume data will appear here"/>)}
         </Card>
       </div>
 
@@ -1866,9 +1866,7 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
 
         <Card className="overflow-hidden">
           {reportingHistory.length >
-            0 ? (<div className={`transform-gpu transition-all duration-200 ease-out ${true
-                ? "translate-x-0 opacity-100"
-                : "translate-x-2 opacity-0"}`}>
+            0 ? (<div className="transform-gpu transition-all duration-200 ease-out translate-x-0 opacity-100">
             <Table headers={[
                 ...(canFilterByRegion
                     ? ["Region"]
@@ -1879,7 +1877,7 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
                 "Submitted By",
                 "Date",
                 "Time",
-                `${getProductLabel(reportingProduct)} Production (L)`,
+                "Volume Sold (L)",
             ]} rows={paginatedReportingHistory} accentKey="status" renderRow={(report) => (<>
                   {canFilterByRegion && (<td className="whitespace-nowrap px-4 py-3">
                       <EmptyCell value={report.region}/>
@@ -1987,7 +1985,7 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
             <span className="font-semibold text-slate-700">
               {formatNumber(branches.length)}
             </span>{" "}
-            organizations
+            {organizationLevel === "region" ? "stations" : "organizations"}
             </p>
           </div>
         </div>
@@ -1998,7 +1996,7 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
                     childSingularLabel,
                     "Region",
                     "Administrator",
-                    "Production",
+                    "Volume Sold (L)",
                     "Local Workforce",
                     "Estimated Revenue",
                     "On-time Compliance",
@@ -2084,8 +2082,12 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
       </div>)}
       <div>
         <SectionHeader description={reportingRegion
-            ? `Workforce assigned within ${reportingRegion}, including descendants in that region.`
-            : "Direct workforce for this organization plus workforce from every descendant below it."}>
+            ? `Reported staffing for ${reportingRegion} and its associated stations.`
+            : organizationLevel === "region"
+                ? "Direct staffing metrics for this region and its associated stations."
+                : organizationLevel === "enterprise"
+                    ? "Reported staffing across head office, regions and associated stations."
+                    : "Reported staffing for this station or branch."}>
           Workforce
         </SectionHeader>
 
