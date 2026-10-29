@@ -993,13 +993,22 @@ const OrganizationIdentity = ({ record, secondaryText = "" }) => (
   </div>
 );
 
-const StatusBadge = ({ status }) => {
+const StatusBadge = ({ status, report, now = new Date() }) => {
   const normalizedStatus = normalizeStatus(status);
-  const statusDetails = STATUS_STYLES[normalizedStatus] ??
-    STATUS_STYLES[status] ?? {
-      label: status || "Not available",
-      className: "bg-slate-100 text-slate-600 ring-slate-500/20",
-    };
+  const pending = normalizedStatus === "pending_submission";
+  const deadline = report ? getDeadlineAt(report) : null;
+  const pastCutoff = report && isSameDay(getReportDate(report), now) && now.getUTCHours() >= 23;
+  const overdue = !isReportSubmitted(report || { status }) && (
+    normalizedStatus === "overdue" || (deadline && deadline <= now) || pastCutoff
+  );
+  const statusDetails = overdue
+    ? { label: "Overdue", className: "bg-red-50 text-red-700 ring-red-200" }
+    : pending
+      ? { label: "Awaiting submission", className: "bg-orange-50 text-orange-800 ring-orange-200" }
+      : STATUS_STYLES[normalizedStatus] ?? STATUS_STYLES[status] ?? {
+          label: status || "Not available",
+          className: "bg-slate-100 text-slate-600 ring-slate-500/20",
+        };
 
   return (
     <span
@@ -1034,46 +1043,66 @@ const KpiCard = ({ label, value, caption, icon: Icon }) => (
   </Card>
 );
 
-const ProductionTick = ({ x, y, payload, comparisonMap }) => {
+const SalesVolumeTick = ({ x, y, payload, comparisonMap }) => {
   const record = comparisonMap.get(payload.value) || { name: payload.value };
   const logo = getOrganizationLogo(record);
+  const fullName = String(payload.value || "");
 
   return (
     <g transform={`translate(${x},${y})`}>
-      {logo ? (
-        <image
-          href={logo}
-          x={-142}
-          y={-11}
-          width={22}
-          height={22}
-          preserveAspectRatio="xMidYMid meet"
-        />
-      ) : (
-        <>
-          <circle cx={-131} cy={0} r={10} fill="#C8D5E8" />
-          <text
-            x={-131}
-            y={3}
-            textAnchor="middle"
-            fontSize={8}
-            fontWeight={700}
-            fill="#0F172A"
+      <foreignObject x={-230} y={-15} width={216} height={30}>
+        <div
+          xmlns="http://www.w3.org/1999/xhtml"
+          title={fullName}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            gap: 10,
+            height: "100%",
+            width: "100%",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+          }}
+        >
+          {logo ? (
+            <img
+              src={logo}
+              alt=""
+              style={{ width: 22, height: 22, objectFit: "contain", flexShrink: 0 }}
+            />
+          ) : (
+            <span
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: "50%",
+                backgroundColor: "#C8D5E8",
+                color: "#0F172A",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 8,
+                fontWeight: 700,
+                flexShrink: 0,
+              }}
+            >
+              {fullName.slice(0, 2).toUpperCase()}
+            </span>
+          )}
+          <span
+            style={{
+              color: "#334155",
+              fontSize: 12,
+              lineHeight: "20px",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
           >
-            {String(payload.value).slice(0, 2).toUpperCase()}
-          </text>
-        </>
-      )}
-
-      <text
-        x={-112}
-        y={4}
-        textAnchor="start"
-        fontSize={12}
-        fill="#334155"
-      >
-        {payload.value}
-      </text>
+            {fullName}
+          </span>
+        </div>
+      </foreignObject>
     </g>
   );
 };
@@ -1093,6 +1122,12 @@ const Overviews = () => {
   const [workforceRecords, setWorkforceRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [statusNow, setStatusNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setStatusNow(new Date()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   /*
    * The signed-in organization member record is the access source of truth.
@@ -2139,7 +2174,7 @@ const Overviews = () => {
             </div>
 
             <p className="text-sm text-slate-500">
-              Monitor daily production, estimated revenue, reporting compliance
+              Monitor station sales volumes, estimated revenue, submission compliance
               and workforce performance.
             </p>
           </div>
@@ -2168,7 +2203,7 @@ const Overviews = () => {
 
         <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <KpiCard
-            label="Total Daily Production"
+            label="Total Daily Sales Volume"
             value={
               latestProductionReports.length
                 ? `${formatNumber(totalDailyProduction)} litres`
@@ -2177,7 +2212,7 @@ const Overviews = () => {
             caption={
               latestProductionDateLabel
                 ? `Last reported ${latestProductionDateLabel}`
-                : "No production data submitted yet"
+                : "No sales data submitted yet"
             }
             icon={Factory}
           />
@@ -2191,8 +2226,8 @@ const Overviews = () => {
             }
             caption={
               latestProductionDateLabel
-                ? `Last reported ${latestProductionDateLabel} · Calculated using linked NPA prices`
-                : "No production data submitted yet"
+                ? `Last reported ${latestProductionDateLabel} · Estimated using reported sales volumes and available fuel prices`
+                : "No sales data submitted yet"
             }
             icon={Banknote}
           />
@@ -2232,11 +2267,11 @@ const Overviews = () => {
               <SectionHeader
                 description={
                   latestProductionDateLabel
-                    ? `Latest reported petrol and diesel volume by ${scopeConfig.comparisonSingular.toLowerCase()} · ${latestProductionDateLabel}`
-                    : "No submitted production data is available yet."
+                    ? `Latest reported petrol and diesel sales volume by ${scopeConfig.comparisonSingular.toLowerCase()} · ${latestProductionDateLabel}`
+                    : "No submitted sales volume data is available yet."
                 }
               >
-                Daily Production by {scopeConfig.comparisonSingular}
+                Daily Sales Volume by {scopeConfig.comparisonSingular}
               </SectionHeader>
 
               <Card className="p-5">
@@ -2251,7 +2286,7 @@ const Overviews = () => {
                       margin={{
                         top: 8,
                         right: 20,
-                        left: 145,
+                        left: 16,
                         bottom: 0,
                       }}
                     >
@@ -2276,11 +2311,11 @@ const Overviews = () => {
                       <YAxis
                         type="category"
                         dataKey="name"
-                        width={145}
+                        width={235}
                         tickLine={false}
                         axisLine={false}
                         tick={(tickProps) => (
-                          <ProductionTick
+                          <SalesVolumeTick
                             {...tickProps}
                             comparisonMap={comparisonMap}
                           />
@@ -2290,7 +2325,7 @@ const Overviews = () => {
                       <Tooltip
                         formatter={(value) => [
                           `${formatNumber(value)} litres`,
-                          "Daily production",
+                          "Sales volume",
                         ]}
                         contentStyle={{
                           fontSize: 13,
@@ -2318,7 +2353,7 @@ const Overviews = () => {
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
-                  <EmptyState message="Daily production data will appear here" />
+                  <EmptyState message="Daily sales volume data will appear here" />
                 )}
               </Card>
             </div>
@@ -2327,17 +2362,17 @@ const Overviews = () => {
               <SectionHeader
                 description={
                   latestProductionDateLabel
-                    ? `Each ${scopeConfig.comparisonSingular.toLowerCase()}'s percentage of total reported volume on ${latestProductionDateLabel}.`
-                    : "Market share will appear when production data is submitted."
+                    ? `Each ${scopeConfig.comparisonSingular.toLowerCase()}'s share of reported sales volume on ${latestProductionDateLabel}.`
+                    : "Sales volume distribution will appear when reports are submitted."
                 }
               >
-                Market Share
+                Sales Volume Distribution
               </SectionHeader>
 
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <Card className="p-5">
                   <h3 className="mb-4 text-sm font-semibold text-slate-900">
-                    Latest Production Share
+                    Sales Volume Share
                   </h3>
 
                   {comparisonData.length ? (
@@ -2412,18 +2447,18 @@ const Overviews = () => {
                       </div>
                     </>
                   ) : (
-                    <EmptyState message="Market share data will appear here" />
+                    <EmptyState message="Sales volume distribution will appear here" />
                   )}
                 </Card>
 
                 <div className="flex flex-col gap-4">
                   <Card className="p-5">
                     <h3 className="text-sm font-semibold text-slate-900">
-                      Market Share Trend
+                      Regional Sales Trend
                     </h3>
 
                     <p className="mb-4 mt-1 text-xs text-slate-500">
-                      Each bar represents 100% of reported volume for that day.
+                      Each bar shows the percentage split of reported sales volume for that day.
                     </p>
 
                     {marketShareTrend.length >= 2 &&
@@ -2505,7 +2540,7 @@ const Overviews = () => {
                         </p>
                         <p className="mt-1 max-w-sm text-xs text-slate-400">
                           At least two reporting days are required to compare
-                          changes in market share.
+                          changes in the regional sales mix.
                         </p>
                       </div>
                     )}
@@ -2513,7 +2548,7 @@ const Overviews = () => {
 
                   <Card className="p-5">
                     <h3 className="mb-3 text-sm font-semibold text-slate-900">
-                      {scopeConfig.comparisonSingular} Ranking
+                      {scopeConfig.comparisonSingular} Sales Ranking
                     </h3>
 
                     {comparisonData.length ? (
@@ -2609,7 +2644,7 @@ const Overviews = () => {
                     style={{ backgroundColor: NAVY, borderColor: NAVY }}
                   >
                     {[
-                      "Organization",
+                      "Station / Branch",
                       "Report",
                       "Region",
                       "Status",
@@ -2655,7 +2690,7 @@ const Overviews = () => {
                         </td>
 
                         <td className="whitespace-nowrap px-4 py-3">
-                          <StatusBadge status={report.status} />
+                          <StatusBadge status={report.status} report={report} now={statusNow} />
                         </td>
 
                         <td className="whitespace-nowrap px-4 py-3 text-slate-600">
@@ -2715,7 +2750,7 @@ const Overviews = () => {
 
                         {unit.latestProductionPeriodLabel && (
                           <p className="mt-0.5 text-[10px] text-slate-400">
-                            Production period {unit.latestProductionPeriodLabel}
+                            Sales data pulled {unit.latestProductionPeriodLabel}
                           </p>
                         )}
                       </div>
@@ -2738,7 +2773,7 @@ const Overviews = () => {
                     <div className="mt-4 space-y-3">
                       <div className="flex items-baseline justify-between gap-4">
                         <span className="text-xs text-slate-500">
-                          Production
+                          Volume Sold
                         </span>
                         <span className="text-sm font-medium tabular-nums text-slate-900">
                           {unit.latestProductionPeriod

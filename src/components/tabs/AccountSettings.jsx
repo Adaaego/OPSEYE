@@ -4380,7 +4380,8 @@ const AccountSettings = ({ roles = [] }) => {
       organizationType: "branch",
       parentId: organization?.parentId || "",
       parentOrganizationId: organization?.parentId || "",
-      rootEnterpriseId: organization?.rootEnterpriseId || "",
+      rootEnterpriseId: organization?.rootEnterpriseId || organization?.enterpriseId || "",
+      enterpriseId: organization?.rootEnterpriseId || organization?.enterpriseId || "",
       ancestorIds: Array.isArray(organization?.ancestorIds)
         ? organization.ancestorIds
         : [],
@@ -4399,26 +4400,27 @@ const AccountSettings = ({ roles = [] }) => {
       updatedAt: serverTimestamp(),
     };
 
-    if (!shiftRosterExists) {
-      payload.createdBy = currentUserId;
-      payload.createdAt = serverTimestamp();
-    }
-
     try {
       setIsSavingShiftRoster(true);
       setShiftRosterError("");
 
-      await setDoc(
-        doc(
-          db,
-          BRANCH_SHIFT_SCHEDULES_COLLECTION,
-          scheduleId
-        ),
-        payload,
-        {
-          merge: true,
-        }
-      );
+      const scheduleRef = doc(db, BRANCH_SHIFT_SCHEDULES_COLLECTION, scheduleId);
+      // Recheck Firestore: the schedule might have been deleted since it was loaded.
+      const existingSchedule = await getDoc(scheduleRef);
+
+      if (existingSchedule.exists()) {
+        await updateDoc(scheduleRef, {
+          days,
+          updatedBy: currentUserId,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(scheduleRef, {
+          ...payload,
+          createdBy: currentUserId,
+          createdAt: serverTimestamp(),
+        });
+      }
 
       setShiftRosterExists(true);
       setOpenRosterAssignmentKey("");
