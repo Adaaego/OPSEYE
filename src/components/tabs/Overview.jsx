@@ -863,6 +863,28 @@ const getScopeConfig = (organization) => {
   };
 };
 
+/*
+ * Regional Performance uses geographic names rather than company-prefixed
+ * organization names. Keep organization IDs unchanged for grouping and reports.
+ */
+const getPerformanceRegionName = (regionOrganization, organizationMap) => {
+  const regionId = getOrganizationRegionId(regionOrganization, organizationMap);
+  if (regionId && REGION_NAME_MAP.has(regionId)) {
+    const geographicName = getRegionName(regionId);
+    return /\bregion$/i.test(geographicName)
+      ? geographicName
+      : `${geographicName} Region`;
+  }
+
+  const name = getOrganizationName(regionOrganization);
+  const enterpriseName = getEnterpriseOrganization(regionOrganization, organizationMap)?.name;
+  const prefix = String(enterpriseName || "").trim();
+  const withoutPrefix = prefix && name.toLowerCase().startsWith(`${prefix.toLowerCase()} `)
+    ? name.slice(prefix.length).trim().replace(/^[-–—]\s*/, "")
+    : name;
+  return withoutPrefix;
+};
+
 const getComparisonOrganization = ({
   organization,
   scopeLevel,
@@ -1882,7 +1904,7 @@ const Overviews = () => {
         .forEach((organization) =>
           ensureUnit({
             id: getOrganizationId(organization),
-            name: getOrganizationName(organization),
+            name: getPerformanceRegionName(organization, organizationMap),
             organization,
           })
         );
@@ -1913,7 +1935,9 @@ const Overviews = () => {
           "region"
         );
         unitId = getOrganizationId(unitOrganization);
-        unitName = unitId ? getOrganizationName(unitOrganization) : "";
+        unitName = unitId
+          ? getPerformanceRegionName(unitOrganization, organizationMap)
+          : "";
       } else if (scopeConfig.level === "region") {
         unitOrganization =
           getOrganizationLevel(report.organization) === "branch"
@@ -2672,7 +2696,11 @@ const Overviews = () => {
                         <td className="min-w-56 px-4 py-3">
                           <OrganizationIdentity
                             record={report.organization}
-                            secondaryText={report.companyId || ""}
+                            secondaryText={
+                              scopeConfig.level === "ministry" && report.enterprise
+                                ? getOrganizationName(report.enterprise)
+                                : ""
+                            }
                           />
                         </td>
 
