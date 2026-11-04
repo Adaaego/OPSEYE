@@ -1762,6 +1762,14 @@ const EQUIPMENT_ISSUES = [
   { value: "other", label: "Other" },
 ];
 
+// Visual-only: a colour chip per fuel so tanks and nozzles are recognisable at a glance.
+const PRODUCT_CHIP_STYLES = {
+  petrol: "bg-emerald-100 text-emerald-700",
+  diesel: "bg-amber-100 text-amber-800",
+  premium_petrol: "bg-violet-100 text-violet-700",
+  kerosene: "bg-sky-100 text-sky-700",
+};
+
 const newEquipmentId = (prefix) =>
   `${prefix}_${typeof crypto !== "undefined" && crypto.randomUUID
     ? crypto.randomUUID()
@@ -1778,33 +1786,104 @@ const normalizeEquipment = (equipment) => ({
   downtimeHistory: Array.isArray(equipment.downtimeHistory) ? equipment.downtimeHistory : [],
 });
 
-const STATUS_FIELD_CLASS = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800";
+const STATUS_FIELD_CLASS = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200";
 
-const StatusEditor = ({ equipment, onStatus, onDowntime }) => (
-    <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
-      <div className="grid gap-3 sm:grid-cols-[170px_1fr] sm:items-end">
-        <label className="text-xs font-semibold text-slate-600">Equipment status
-          <select className={STATUS_FIELD_CLASS} value={equipment.status || "active"} onChange={(e) => onStatus(e.target.value)}>
-            <option value="active">Active / operational</option>
-            <option value="down">Down / out of service</option>
-          </select>
-        </label>
-        {equipment.status === "down" && <span className="text-xs font-medium text-amber-700">Downtime is recorded from the time the status changes to Down. Set it back to Active when restored.</span>}
+const getProductLabel = (value) =>
+  STATION_PRODUCTS.find((product) => product.value === value)?.label || "";
+
+const ProductChip = ({ value }) => {
+  const label = getProductLabel(value);
+
+  if (!label) {
+    return null;
+  }
+
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${PRODUCT_CHIP_STYLES[value] || "bg-slate-100 text-slate-600"}`}>
+      {label}
+    </span>
+  );
+};
+
+const EquipmentStatusBadge = ({ status }) => (
+  <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+    status === "down" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"
+  }`}>
+    <span className={`h-1.5 w-1.5 rounded-full ${status === "down" ? "bg-red-500" : "bg-emerald-500"}`} />
+    {status === "down" ? "Down" : "Operational"}
+  </span>
+);
+
+// One consistent card layout for every part of the form.
+const StationSection = ({ step, title, description, action, children }) => (
+  <section className="rounded-2xl border border-slate-200 bg-white">
+    <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex items-start gap-3">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white">
+          {step}
+        </span>
+        <div>
+          <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+          {description && <p className="mt-0.5 max-w-xl text-xs leading-5 text-slate-500">{description}</p>}
+        </div>
       </div>
-      {equipment.status === "down" && <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <label className="text-xs font-semibold text-slate-600">Reason for downtime
-          <select className={STATUS_FIELD_CLASS} value={equipment.downtime?.reason || ""} onChange={(e) => onDowntime({ reason: e.target.value })}>
-            <option value="">Choose reason</option>
-            {EQUIPMENT_ISSUES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-          </select>
-        </label>
-        <label className="text-xs font-semibold text-slate-600">Brief description
-          <textarea className={STATUS_FIELD_CLASS} rows={2} value={equipment.downtime?.description || ""} onChange={(e) => onDowntime({ description: e.target.value })} placeholder="What happened?" />
-        </label>
-      </div>}
-      {!!equipment.downtimeHistory?.length && <p className="mt-2 text-xs text-slate-500">{equipment.downtimeHistory.length} completed downtime event(s) recorded for this equipment.</p>}
+      {action}
+    </div>
+    <div className="p-5">{children}</div>
+  </section>
+);
+
+const StatusEditor = ({ equipment, onStatus, onDowntime }) => {
+  const isDown = equipment.status === "down";
+  const segmentClass = (active, tone) =>
+    `rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+      active
+        ? tone === "down"
+          ? "bg-red-600 text-white shadow-sm"
+          : "bg-white text-slate-900 shadow-sm"
+        : "text-slate-500 hover:text-slate-800"
+    }`;
+
+  return (
+    <div className="mt-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-xs font-semibold text-slate-600">Status</span>
+        <div className="inline-flex rounded-lg bg-slate-100 p-0.5" role="group" aria-label="Equipment status">
+          <button type="button" className={segmentClass(!isDown, "active")} onClick={() => onStatus("active")}>
+            Operational
+          </button>
+          <button type="button" className={segmentClass(isDown, "down")} onClick={() => onStatus("down")}>
+            Down
+          </button>
+        </div>
+        {!!equipment.downtimeHistory?.length && (
+          <span className="text-xs text-slate-500">
+            {equipment.downtimeHistory.length} past downtime event(s)
+          </span>
+        )}
+      </div>
+
+      {isDown && (
+        <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+          <p className="text-xs font-medium text-amber-800">
+            Downtime starts now. Switch back to Operational once it is restored.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="text-xs font-semibold text-slate-600">Reason for downtime
+              <select className={STATUS_FIELD_CLASS} value={equipment.downtime?.reason || ""} onChange={(e) => onDowntime({ reason: e.target.value })}>
+                <option value="">Choose reason</option>
+                {EQUIPMENT_ISSUES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-semibold text-slate-600">What happened?
+              <textarea className={STATUS_FIELD_CLASS} rows={2} value={equipment.downtime?.description || ""} onChange={(e) => onDowntime({ description: e.target.value })} placeholder="Brief description of the issue" />
+            </label>
+          </div>
+        </div>
+      )}
     </div>
   );
+};
 
 const StationConfigurationModal = ({ open, branch, onClose, onSaved }) => {
   const [configuration, setConfiguration] = useState(emptyStationConfiguration);
@@ -2008,140 +2087,235 @@ const StationConfigurationModal = ({ open, branch, onClose, onSaved }) => {
     }
   };
 
-  const fieldClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800";
+  const fieldClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200 disabled:cursor-not-allowed disabled:bg-slate-100";
 
+  // Display-only summary numbers for the strip under the header.
+  const nozzleCount = configuration.pumps.reduce((total, pump) => total + (pump.nozzles?.length || 0), 0);
+  const downCount =
+    configuration.pumps.filter((pump) => pump.status === "down").length +
+    configuration.pumps.reduce(
+      (total, pump) => total + (pump.nozzles || []).filter((nozzle) => nozzle.status === "down").length,
+      0
+    );
 
   return (
     <ModalPortal open={open} title="Station Configuration" onClose={saving ? () => {} : onClose} maxWidth="max-w-4xl">
-      <div className="flex items-center justify-between bg-slate-900 px-6 py-5 text-white">
-        <div><h2 className="text-lg font-semibold">Station Configuration</h2>
-          <p className="mt-1 text-sm text-slate-300">{branch?.name || "Branch"} · Targets, storage, dispensers and downtime</p></div>
-        <button type="button" onClick={onClose} disabled={saving} aria-label="Close station configuration"><X className="h-5 w-5" /></button>
+      <div className="sticky top-0 z-20 flex items-start justify-between gap-4 bg-slate-900 px-6 py-5 text-white">
+        <div>
+          <h2 className="text-lg font-semibold">Station Configuration</h2>
+          <p className="mt-1 text-sm text-slate-300">{branch?.name || "Branch"}</p>
+        </div>
+        <button type="button" onClick={onClose} disabled={saving} aria-label="Close station configuration"
+          className="rounded-lg p-2 text-slate-300 transition hover:bg-white/10 hover:text-white">
+          <X className="h-5 w-5" />
+        </button>
       </div>
-      <div className="space-y-6 p-6">
-        {error && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-        {loading ? <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" />Loading configuration…</div> : <>
-          <section>
-            <h3 className="text-sm font-semibold text-slate-900">Station type</h3>
-            <div className="mt-3 grid gap-3 sm:grid-cols-3">
-              {STATION_TYPES.map((type) => (
-                <label key={type.value} className={`flex cursor-pointer gap-2 rounded-xl border p-3 ${configuration.stationType === type.value ? "border-slate-900 bg-slate-50" : "border-slate-200"}`}>
-                  <input type="radio" name="station-type" checked={configuration.stationType === type.value}
-                    onChange={() => setConfiguration((prev) => ({ ...prev, stationType: type.value }))} />
-                  <span><span className="block text-sm font-semibold">{type.label}</span><span className="mt-1 block text-xs text-slate-500">{type.detail}</span></span>
-                </label>
-              ))}
-            </div>
-          </section>
-          <section className="border-t border-slate-200 pt-5">
-            <div className="flex items-start justify-between gap-3">
-              <div><h3 className="text-sm font-semibold text-slate-900">Sales target (optional)</h3>
-                <p className="mt-1 text-xs text-slate-500">Set an individual station sales target in Ghana cedis. Daily sales can later be summed for the selected week or month and compared against this amount.</p></div>
-              <label className="flex shrink-0 items-center gap-2 text-sm font-medium text-slate-700">
-                <input type="checkbox" checked={Boolean(configuration.targets?.sales)}
-                  onChange={(e) => setConfiguration((prev) => ({ ...prev, targets: { ...prev.targets,
-                    sales: e.target.checked ? { frequency: "monthly", amountGhs: "" } : null,
-                  } }))} /> Enable
-              </label>
-            </div>
-            {configuration.targets?.sales && <div className="mt-3 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
-              <label className="text-xs font-semibold text-slate-600">Target period
-                <select className={fieldClass} value={configuration.targets.sales.frequency || "monthly"}
-                  onChange={(e) => setSalesTarget({ frequency: e.target.value })}>
-                  <option value="weekly">Weekly</option>
-                  <option value="monthly">Monthly</option>
-                </select>
-              </label>
-              <label className="text-xs font-semibold text-slate-600">Sales target (GH₵)
-                <input type="number" min="0.01" step="0.01" inputMode="decimal" className={fieldClass}
-                  value={configuration.targets.sales.amountGhs ?? ""} placeholder="e.g. 150000"
-                  onChange={(e) => setSalesTarget({ amountGhs: e.target.value })} />
-              </label>
-              <p className="text-xs text-slate-500 sm:col-span-2">This is a recurring weekly or calendar-month target, not a one-off target. Actual-versus-target reporting requires the daily sales reporting data to be connected.</p>
-            </div>}
-          </section>
-          <section className="border-t border-slate-200 pt-5">
-            <div className="flex items-center justify-between gap-2"><div><h3 className="text-sm font-semibold text-slate-900">Fuel tanks</h3>
-              <p className="mt-1 text-xs text-slate-500">Configure tanks first so nozzles can be assigned to the correct supply.</p></div>
-              <Button variant="outline" onClick={addTank}><Plus className="h-4 w-4" /> Add Tank</Button></div>
-            <div className="mt-3 space-y-3">
-              {configuration.tanks.map((tank) => (
-                <div key={tank.id} className="grid items-end gap-3 rounded-xl border border-slate-200 p-3 sm:grid-cols-[1fr_1fr_auto]">
-                  <label className="text-xs font-semibold text-slate-600">Tank number
-                    <input value={tank.number} onChange={(e) => updateTank(tank.id, {number:e.target.value})} className={fieldClass} placeholder="e.g. 1" /></label>
-                  <label className="text-xs font-semibold text-slate-600">Fuel product
-                    <select value={tank.product} onChange={(e) => {
-                      const product = e.target.value;
-                      setConfiguration((prev) => ({ ...prev,
-                        tanks: prev.tanks.map((t) => t.id === tank.id ? { ...t, product } : t),
-                        pumps: prev.pumps.map((pump) => ({ ...pump,
-                          nozzles: pump.nozzles.map((n) => n.tankId === tank.id && n.product !== product ? { ...n, tankId: "" } : n),
-                        })),
-                      }));
-                    }} className={fieldClass}>
-                      <option value="">Choose product</option>{STATION_PRODUCTS.map((product) => <option key={product.value} value={product.value}>{product.label}</option>)}
-                    </select></label>
-                  <Button variant="outline" onClick={() => removeTank(tank.id)} aria-label={`Remove tank ${tank.number}`}><Trash2 className="h-4 w-4" /></Button>
+
+      {loading ? (
+        <div className="flex items-center gap-2 p-6 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" />Loading configuration…</div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 divide-x divide-slate-200 border-b border-slate-200 bg-slate-50 sm:grid-cols-4">
+            {[
+              { label: "Tanks", value: configuration.tanks.length },
+              { label: "Pumps", value: configuration.pumps.length },
+              { label: "Nozzles", value: nozzleCount },
+              { label: "Equipment down", value: downCount, alert: downCount > 0 },
+            ].map((stat) => (
+              <div key={stat.label} className="px-5 py-3">
+                <p className="text-xs text-slate-500">{stat.label}</p>
+                <p className={`mt-0.5 text-lg font-semibold ${stat.alert ? "text-red-600" : "text-slate-900"}`}>{stat.value}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-5 bg-slate-50/60 p-6">
+            <StationSection
+              step={1}
+              title="Station type"
+              description="Choose how much of this station is automated. This decides how its readings are captured."
+            >
+              <div className="grid gap-3 sm:grid-cols-3">
+                {STATION_TYPES.map((type) => {
+                  const selected = configuration.stationType === type.value;
+                  return (
+                    <label key={type.value} className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition ${
+                      selected ? "border-slate-900 bg-slate-50 ring-1 ring-slate-900" : "border-slate-200 hover:border-slate-300"
+                    }`}>
+                      <input type="radio" name="station-type" className="mt-1" checked={selected}
+                        onChange={() => setConfiguration((prev) => ({ ...prev, stationType: type.value }))} />
+                      <span>
+                        <span className="block text-sm font-semibold text-slate-900">{type.label}</span>
+                        <span className="mt-1 block text-xs leading-5 text-slate-500">{type.detail}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </StationSection>
+
+            <StationSection
+              step={2}
+              title="Fuel tanks"
+              description="Add your storage tanks first. Each nozzle is later linked to the tank that supplies it."
+              action={<Button variant="outline" onClick={addTank}><Plus className="h-4 w-4" /> Add Tank</Button>}
+            >
+              {configuration.tanks.length > 0 ? (
+                <div className="space-y-2">
+                  {configuration.tanks.map((tank) => (
+                    <div key={tank.id} className="grid items-end gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[110px_1fr_auto]">
+                      <label className="text-xs font-semibold text-slate-600">Tank no.
+                        <input value={tank.number} onChange={(e) => updateTank(tank.id, { number: e.target.value })} className={fieldClass} placeholder="e.g. 1" /></label>
+                      <label className="text-xs font-semibold text-slate-600">Fuel product
+                        <select value={tank.product} onChange={(e) => {
+                          const product = e.target.value;
+                          setConfiguration((prev) => ({ ...prev,
+                            tanks: prev.tanks.map((t) => t.id === tank.id ? { ...t, product } : t),
+                            pumps: prev.pumps.map((pump) => ({ ...pump,
+                              nozzles: pump.nozzles.map((n) => n.tankId === tank.id && n.product !== product ? { ...n, tankId: "" } : n),
+                            })),
+                          }));
+                        }} className={fieldClass}>
+                          <option value="">Choose product</option>{STATION_PRODUCTS.map((product) => <option key={product.value} value={product.value}>{product.label}</option>)}
+                        </select></label>
+                      <Button variant="outline" onClick={() => removeTank(tank.id)} aria-label={`Remove tank ${tank.number}`}><Trash2 className="h-4 w-4" /></Button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-              {!configuration.tanks.length && <p className="text-sm text-slate-500">No tanks configured.</p>}
-            </div>
-          </section>
-          <section className="border-t border-slate-200 pt-5">
-            <div className="flex items-center justify-between gap-2"><div><h3 className="text-sm font-semibold text-slate-900">Pumps and nozzles</h3>
-              <p className="mt-1 text-xs text-slate-500">Each nozzle must link to a matching fuel tank. Mark faulty equipment Down and record the reason.</p></div>
-              <Button variant="outline" onClick={addPump}><Plus className="h-4 w-4" /> Add Pump</Button></div>
-            <div className="mt-3 space-y-4">
-              {configuration.pumps.map((pump) => (
-                <div key={pump.id} className="rounded-xl border border-slate-200 p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <label className="text-xs font-semibold text-slate-600">Pump number
-                      <input className={fieldClass} value={pump.number} onChange={(e) => updatePump(pump.id, (p) => ({...p, number:e.target.value}))} /></label>
-                    <div className="flex gap-2"><Button variant="outline" onClick={() => updatePump(pump.id, (p) => ({...p,
-                      nozzles:[...p.nozzles, {
-                        id:newEquipmentId("nozzle"),
-                        number:String(Math.max(0,...p.nozzles.map((n)=>Number(n.number)||0))+1),
-                        product:"",tankId:"",status:"active",downtime:null,downtimeHistory:[],
-                      }],
-                    }))}><Plus className="h-4 w-4" /> Add Nozzle</Button>
-                    <Button variant="outline" onClick={() => removePump(pump.id)} aria-label={`Remove pump ${pump.number}`}><Trash2 className="h-4 w-4" /></Button></div>
-                  </div>
-                  <StatusEditor equipment={pump} onStatus={(v) => setPumpStatus(pump.id,v)}
-                    onDowntime={(patch) => updatePump(pump.id,(p)=>({...p,downtime:{...p.downtime,...patch}}))} />
-                  <div className="mt-3 space-y-3">
-                    {pump.nozzles.map((nozzle) => {
-                      const configuredProducts = STATION_PRODUCTS.filter((product) =>
-                        configuration.tanks.some((tank) => tank.product === product.value)
-                      );
-                      const compatibleTanks = configuration.tanks.filter((tank) => tank.product && tank.product === nozzle.product);
-                      return <div key={nozzle.id} className="rounded-lg bg-slate-50 p-3">
-                        <div className="grid items-end gap-2 sm:grid-cols-[95px_1fr_1fr_auto]">
-                          <label className="text-xs font-semibold text-slate-600">Nozzle #
-                            <input value={nozzle.number} onChange={(e) => updateNozzle(pump.id,nozzle.id,{number:e.target.value})} className={fieldClass}/></label>
-                          <label className="text-xs font-semibold text-slate-600">Product
-                            <select value={nozzle.product} onChange={(e) => updateNozzle(pump.id,nozzle.id,{product:e.target.value,tankId:""})} className={fieldClass} disabled={!configuredProducts.length}>
-                              <option value="">{configuredProducts.length ? "Choose product" : "Configure a tank product first"}</option>
-                              {configuredProducts.map((product) => <option key={product.value} value={product.value}>{product.label}</option>)}
-                            </select></label>
-                          <label className="text-xs font-semibold text-slate-600">Supplying tank
-                            <select value={nozzle.tankId || ""} onChange={(e) => updateNozzle(pump.id,nozzle.id,{tankId:e.target.value})} className={fieldClass}>
-                              <option value="">Choose matching tank</option>{compatibleTanks.map((tank) => <option key={tank.id} value={tank.id}>Tank {tank.number}</option>)}
-                            </select></label>
-                          <Button variant="outline" onClick={() => removeNozzle(pump.id,nozzle.id)} aria-label={`Remove nozzle ${nozzle.number}`}><Trash2 className="h-4 w-4" /></Button>
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-300 px-4 py-8 text-center">
+                  <p className="text-sm font-semibold text-slate-700">No tanks yet</p>
+                  <p className="mt-1 text-xs text-slate-500">Add a tank to start configuring pumps and nozzles.</p>
+                </div>
+              )}
+            </StationSection>
+
+            <StationSection
+              step={3}
+              title="Pumps and nozzles"
+              description="Every pump needs at least one nozzle, and each nozzle must be linked to a tank with the same fuel."
+              action={<Button variant="outline" onClick={addPump}><Plus className="h-4 w-4" /> Add Pump</Button>}
+            >
+              {configuration.pumps.length > 0 ? (
+                <div className="space-y-4">
+                  {configuration.pumps.map((pump) => (
+                    <div key={pump.id} className="overflow-hidden rounded-xl border border-slate-200">
+                      <div className="border-b border-slate-200 bg-slate-50 p-4">
+                        <div className="flex flex-wrap items-end justify-between gap-3">
+                          <div className="flex items-end gap-3">
+                            <label className="text-xs font-semibold text-slate-600">Pump no.
+                              <input className={`${fieldClass} w-28`} value={pump.number} onChange={(e) => updatePump(pump.id, (p) => ({ ...p, number: e.target.value }))} /></label>
+                            <div className="pb-2.5"><EquipmentStatusBadge status={pump.status || "active"} /></div>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button variant="outline" onClick={() => updatePump(pump.id, (p) => ({ ...p,
+                              nozzles: [...p.nozzles, {
+                                id: newEquipmentId("nozzle"),
+                                number: String(Math.max(0, ...p.nozzles.map((n) => Number(n.number) || 0)) + 1),
+                                product: "", tankId: "", status: "active", downtime: null, downtimeHistory: [],
+                              }],
+                            }))}><Plus className="h-4 w-4" /> Add Nozzle</Button>
+                            <Button variant="outline" onClick={() => removePump(pump.id)} aria-label={`Remove pump ${pump.number}`}><Trash2 className="h-4 w-4" /></Button>
+                          </div>
                         </div>
-                        <StatusEditor equipment={nozzle} onStatus={(v) => setNozzleStatus(pump.id,nozzle.id,v)}
-                          onDowntime={(patch) => updateNozzle(pump.id,nozzle.id,{downtime:{...nozzle.downtime,...patch}})} />
-                      </div>;
-                    })}
-                    {!pump.nozzles.length && <p className="text-xs text-amber-700">Add at least one nozzle to this pump.</p>}
-                  </div>
+                        <StatusEditor equipment={pump} onStatus={(v) => setPumpStatus(pump.id, v)}
+                          onDowntime={(patch) => updatePump(pump.id, (p) => ({ ...p, downtime: { ...p.downtime, ...patch } }))} />
+                      </div>
+
+                      <div className="space-y-3 p-4">
+                        {pump.nozzles.map((nozzle) => {
+                          const configuredProducts = STATION_PRODUCTS.filter((product) =>
+                            configuration.tanks.some((tank) => tank.product === product.value)
+                          );
+                          const compatibleTanks = configuration.tanks.filter((tank) => tank.product && tank.product === nozzle.product);
+                          return (
+                            <div key={nozzle.id} className="rounded-lg border border-slate-200 bg-white p-3">
+                              <div className="mb-2 flex items-center gap-2">
+                                <span className="text-xs font-semibold text-slate-700">Nozzle {nozzle.number || "—"}</span>
+                                <ProductChip value={nozzle.product} />
+                                <EquipmentStatusBadge status={nozzle.status || "active"} />
+                              </div>
+                              <div className="grid items-end gap-2 sm:grid-cols-[90px_1fr_1fr_auto]">
+                                <label className="text-xs font-semibold text-slate-600">No.
+                                  <input value={nozzle.number} onChange={(e) => updateNozzle(pump.id, nozzle.id, { number: e.target.value })} className={fieldClass} /></label>
+                                <label className="text-xs font-semibold text-slate-600">Product
+                                  <select value={nozzle.product} onChange={(e) => updateNozzle(pump.id, nozzle.id, { product: e.target.value, tankId: "" })} className={fieldClass} disabled={!configuredProducts.length}>
+                                    <option value="">{configuredProducts.length ? "Choose product" : "Add a tank first"}</option>
+                                    {configuredProducts.map((product) => <option key={product.value} value={product.value}>{product.label}</option>)}
+                                  </select></label>
+                                <label className="text-xs font-semibold text-slate-600">Supplying tank
+                                  <select value={nozzle.tankId || ""} onChange={(e) => updateNozzle(pump.id, nozzle.id, { tankId: e.target.value })} className={fieldClass} disabled={!nozzle.product}>
+                                    <option value="">{nozzle.product ? "Choose tank" : "Pick a product first"}</option>
+                                    {compatibleTanks.map((tank) => <option key={tank.id} value={tank.id}>Tank {tank.number}</option>)}
+                                  </select></label>
+                                <Button variant="outline" onClick={() => removeNozzle(pump.id, nozzle.id)} aria-label={`Remove nozzle ${nozzle.number}`}><Trash2 className="h-4 w-4" /></Button>
+                              </div>
+                              <StatusEditor equipment={nozzle} onStatus={(v) => setNozzleStatus(pump.id, nozzle.id, v)}
+                                onDowntime={(patch) => updateNozzle(pump.id, nozzle.id, { downtime: { ...nozzle.downtime, ...patch } })} />
+                            </div>
+                          );
+                        })}
+                        {!pump.nozzles.length && (
+                          <div className="rounded-lg border border-dashed border-amber-300 bg-amber-50 px-4 py-4 text-center text-xs font-medium text-amber-800">
+                            This pump has no nozzles. Add at least one to save.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-              {!configuration.pumps.length && <p className="text-sm text-slate-500">No pumps configured.</p>}
-            </div>
-          </section>
-        </>}
-        <div className="flex justify-end gap-3 border-t border-slate-200 pt-4">
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-300 px-4 py-8 text-center">
+                  <p className="text-sm font-semibold text-slate-700">No pumps yet</p>
+                  <p className="mt-1 text-xs text-slate-500">Add a pump, then add its nozzles.</p>
+                </div>
+              )}
+            </StationSection>
+
+            <StationSection
+              step={4}
+              title="Sales target (optional)"
+              description="A recurring weekly or monthly target in Ghana cedis. Actual-versus-target reporting needs daily sales data to be connected."
+              action={
+                <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm font-medium text-slate-700">
+                  <input type="checkbox" checked={Boolean(configuration.targets?.sales)}
+                    onChange={(e) => setConfiguration((prev) => ({ ...prev, targets: { ...prev.targets,
+                      sales: e.target.checked ? { frequency: "monthly", amountGhs: "" } : null,
+                    } }))} /> Set a target
+                </label>
+              }
+            >
+              {configuration.targets?.sales ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="text-xs font-semibold text-slate-600">Target period
+                    <select className={fieldClass} value={configuration.targets.sales.frequency || "monthly"}
+                      onChange={(e) => setSalesTarget({ frequency: e.target.value })}>
+                      <option value="weekly">Weekly</option>
+                      <option value="monthly">Monthly</option>
+                    </select>
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">Sales target (GH₵)
+                    <input type="number" min="0.01" step="0.01" inputMode="decimal" className={fieldClass}
+                      value={configuration.targets.sales.amountGhs ?? ""} placeholder="e.g. 150000"
+                      onChange={(e) => setSalesTarget({ amountGhs: e.target.value })} />
+                  </label>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500">No target set for this station.</p>
+              )}
+            </StationSection>
+          </div>
+        </>
+      )}
+
+      <div className="sticky bottom-0 z-20 border-t border-slate-200 bg-white px-6 py-4">
+        {error && (
+          <div className="mb-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>{error}</p>
+          </div>
+        )}
+        <div className="flex justify-end gap-3">
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
           <Button onClick={save} disabled={saving || loading} className="bg-navy-950 text-white hover:bg-navy-900">
             {saving ? <><Loader2 className="h-4 w-4 animate-spin" /> Saving…</> : <><Check className="h-4 w-4" /> Save Station Configuration</>}
