@@ -1738,6 +1738,420 @@ const CreateChildOrganizationModal = ({
   );
 };
 
+// Equipment identity, tank connections, sales targets and current downtime are
+// stored on the Branch document. Status transitions retain equipment history.
+const STATION_PRODUCTS = [
+  { value: "petrol", label: "Petrol" },
+  { value: "diesel", label: "Diesel" },
+  { value: "premium_petrol", label: "Premium Petrol" },
+  { value: "kerosene", label: "Kerosene" },
+];
+
+const STATION_TYPES = [
+  { value: "advanced", label: "Advanced", detail: "Live ATG + forecourt controller" },
+  { value: "better", label: "Better", detail: "ATG probe / partial automation" },
+  { value: "basic", label: "Basic", detail: "Manual dips + totalizer entries" },
+];
+
+const EQUIPMENT_ISSUES = [
+  { value: "mechanical", label: "Mechanical failure" },
+  { value: "electrical", label: "Electrical / power issue" },
+  { value: "metering", label: "Metering / calibration issue" },
+  { value: "fuel_flow", label: "Fuel flow / blockage" },
+  { value: "maintenance", label: "Planned maintenance" },
+  { value: "other", label: "Other" },
+];
+
+const newEquipmentId = (prefix) =>
+  `${prefix}_${typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
+
+const emptyStationConfiguration = () => ({
+  stationType: "", tanks: [], pumps: [], targets: { sales: null },
+});
+
+const normalizeEquipment = (equipment) => ({
+  ...equipment,
+  status: equipment.status || "active",
+  downtime: equipment.downtime || null,
+  downtimeHistory: Array.isArray(equipment.downtimeHistory) ? equipment.downtimeHistory : [],
+});
+
+const STATUS_FIELD_CLASS = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800";
+
+const StatusEditor = ({ equipment, onStatus, onDowntime }) => (
+    <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+      <div className="grid gap-3 sm:grid-cols-[170px_1fr] sm:items-end">
+        <label className="text-xs font-semibold text-slate-600">Equipment status
+          <select className={STATUS_FIELD_CLASS} value={equipment.status || "active"} onChange={(e) => onStatus(e.target.value)}>
+            <option value="active">Active / operational</option>
+            <option value="down">Down / out of service</option>
+          </select>
+        </label>
+        {equipment.status === "down" && <span className="text-xs font-medium text-amber-700">Downtime is recorded from the time the status changes to Down. Set it back to Active when restored.</span>}
+      </div>
+      {equipment.status === "down" && <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <label className="text-xs font-semibold text-slate-600">Reason for downtime
+          <select className={STATUS_FIELD_CLASS} value={equipment.downtime?.reason || ""} onChange={(e) => onDowntime({ reason: e.target.value })}>
+            <option value="">Choose reason</option>
+            {EQUIPMENT_ISSUES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+        </label>
+        <label className="text-xs font-semibold text-slate-600">Brief description
+          <textarea className={STATUS_FIELD_CLASS} rows={2} value={equipment.downtime?.description || ""} onChange={(e) => onDowntime({ description: e.target.value })} placeholder="What happened?" />
+        </label>
+      </div>}
+      {!!equipment.downtimeHistory?.length && <p className="mt-2 text-xs text-slate-500">{equipment.downtimeHistory.length} completed downtime event(s) recorded for this equipment.</p>}
+    </div>
+  );
+
+const StationConfigurationModal = ({ open, branch, onClose, onSaved }) => {
+  const [configuration, setConfiguration] = useState(emptyStationConfiguration);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const branchId = getOrganizationId(branch);
+
+  useEffect(() => {
+    if (!open || !branchId) return;
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    getDoc(doc(db, "organizations", branchId))
+      .then((snapshot) => {
+        if (cancelled) return;
+        if (!snapshot.exists()) throw new Error("The branch could not be found.");
+        const stored = snapshot.data().stationConfiguration || {};
+        setConfiguration({
+          ...stored,
+          stationType: stored.stationType || "",
+          tanks: Array.isArray(stored.tanks) ? stored.tanks : [],
+          pumps: Array.isArray(stored.pumps)
+            ? stored.pumps.map((pump) => ({
+                ...normalizeEquipment(pump),
+                nozzles: Array.isArray(pump.nozzles) ? pump.nozzles.map(normalizeEquipment) : [],
+              }))
+            : [],
+          targets: { ...(stored.targets || {}), sales: stored.targets?.sales || null },
+        });
+      })
+      .catch((err) => { if (!cancelled) setError(err.message || "Could not load station configuration."); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [open, branchId]);
+
+  const updateTank = (id, patch) => setConfiguration((prev) => ({
+    ...prev, tanks: prev.tanks.map((tank) => tank.id === id ? { ...tank, ...patch } : tank),
+  }));
+  const updatePump = (id, modifier) => setConfiguration((prev) => ({
+    ...prev, pumps: prev.pumps.map((pump) => pump.id === id ? modifier(pump) : pump),
+  }));
+  const updateNozzle = (pumpId, nozzleId, patch) => updatePump(pumpId, (pump) => ({
+    ...pump,
+    nozzles: pump.nozzles.map((nozzle) => nozzle.id === nozzleId ? { ...nozzle, ...patch } : nozzle),
+  }));
+  const addTank = () => setConfiguration((prev) => ({
+    ...prev,
+    tanks: [...prev.tanks, {
+      id: newEquipmentId("tank"),
+      number: String(Math.max(0, ...prev.tanks.map((t) => Number(t.number) || 0)) + 1),
+      product: "",
+    }],
+  }));
+  const addPump = () => setConfiguration((prev) => ({
+    ...prev,
+    pumps: [...prev.pumps, {
+      id: newEquipmentId("pump"),
+      number: String(Math.max(0, ...prev.pumps.map((p) => Number(p.number) || 0)) + 1),
+      nozzles: [], status: "active", downtime: null, downtimeHistory: [],
+    }],
+  }));
+  const removePump = (pumpId) => {
+    const pump = configuration.pumps.find((item) => item.id === pumpId);
+    if (pump?.status === "down" || pump?.downtimeHistory?.length ||
+        pump?.nozzles?.some((nozzle) => nozzle.status === "down" || nozzle.downtimeHistory?.length)) {
+      setError("This pump has recorded downtime. Keep its ID for reporting; mark it Down instead of deleting it.");
+      return;
+    }
+    setConfiguration((prev) => ({ ...prev, pumps: prev.pumps.filter((item) => item.id !== pumpId) }));
+    setError("");
+  };
+  const removeNozzle = (pumpId, nozzleId) => {
+    const nozzle = configuration.pumps.find((item) => item.id === pumpId)?.nozzles.find((item) => item.id === nozzleId);
+    if (nozzle?.status === "down" || nozzle?.downtimeHistory?.length) {
+      setError("This nozzle has recorded downtime. Keep its ID for historical reporting instead of deleting it.");
+      return;
+    }
+    updatePump(pumpId, (pump) => ({ ...pump, nozzles: pump.nozzles.filter((item) => item.id !== nozzleId) }));
+    setError("");
+  };
+  const removeTank = (tankId) => {
+    const linked = configuration.pumps.some((pump) =>
+      (pump.nozzles || []).some((nozzle) => nozzle.tankId === tankId)
+    );
+    if (linked) { setError("This tank supplies a nozzle. Reassign or remove its nozzles first."); return; }
+    setConfiguration((prev) => ({ ...prev, tanks: prev.tanks.filter((tank) => tank.id !== tankId) }));
+    setError("");
+  };
+
+  const changeStatus = (equipment, nextStatus) => {
+    const currentStatus = equipment.status || "active";
+    if (nextStatus === currentStatus) return equipment;
+    if (nextStatus === "down") {
+      return {
+        ...equipment, status: "down",
+        downtime: { id: newEquipmentId("downtime"), reason: "", description: "", startedAt: new Date(), reportedBy: auth.currentUser?.uid || "" },
+      };
+    }
+    const completed = equipment.downtime
+      ? { ...equipment.downtime, endedAt: new Date(), resolvedBy: auth.currentUser?.uid || "" }
+      : null;
+    return {
+      ...equipment, status: "active", downtime: null,
+      downtimeHistory: completed
+        ? [...(equipment.downtimeHistory || []), completed]
+        : equipment.downtimeHistory || [],
+    };
+  };
+  const setPumpStatus = (pumpId, value) => updatePump(pumpId, (pump) => changeStatus(pump, value));
+  const setNozzleStatus = (pumpId, nozzleId, value) => updatePump(pumpId, (pump) => ({
+    ...pump,
+    nozzles: pump.nozzles.map((nozzle) => nozzle.id === nozzleId ? changeStatus(nozzle, value) : nozzle),
+  }));
+  const setSalesTarget = (patch) => setConfiguration((prev) => ({
+    ...prev,
+    targets: { ...prev.targets, sales: { ...(prev.targets?.sales || { frequency: "monthly", amountGhs: "" }), ...patch } },
+  }));
+
+  const save = async () => {
+    if (!auth.currentUser?.uid || !branchId) { setError("Sign in to save station configuration."); return; }
+    if (!configuration.stationType) { setError("Select the station type."); return; }
+    const tankNumbers = configuration.tanks.map((tank) => String(tank.number || "").trim());
+    const pumpNumbers = configuration.pumps.map((pump) => String(pump.number || "").trim());
+    if (tankNumbers.some((number) => !number) || new Set(tankNumbers).size !== tankNumbers.length ||
+        configuration.tanks.some((tank) => !tank.product)) {
+      setError("Every tank needs a unique number and a fuel product."); return;
+    }
+    if (pumpNumbers.some((number) => !number) || new Set(pumpNumbers).size !== pumpNumbers.length) {
+      setError("Every pump needs a unique number."); return;
+    }
+    if (configuration.pumps.some((pump) => !pump.nozzles?.length)) {
+      setError("Each pump must have at least one nozzle."); return;
+    }
+    const checkDowntime = (equipment, label) => {
+      if ((equipment.status || "active") !== "down") return "";
+      if (!EQUIPMENT_ISSUES.some((item) => item.value === equipment.downtime?.reason) ||
+          !String(equipment.downtime?.description || "").trim()) {
+        return `${label}: select a downtime reason and briefly describe the issue.`;
+      }
+      return "";
+    };
+    for (const pump of configuration.pumps) {
+      const invalidPumpStatus = checkDowntime(pump, `Pump ${pump.number}`);
+      if (invalidPumpStatus) { setError(invalidPumpStatus); return; }
+      const numbers = pump.nozzles.map((nozzle) => String(nozzle.number || "").trim());
+      if (numbers.some((number) => !number) || new Set(numbers).size !== numbers.length) {
+        setError(`Pump ${pump.number}: assign unique nozzle numbers.`); return;
+      }
+      for (const nozzle of pump.nozzles) {
+        const tank = configuration.tanks.find((item) => item.id === nozzle.tankId);
+        if (!nozzle.product || !tank || nozzle.product !== tank.product) {
+          setError(`Pump ${pump.number}, nozzle ${nozzle.number}: choose a product and a supplying tank with the same product.`);
+          return;
+        }
+        const invalidNozzleStatus = checkDowntime(nozzle, `Pump ${pump.number}, nozzle ${nozzle.number}`);
+        if (invalidNozzleStatus) { setError(invalidNozzleStatus); return; }
+      }
+    }
+    const salesTarget = configuration.targets?.sales;
+    if (salesTarget) {
+      const amount = Number(salesTarget.amountGhs);
+      if (!["weekly", "monthly"].includes(salesTarget.frequency) ||
+          String(salesTarget.amountGhs ?? "").trim() === "" ||
+          !Number.isFinite(amount) || amount <= 0) {
+        setError("Enter a valid weekly or monthly sales target greater than GH₵0, or disable targets.");
+        return;
+      }
+    }
+    try {
+      setSaving(true);
+      setError("");
+      await updateDoc(doc(db, "organizations", branchId), {
+        stationConfiguration: {
+          ...configuration,
+          targets: {
+            ...configuration.targets,
+            sales: salesTarget ? {
+              ...salesTarget,
+              amountGhs: Number(salesTarget.amountGhs),
+              updatedBy: auth.currentUser.uid,
+              updatedAt: new Date(),
+            } : null,
+          },
+          tanks: configuration.tanks.map((tank) => ({ ...tank, number: String(tank.number).trim() })),
+          pumps: configuration.pumps.map((pump) => ({
+            ...pump, number: String(pump.number).trim(),
+            nozzles: pump.nozzles.map((nozzle) => ({ ...nozzle, number: String(nozzle.number).trim() })),
+          })),
+          updatedAt: serverTimestamp(),
+          updatedBy: auth.currentUser.uid,
+        },
+      });
+      onSaved();
+      onClose();
+    } catch (err) {
+      console.error("Unable to save station configuration:", err);
+      setError(err.message || "Station configuration could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fieldClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800";
+
+
+  return (
+    <ModalPortal open={open} title="Station Configuration" onClose={saving ? () => {} : onClose} maxWidth="max-w-4xl">
+      <div className="flex items-center justify-between bg-slate-900 px-6 py-5 text-white">
+        <div><h2 className="text-lg font-semibold">Station Configuration</h2>
+          <p className="mt-1 text-sm text-slate-300">{branch?.name || "Branch"} · Targets, storage, dispensers and downtime</p></div>
+        <button type="button" onClick={onClose} disabled={saving} aria-label="Close station configuration"><X className="h-5 w-5" /></button>
+      </div>
+      <div className="space-y-6 p-6">
+        {error && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+        {loading ? <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" />Loading configuration…</div> : <>
+          <section>
+            <h3 className="text-sm font-semibold text-slate-900">Station type</h3>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              {STATION_TYPES.map((type) => (
+                <label key={type.value} className={`flex cursor-pointer gap-2 rounded-xl border p-3 ${configuration.stationType === type.value ? "border-slate-900 bg-slate-50" : "border-slate-200"}`}>
+                  <input type="radio" name="station-type" checked={configuration.stationType === type.value}
+                    onChange={() => setConfiguration((prev) => ({ ...prev, stationType: type.value }))} />
+                  <span><span className="block text-sm font-semibold">{type.label}</span><span className="mt-1 block text-xs text-slate-500">{type.detail}</span></span>
+                </label>
+              ))}
+            </div>
+          </section>
+          <section className="border-t border-slate-200 pt-5">
+            <div className="flex items-start justify-between gap-3">
+              <div><h3 className="text-sm font-semibold text-slate-900">Sales target (optional)</h3>
+                <p className="mt-1 text-xs text-slate-500">Set an individual station sales target in Ghana cedis. Daily sales can later be summed for the selected week or month and compared against this amount.</p></div>
+              <label className="flex shrink-0 items-center gap-2 text-sm font-medium text-slate-700">
+                <input type="checkbox" checked={Boolean(configuration.targets?.sales)}
+                  onChange={(e) => setConfiguration((prev) => ({ ...prev, targets: { ...prev.targets,
+                    sales: e.target.checked ? { frequency: "monthly", amountGhs: "" } : null,
+                  } }))} /> Enable
+              </label>
+            </div>
+            {configuration.targets?.sales && <div className="mt-3 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
+              <label className="text-xs font-semibold text-slate-600">Target period
+                <select className={fieldClass} value={configuration.targets.sales.frequency || "monthly"}
+                  onChange={(e) => setSalesTarget({ frequency: e.target.value })}>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-slate-600">Sales target (GH₵)
+                <input type="number" min="0.01" step="0.01" inputMode="decimal" className={fieldClass}
+                  value={configuration.targets.sales.amountGhs ?? ""} placeholder="e.g. 150000"
+                  onChange={(e) => setSalesTarget({ amountGhs: e.target.value })} />
+              </label>
+              <p className="text-xs text-slate-500 sm:col-span-2">This is a recurring weekly or calendar-month target, not a one-off target. Actual-versus-target reporting requires the daily sales reporting data to be connected.</p>
+            </div>}
+          </section>
+          <section className="border-t border-slate-200 pt-5">
+            <div className="flex items-center justify-between gap-2"><div><h3 className="text-sm font-semibold text-slate-900">Fuel tanks</h3>
+              <p className="mt-1 text-xs text-slate-500">Configure tanks first so nozzles can be assigned to the correct supply.</p></div>
+              <Button variant="outline" onClick={addTank}><Plus className="h-4 w-4" /> Add Tank</Button></div>
+            <div className="mt-3 space-y-3">
+              {configuration.tanks.map((tank) => (
+                <div key={tank.id} className="grid items-end gap-3 rounded-xl border border-slate-200 p-3 sm:grid-cols-[1fr_1fr_auto]">
+                  <label className="text-xs font-semibold text-slate-600">Tank number
+                    <input value={tank.number} onChange={(e) => updateTank(tank.id, {number:e.target.value})} className={fieldClass} placeholder="e.g. 1" /></label>
+                  <label className="text-xs font-semibold text-slate-600">Fuel product
+                    <select value={tank.product} onChange={(e) => {
+                      const product = e.target.value;
+                      setConfiguration((prev) => ({ ...prev,
+                        tanks: prev.tanks.map((t) => t.id === tank.id ? { ...t, product } : t),
+                        pumps: prev.pumps.map((pump) => ({ ...pump,
+                          nozzles: pump.nozzles.map((n) => n.tankId === tank.id && n.product !== product ? { ...n, tankId: "" } : n),
+                        })),
+                      }));
+                    }} className={fieldClass}>
+                      <option value="">Choose product</option>{STATION_PRODUCTS.map((product) => <option key={product.value} value={product.value}>{product.label}</option>)}
+                    </select></label>
+                  <Button variant="outline" onClick={() => removeTank(tank.id)} aria-label={`Remove tank ${tank.number}`}><Trash2 className="h-4 w-4" /></Button>
+                </div>
+              ))}
+              {!configuration.tanks.length && <p className="text-sm text-slate-500">No tanks configured.</p>}
+            </div>
+          </section>
+          <section className="border-t border-slate-200 pt-5">
+            <div className="flex items-center justify-between gap-2"><div><h3 className="text-sm font-semibold text-slate-900">Pumps and nozzles</h3>
+              <p className="mt-1 text-xs text-slate-500">Each nozzle must link to a matching fuel tank. Mark faulty equipment Down and record the reason.</p></div>
+              <Button variant="outline" onClick={addPump}><Plus className="h-4 w-4" /> Add Pump</Button></div>
+            <div className="mt-3 space-y-4">
+              {configuration.pumps.map((pump) => (
+                <div key={pump.id} className="rounded-xl border border-slate-200 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <label className="text-xs font-semibold text-slate-600">Pump number
+                      <input className={fieldClass} value={pump.number} onChange={(e) => updatePump(pump.id, (p) => ({...p, number:e.target.value}))} /></label>
+                    <div className="flex gap-2"><Button variant="outline" onClick={() => updatePump(pump.id, (p) => ({...p,
+                      nozzles:[...p.nozzles, {
+                        id:newEquipmentId("nozzle"),
+                        number:String(Math.max(0,...p.nozzles.map((n)=>Number(n.number)||0))+1),
+                        product:"",tankId:"",status:"active",downtime:null,downtimeHistory:[],
+                      }],
+                    }))}><Plus className="h-4 w-4" /> Add Nozzle</Button>
+                    <Button variant="outline" onClick={() => removePump(pump.id)} aria-label={`Remove pump ${pump.number}`}><Trash2 className="h-4 w-4" /></Button></div>
+                  </div>
+                  <StatusEditor equipment={pump} onStatus={(v) => setPumpStatus(pump.id,v)}
+                    onDowntime={(patch) => updatePump(pump.id,(p)=>({...p,downtime:{...p.downtime,...patch}}))} />
+                  <div className="mt-3 space-y-3">
+                    {pump.nozzles.map((nozzle) => {
+                      const configuredProducts = STATION_PRODUCTS.filter((product) =>
+                        configuration.tanks.some((tank) => tank.product === product.value)
+                      );
+                      const compatibleTanks = configuration.tanks.filter((tank) => tank.product && tank.product === nozzle.product);
+                      return <div key={nozzle.id} className="rounded-lg bg-slate-50 p-3">
+                        <div className="grid items-end gap-2 sm:grid-cols-[95px_1fr_1fr_auto]">
+                          <label className="text-xs font-semibold text-slate-600">Nozzle #
+                            <input value={nozzle.number} onChange={(e) => updateNozzle(pump.id,nozzle.id,{number:e.target.value})} className={fieldClass}/></label>
+                          <label className="text-xs font-semibold text-slate-600">Product
+                            <select value={nozzle.product} onChange={(e) => updateNozzle(pump.id,nozzle.id,{product:e.target.value,tankId:""})} className={fieldClass} disabled={!configuredProducts.length}>
+                              <option value="">{configuredProducts.length ? "Choose product" : "Configure a tank product first"}</option>
+                              {configuredProducts.map((product) => <option key={product.value} value={product.value}>{product.label}</option>)}
+                            </select></label>
+                          <label className="text-xs font-semibold text-slate-600">Supplying tank
+                            <select value={nozzle.tankId || ""} onChange={(e) => updateNozzle(pump.id,nozzle.id,{tankId:e.target.value})} className={fieldClass}>
+                              <option value="">Choose matching tank</option>{compatibleTanks.map((tank) => <option key={tank.id} value={tank.id}>Tank {tank.number}</option>)}
+                            </select></label>
+                          <Button variant="outline" onClick={() => removeNozzle(pump.id,nozzle.id)} aria-label={`Remove nozzle ${nozzle.number}`}><Trash2 className="h-4 w-4" /></Button>
+                        </div>
+                        <StatusEditor equipment={nozzle} onStatus={(v) => setNozzleStatus(pump.id,nozzle.id,v)}
+                          onDowntime={(patch) => updateNozzle(pump.id,nozzle.id,{downtime:{...nozzle.downtime,...patch}})} />
+                      </div>;
+                    })}
+                    {!pump.nozzles.length && <p className="text-xs text-amber-700">Add at least one nozzle to this pump.</p>}
+                  </div>
+                </div>
+              ))}
+              {!configuration.pumps.length && <p className="text-sm text-slate-500">No pumps configured.</p>}
+            </div>
+          </section>
+        </>}
+        <div className="flex justify-end gap-3 border-t border-slate-200 pt-4">
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={save} disabled={saving || loading} className="bg-navy-950 text-white hover:bg-navy-900">
+            {saving ? <><Loader2 className="h-4 w-4 animate-spin" /> Saving…</> : <><Check className="h-4 w-4" /> Save Station Configuration</>}
+          </Button>
+        </div>
+      </div>
+    </ModalPortal>
+  );
+};
+
 const AccountSettings = ({ roles = [] }) => {
   const [activeTab, setActiveTab] = useState("account");
 
@@ -1781,6 +2195,7 @@ const AccountSettings = ({ roles = [] }) => {
   const [inviteRole, setInviteRole] = useState("");
 
   const [createChildOpen, setCreateChildOpen] = useState(false);
+  const [stationConfigBranch, setStationConfigBranch] = useState(null);
   const [formData, setFormData] = useState(createProfileForm());
 
   const [
@@ -6381,6 +6796,11 @@ const AccountSettings = ({ roles = [] }) => {
                             {statusLabel}
                           </span>
 
+                          {isRegionAdmin && normalizeText(item.level) === "branch" && (
+                            <Button variant="outline" onClick={() => setStationConfigBranch(item)}>
+                              <Pencil className="h-4 w-4" /> Station Configuration
+                            </Button>
+                          )}
                           {invitationUrl && (
                             <CopyButton
                               value={invitationUrl}
@@ -6446,6 +6866,15 @@ const AccountSettings = ({ roles = [] }) => {
         </div>
       )}
 
+      <StationConfigurationModal
+        open={Boolean(stationConfigBranch)}
+        branch={stationConfigBranch}
+        onClose={() => setStationConfigBranch(null)}
+        onSaved={() => {
+          setPageNotice({ type: "success", message: "Station configuration saved to the branch organization." });
+          loadAccountData({ showLoading: false });
+        }}
+      />
       <CreateChildOrganizationModal
         open={createChildOpen}
         childType={childTypeToCreate}
