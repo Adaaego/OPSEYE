@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, } from "recharts";
-import { BarChart3, Banknote, Building2, ClipboardList, Eye, Factory, Filter, Search, Users, } from "lucide-react";
+import { BarChart3, Banknote, Building2, ClipboardList, Eye, Factory, Filter, Search, Users, X, } from "lucide-react";
 import { CHART_COLORS, } from "../../../lib/util";
 import { calculateOnTimeCompliance, calculateSubmissionCompletion, } from "../../../lib/calculation-metrics";
 import { StatusBadge, Table, EmptyCell, Select, } from "../../ui/interface";
@@ -19,6 +19,17 @@ const KPI_ICON_STYLE = {
     backgroundColor: ICON_BLUE,
     color: NAVY,
 };
+const STATUS_COLOURS = {
+    ok: "#047857",
+    warn: "#B45309",
+    crit: "#B91C1C",
+};
+const getRateColour = (value) => value >= 80
+    ? STATUS_COLOURS.ok
+    : value >= 50
+        ? STATUS_COLOURS.warn
+        : STATUS_COLOURS.crit;
+const FILTER_FIELD_CLASS_NAME = "h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200";
 const Card = ({ children, className = "", }) => {
     return (<div className={`rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] ${className}`}>
       {children}
@@ -44,22 +55,20 @@ const SectionHeader = ({ children, description = "", }) => {
 const KpiCard = ({ label, value, caption, icon: Icon, }) => {
     return (<Card className="p-5">
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            {label}
-          </p>
-
-          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
-            {value}
-          </p>
-        </div>
+        <p className="text-sm font-medium leading-snug text-slate-500">
+          {label}
+        </p>
 
         {Icon && (<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg" style={KPI_ICON_STYLE}>
             <Icon className="h-5 w-5"/>
           </div>)}
       </div>
 
-      <p className="mt-3 text-xs leading-snug text-slate-500">
+      <p className="mt-3 text-2xl font-semibold tabular-nums tracking-tight text-slate-900">
+        {value}
+      </p>
+
+      <p className="mt-2 text-xs leading-snug text-slate-500">
         {caption ||
             "No data available"}
       </p>
@@ -659,6 +668,35 @@ const EmptyState = ({ message, }) => {
       <p className="mt-1 text-xs text-slate-400">
         This section will update when submitted report data becomes available.
       </p>
+    </div>);
+};
+const ChartSummary = ({ total, peak, productLabel, }) => {
+    return (<div className="mb-5 flex flex-wrap items-end justify-between gap-4 border-b border-slate-100 pb-4">
+      <div className="flex flex-wrap gap-8">
+        <div>
+          <p className="text-xs font-medium text-slate-500">
+            Total in view
+          </p>
+
+          <p className="mt-1 text-xl font-semibold tabular-nums tracking-tight text-slate-900">
+            {formatNumber(total)} L
+          </p>
+        </div>
+
+        <div>
+          <p className="text-xs font-medium text-slate-500">
+            Highest period
+          </p>
+
+          <p className="mt-1 text-xl font-semibold tabular-nums tracking-tight text-slate-900">
+            {formatNumber(peak)} L
+          </p>
+        </div>
+      </div>
+
+      <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+        {productLabel}
+      </span>
     </div>);
 };
 const OperatorAvatar = ({ name, logoUrl, compact = false, }) => {
@@ -1475,7 +1513,16 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
     const expatWorkforceColour = !Array.isArray(CHART_COLORS) &&
         CHART_COLORS?.expat
         ? CHART_COLORS.expat
-        : "#B7791F";
+        : "#7C8DA6";
+    const trendProductLabel = reportingProduct
+        ? getProductLabel(reportingProduct)
+        : "All fuels";
+    const trendTotal = production7Day.reduce((total, record) => total +
+        (Number(record.production) || 0), 0);
+    const trendPeak = production7Day.reduce((peak, record) => Math.max(peak, Number(record.production) || 0), 0);
+    const monthlyTotal = production6Month.reduce((total, record) => total +
+        (Number(record.value) || 0), 0);
+    const monthlyPeak = production6Month.reduce((peak, record) => Math.max(peak, Number(record.value) || 0), 0);
     return (<div className="w-full">
       {/*
          * The interactive filter bar is intentionally removed from exported PDFs.
@@ -1492,128 +1539,236 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
         </p>
       </div>
 
-      <div data-pdf-remove="true" className="mb-6 rounded-xl border border-slate-200/80 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex h-9 items-center gap-2 px-1 pr-2">
-            <Filter className="h-4 w-4 text-slate-500"/>
+      <div data-pdf-remove="true" className="mb-6 overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-7 w-7 items-center justify-center rounded-md" style={{
+            backgroundColor: ICON_BLUE,
+            color: NAVY,
+        }}>
+              <Filter className="h-3.5 w-3.5"/>
+            </span>
 
-            <span className="text-xs font-semibold text-slate-700">
+            <span className="text-sm font-semibold text-slate-900">
               Reporting Filters
             </span>
           </div>
 
-          <label className="relative min-w-[190px] flex-1 sm:max-w-[260px]">
-            <span className="sr-only">
-              Search reporting history
-            </span>
+          <div className="flex items-center gap-3">
+            <p className="text-xs font-medium text-slate-500">
+              Showing{" "}
+              <span className="font-semibold text-slate-800">
+                {formatNumber(reportingHistory.length)}
+              </span>{" "}
+              of{" "}
+              <span className="font-semibold text-slate-800">
+                {formatNumber(scopedReports.length)}
+              </span>{" "}
+              reports
+            </p>
 
-            <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400"/>
-
-            <input type="search" value={reportingSearch} onChange={(event) => setReportingSearch(event.target.value)} placeholder="Search reports or submitters" className={`${filterControlClassName} w-full pl-9`}/>
-          </label>
-
-          <select value={reportingPeriod} onChange={(event) => setReportingPeriod(event.target.value)} className={`${filterControlClassName} w-36`} aria-label="Reporting period">
-            <option value="all_time">
-              All time
-            </option>
-
-            <option value="today">
-              Today
-            </option>
-
-            <option value="last_7_days">
-              Last 7 days
-            </option>
-
-            <option value="last_30_days">
-              Last 30 days
-            </option>
-
-            <option value="current_quarter">
-              This quarter
-            </option>
-
-            <option value="custom">
-              Custom range
-            </option>
-          </select>
-          {canFilterByRegion && (<select value={reportingRegion} onChange={(event) => setReportingRegion(event.target.value)} className={`${filterControlClassName} w-40`} aria-label="Report region">
-            <option value="">
-              All regions
-            </option>
-
-            {regionOptions.map((region) => (<option key={region} value={region}>
-                  {region}
-                </option>))}
-          </select>)}
-
-          <select value={reportingType} onChange={(event) => setReportingType(event.target.value)} className={`${filterControlClassName} w-44`} aria-label="Report type">
-            <option value="">
-              All report types
-            </option>
-
-            {reportingTypeOptions.map((reportType) => (<option key={reportType} value={reportType}>
-                  {reportType}
-                </option>))}
-          </select>
-
-          <select value={reportingProduct} onChange={(event) => setReportingProduct(event.target.value)} className={`${filterControlClassName} w-36`} aria-label="Product type">
-            {PRODUCT_FILTER_OPTIONS.map((option) => (<option key={option.value ||
-                "all-products"} value={option.value}>
-                  {option.label}
-                </option>))}
-          </select>
-
-          <select value={reportingStatus} onChange={(event) => setReportingStatus(event.target.value)} className={`${filterControlClassName} w-36`} aria-label="Report status">
-            <option value="">
-              All statuses
-            </option>
-
-            {reportingStatusOptions.map((status) => (<option key={status} value={status}>
-                  {status}
-                </option>))}
-          </select>
-
-          {hasReportingFilters && (<button type="button" onClick={clearReportingFilters} className="h-9 rounded-md px-3 text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900">
-              Reset
-            </button>)}
-
-          <p className="ml-auto text-xs font-medium text-slate-500">
-            Showing{" "}
-            <span className="font-semibold text-slate-700">
-              {formatNumber(reportingHistory.length)}
-            </span>{" "}
-            of{" "}
-            <span className="font-semibold text-slate-700">
-              {formatNumber(scopedReports.length)}
-            </span>{" "}
-            reports
-          </p>
+            {hasReportingFilters && (<button type="button" onClick={clearReportingFilters} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900">
+                Reset filters
+              </button>)}
+          </div>
         </div>
 
-        {reportingPeriod ===
-            "custom" && (<div className="mt-3 flex flex-wrap items-end gap-3 border-t border-slate-100 pt-3">
-            <label>
-              <span className="mb-1 block text-[11px] font-medium text-slate-500">
-                Start date
+        <div className="grid grid-cols-1 gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
+          <label className="block sm:col-span-2">
+            <span className="mb-1 block text-[11px] font-semibold text-slate-500">
+              Search
+            </span>
+
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400"/>
+
+              <input type="search" value={reportingSearch} onChange={(event) => setReportingSearch(event.target.value)} placeholder="Search reports or submitters" className={`${FILTER_FIELD_CLASS_NAME} pl-9`}/>
+            </div>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-[11px] font-semibold text-slate-500">
+              Period
+            </span>
+
+            <select value={reportingPeriod} onChange={(event) => setReportingPeriod(event.target.value)} className={FILTER_FIELD_CLASS_NAME} aria-label="Reporting period">
+              <option value="all_time">
+                All time
+              </option>
+
+              <option value="today">
+                Today
+              </option>
+
+              <option value="last_7_days">
+                Last 7 days
+              </option>
+
+              <option value="last_30_days">
+                Last 30 days
+              </option>
+
+              <option value="current_quarter">
+                This quarter
+              </option>
+
+              <option value="custom">
+                Custom range
+              </option>
+            </select>
+          </label>
+
+          {canFilterByRegion && (<label className="block">
+              <span className="mb-1 block text-[11px] font-semibold text-slate-500">
+                Region
               </span>
 
-              <input ref={startDateRef} type="date" value={customStartDate} onChange={(event) => setCustomStartDate(event.target.value)} onClick={() => openDatePicker(startDateRef)} onFocus={() => openDatePicker(startDateRef)} onKeyDown={(event) => event.preventDefault()} onPaste={(event) => event.preventDefault()} inputMode="none" className={`${filterControlClassName} w-40 cursor-pointer`}/>
-            </label>
+              <select value={reportingRegion} onChange={(event) => setReportingRegion(event.target.value)} className={FILTER_FIELD_CLASS_NAME} aria-label="Report region">
+                <option value="">
+                  All regions
+                </option>
 
-            <label>
-              <span className="mb-1 block text-[11px] font-medium text-slate-500">
-                End date
-              </span>
+                {regionOptions.map((region) => (<option key={region} value={region}>
+                      {region}
+                    </option>))}
+              </select>
+            </label>)}
 
-              <input ref={endDateRef} type="date" value={customEndDate} min={customStartDate ||
-                undefined} onChange={(event) => setCustomEndDate(event.target.value)} onClick={() => openDatePicker(endDateRef)} onFocus={() => openDatePicker(endDateRef)} onKeyDown={(event) => event.preventDefault()} onPaste={(event) => event.preventDefault()} inputMode="none" className={`${filterControlClassName} w-40 cursor-pointer`}/>
-            </label>
+          <label className="block">
+            <span className="mb-1 block text-[11px] font-semibold text-slate-500">
+              Report type
+            </span>
+
+            <select value={reportingType} onChange={(event) => setReportingType(event.target.value)} className={FILTER_FIELD_CLASS_NAME} aria-label="Report type">
+              <option value="">
+                All report types
+              </option>
+
+              {reportingTypeOptions.map((reportType) => (<option key={reportType} value={reportType}>
+                    {reportType}
+                  </option>))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-[11px] font-semibold text-slate-500">
+              Status
+            </span>
+
+            <select value={reportingStatus} onChange={(event) => setReportingStatus(event.target.value)} className={FILTER_FIELD_CLASS_NAME} aria-label="Report status">
+              <option value="">
+                All statuses
+              </option>
+
+              {reportingStatusOptions.map((status) => (<option key={status} value={status}>
+                    {status}
+                  </option>))}
+            </select>
+          </label>
+
+          <div className="sm:col-span-2">
+            <span className="mb-1 block text-[11px] font-semibold text-slate-500">
+              Fuel product
+            </span>
+
+            <div className="flex h-10 rounded-lg bg-slate-100 p-1" role="group" aria-label="Product type">
+              {PRODUCT_FILTER_OPTIONS.map((option) => {
+            const selected = reportingProduct === option.value;
+            return (<button key={option.value ||
+                    "all-products"} type="button" aria-pressed={selected} onClick={() => setReportingProduct(option.value)} className={`flex-1 rounded-md px-3 text-xs font-semibold transition ${selected
+                    ? "bg-white text-slate-900 shadow-sm"
+                    : "text-slate-500 hover:text-slate-800"}`}>
+                    {option.value
+                    ? option.label
+                    : "All fuels"}
+                  </button>);
+        })}
+            </div>
+          </div>
+
+          {reportingPeriod ===
+            "custom" && (<>
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-semibold text-slate-500">
+                  Start date
+                </span>
+
+                <input ref={startDateRef} type="date" value={customStartDate} onChange={(event) => setCustomStartDate(event.target.value)} onClick={() => openDatePicker(startDateRef)} onFocus={() => openDatePicker(startDateRef)} onKeyDown={(event) => event.preventDefault()} onPaste={(event) => event.preventDefault()} inputMode="none" className={`${FILTER_FIELD_CLASS_NAME} cursor-pointer`}/>
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-semibold text-slate-500">
+                  End date
+                </span>
+
+                <input ref={endDateRef} type="date" value={customEndDate} min={customStartDate ||
+                undefined} onChange={(event) => setCustomEndDate(event.target.value)} onClick={() => openDatePicker(endDateRef)} onFocus={() => openDatePicker(endDateRef)} onKeyDown={(event) => event.preventDefault()} onPaste={(event) => event.preventDefault()} inputMode="none" className={`${FILTER_FIELD_CLASS_NAME} cursor-pointer`}/>
+              </label>
+            </>)}
+        </div>
+
+        {hasReportingFilters && (<div className="flex flex-wrap items-center gap-2 border-t border-slate-100 bg-slate-50/60 px-4 py-3">
+            <span className="text-[11px] font-semibold text-slate-500">
+              Active:
+            </span>
+
+            {[
+                reportingSearch && {
+                    key: "search",
+                    label: `Search: ${reportingSearch}`,
+                    clear: () => setReportingSearch(""),
+                },
+                (reportingPeriod !== "all_time" ||
+                    customStartDate ||
+                    customEndDate) && {
+                    key: "period",
+                    label: selectedPeriodLabel,
+                    clear: () => {
+                        setReportingPeriod("all_time");
+                        setCustomStartDate("");
+                        setCustomEndDate("");
+                    },
+                },
+                reportingRegion && {
+                    key: "region",
+                    label: reportingRegion,
+                    clear: () => setReportingRegion(""),
+                },
+                reportingType && {
+                    key: "type",
+                    label: reportingType,
+                    clear: () => setReportingType(""),
+                },
+                reportingProduct && {
+                    key: "product",
+                    label: getProductLabel(reportingProduct),
+                    clear: () => setReportingProduct(""),
+                },
+                reportingStatus && {
+                    key: "status",
+                    label: reportingStatus,
+                    clear: () => setReportingStatus(""),
+                },
+            ]
+                .filter(Boolean)
+                .map((chip) => (<span key={chip.key} className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white py-1 pl-3 pr-1.5 text-xs font-medium text-slate-700">
+                  {chip.label}
+
+                  <button type="button" onClick={chip.clear} aria-label={`Remove filter ${chip.label}`} className="flex h-4 w-4 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700">
+                    <X className="h-3 w-3"/>
+                  </button>
+                </span>))}
           </div>)}
 
-        <p className="mt-2 pl-1 text-[11px] text-slate-400">
-          Product filtering recalculates sales volume, estimated revenue, charts, reporting history and station/branch product performance. Compliance remains report-level because the reporting obligation itself is not product-specific. Region also filters the dedicated workforce records. Current period: {selectedPeriodLabel}.
-        </p>
+        <details className="border-t border-slate-100 px-4 py-2.5">
+          <summary className="cursor-pointer text-[11px] font-semibold text-slate-400 transition-colors hover:text-slate-600">
+            How these filters work
+          </summary>
+
+          <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+            Product filtering recalculates sales volume, estimated revenue, charts, reporting history and station/branch product performance. Compliance remains report-level because the reporting obligation itself is not product-specific. Region also filters the dedicated workforce records. Current period: {selectedPeriodLabel}.
+          </p>
+        </details>
       </div>
 
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
@@ -1635,13 +1790,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
 
         <KpiCard label="Submission Completion" value={reportsExpected >
             0 ? (<span style={{
-                color: submissionCompletion >=
-                    80
-                    ? "#166534"
-                    : submissionCompletion >=
-                        50
-                        ? "#B7791F"
-                        : "#9F1239",
+                color: getRateColour(submissionCompletion),
             }}>
                 {`${formatNumber(submissionCompletion, 1)}%`}
               </span>) : ("—")} caption={reportsExpected >
@@ -1654,13 +1803,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
 
         <KpiCard label="On-time Compliance" value={reportsExpected >
             0 ? (<span style={{
-                color: onTimeCompliance >=
-                    80
-                    ? "#166534"
-                    : onTimeCompliance >=
-                        50
-                        ? "#B7791F"
-                        : "#9F1239",
+                color: getRateColour(onTimeCompliance),
             }}>
                 {`${formatNumber(onTimeCompliance, 1)}%`}
               </span>) : ("—")} caption={reportsExpected >
@@ -1692,7 +1835,10 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
 
         <Card className="p-5">
           {production7Day.some((record) => Number(record.production) >
-            0) ? (<ResponsiveContainer width="100%" height={280}>
+            0) ? (<>
+              <ChartSummary total={trendTotal} peak={trendPeak} productLabel={trendProductLabel}/>
+
+              <ResponsiveContainer width="100%" height={280}>
               <BarChart data={production7Day} margin={{
                 top: 8,
                 right: 8,
@@ -1717,13 +1863,16 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                     1000, 1)}k`
                 : formatNumber(value)}/>
 
-                <Tooltip formatter={(value) => [
+                <Tooltip cursor={{
+                fill: "#f1f5f9",
+            }} formatter={(value) => [
                 `${formatNumber(value)} litres`,
                 "Sales volume",
             ]} contentStyle={{
                 fontSize: 13,
                 borderRadius: 8,
                 border: "1px solid #e2e8f0",
+                boxShadow: "0 4px 12px rgba(15,23,42,0.08)",
             }}/>
 
                 <Bar dataKey="production" fill={operatorColor} radius={[
@@ -1733,7 +1882,8 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                 0,
             ]} maxBarSize={48}/>
               </BarChart>
-            </ResponsiveContainer>) : (<EmptyState message="Sales volume trends will appear when sales reports are submitted"/>)}
+            </ResponsiveContainer>
+            </>) : (<EmptyState message="Sales volume trends will appear when sales reports are submitted"/>)}
         </Card>
       </div>
 
@@ -1744,7 +1894,10 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
 
         <Card className="p-5">
           {production6Month.some((record) => Number(record.value) >
-            0) ? (<ResponsiveContainer width="100%" height={260}>
+            0) ? (<>
+              <ChartSummary total={monthlyTotal} peak={monthlyPeak} productLabel={trendProductLabel}/>
+
+              <ResponsiveContainer width="100%" height={260}>
               <BarChart data={production6Month} margin={{
                 top: 8,
                 right: 8,
@@ -1769,13 +1922,16 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                     1000, 1)}k`
                 : formatNumber(value)}/>
 
-                <Tooltip formatter={(value) => [
+                <Tooltip cursor={{
+                fill: "#f1f5f9",
+            }} formatter={(value) => [
                 `${formatNumber(value)} litres`,
                 "Sales volume",
             ]} contentStyle={{
                 fontSize: 13,
                 borderRadius: 8,
                 border: "1px solid #e2e8f0",
+                boxShadow: "0 4px 12px rgba(15,23,42,0.08)",
             }}/>
 
                 <Bar dataKey="value" fill={operatorColor} radius={[
@@ -1785,7 +1941,8 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                 0,
             ]} maxBarSize={48}/>
               </BarChart>
-            </ResponsiveContainer>) : (<EmptyState message="Monthly sales volume data will appear here"/>)}
+            </ResponsiveContainer>
+            </>) : (<EmptyState message="Monthly sales volume data will appear here"/>)}
         </Card>
       </div>
 
@@ -1848,7 +2005,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
             </div>) : (<EmptyState message="No reporting records match the selected filters"/>)}
 
           {reportingHistory.length >
-            0 && (<div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            0 && (<div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs font-medium text-slate-500">
                 Showing {formatNumber((resolvedReportingHistoryPage - 1) *
                 REPORTING_HISTORY_PAGE_SIZE +
@@ -1879,12 +2036,17 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
           {childSectionLabel}
         </SectionHeader>
 
-        <div data-pdf-remove="true" className="mb-4 rounded-xl border border-slate-200/80 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        <div data-pdf-remove="true" className="mb-4 rounded-xl border border-slate-200/80 bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex h-9 items-center gap-2 px-1 pr-2">
-              <Filter className="h-4 w-4 text-slate-500"/>
+            <div className="flex h-9 items-center gap-2.5 pr-2">
+              <span className="flex h-7 w-7 items-center justify-center rounded-md" style={{
+                backgroundColor: ICON_BLUE,
+                color: NAVY,
+            }}>
+                <Filter className="h-3.5 w-3.5"/>
+              </span>
 
-              <span className="text-xs font-semibold text-slate-700">
+              <span className="text-sm font-semibold text-slate-900">
                 Filters
               </span>
             </div>
@@ -1902,17 +2064,17 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
 
             <Select value={branchStatus} onChange={setBranchStatus} options={branchStatusOptions} placeholder="All Statuses"/>
 
-            {hasBranchFilters && (<button type="button" onClick={clearBranchFilters} className="h-9 rounded-md px-3 text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900">
+            {hasBranchFilters && (<button type="button" onClick={clearBranchFilters} className="h-9 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900">
                 Reset
               </button>)}
 
             <p className="ml-auto text-xs font-medium text-slate-500">
             Showing{" "}
-            <span className="font-semibold text-slate-700">
+            <span className="font-semibold text-slate-800">
               {formatNumber(filteredBranches.length)}
             </span>{" "}
             of{" "}
-            <span className="font-semibold text-slate-700">
+            <span className="font-semibold text-slate-800">
               {formatNumber(branches.length)}
             </span>{" "}
             {organizationLevel === "region" ? "stations" : "organizations"}
@@ -2046,6 +2208,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                     label: "Vacancies",
                     value: workforceVacancies,
                     caption: "Currently unfilled roles",
+                    alert: true,
                 },
                 {
                     label: "Future Need",
@@ -2056,25 +2219,28 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                     label: "Total Shortage",
                     value: workforceShortage,
                     caption: `${formatNumber(workforceVacancies)} current + ${formatNumber(workforceFutureNeed)} future`,
+                    alert: true,
                 },
-            ].map((item) => (<div key={item.label} className="rounded-lg border border-slate-100 bg-slate-50/70 p-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            ].map((item) => (<div key={item.label} className="rounded-xl border border-slate-200 bg-white p-4">
+                      <p className="text-xs font-medium text-slate-500">
                         {item.label}
                       </p>
 
-                      <p className="mt-1 text-2xl font-semibold tabular-nums text-navy-950">
+                      <p className="mt-2 text-2xl font-semibold tabular-nums tracking-tight text-navy-950" style={item.alert && item.value > 0
+                    ? { color: STATUS_COLOURS.warn }
+                    : undefined}>
                         {formatNumber(item.value)}
                       </p>
 
-                      <p className="mt-1 text-[11px] leading-snug text-slate-400">
+                      <p className="mt-1.5 text-[11px] leading-snug text-slate-400">
                         {item.caption}
                       </p>
                     </div>))}
               </div>
 
-              {hasWorkforceData && (<div className="mt-6">
-                  <div className="mb-2 flex items-center justify-between gap-4">
-                    <p className="text-xs font-semibold text-slate-700">
+              {hasWorkforceData && (<div className="mt-6 rounded-xl bg-slate-50/70 p-4">
+                  <div className="mb-3 flex items-center justify-between gap-4">
+                    <p className="text-sm font-semibold text-slate-800">
                       Workforce Composition
                     </p>
 
@@ -2086,7 +2252,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                     </p>
                   </div>
 
-                  <div className="flex h-5 overflow-hidden rounded-full bg-slate-100">
+                  <div className="flex h-3 overflow-hidden rounded-full bg-slate-200">
                     <div className="transition-[width] duration-300" style={{
                     width: `${localWorkforcePercentage}%`,
                     backgroundColor: localWorkforceColour,
@@ -2099,7 +2265,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                   </div>
 
                   <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <div className="flex items-center justify-between gap-3 rounded-md border border-slate-100 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
                       <div className="flex items-center gap-2">
                         <span className="h-2.5 w-2.5 rounded-sm" style={{
                     backgroundColor: localWorkforceColour,
@@ -2115,7 +2281,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                       </span>
                     </div>
 
-                    <div className="flex items-center justify-between gap-3 rounded-md border border-slate-100 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
                       <div className="flex items-center gap-2">
                         <span className="h-2.5 w-2.5 rounded-sm" style={{
                     backgroundColor: expatWorkforceColour,

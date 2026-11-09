@@ -74,6 +74,7 @@ const GOLD = "#B7791F";
 const FOREST = "#166534";
 const BURGUNDY = "#9F1239";
 const SLATE_BLUE = "#3B5171";
+const PRIMARY = "#1D4ED8";
 
 const GOV_ACCENT_PALETTE = [
   NAVY,
@@ -83,6 +84,27 @@ const GOV_ACCENT_PALETTE = [
   SLATE_BLUE,
   "#8A6D3B",
 ];
+
+const STATUS_COLOURS = {
+  ok: "#047857",
+  warn: "#B45309",
+  crit: "#B91C1C",
+};
+
+const STATUS_SOFT = {
+  ok: { bg: "#ECFDF5", ring: "#A7F3D0", dot: "#10B981" },
+  warn: { bg: "#FFFBEB", ring: "#FDE68A", dot: "#F59E0B" },
+  crit: { bg: "#FEF2F2", ring: "#FECACA", dot: "#EF4444" },
+};
+
+const getRateTone = (value) =>
+  value >= 80 ? "ok" : value >= 50 ? "warn" : "crit";
+
+const RATE_LABELS = {
+  ok: "On track",
+  warn: "Needs attention",
+  crit: "At risk",
+};
 
 /*
  * Every KPI icon uses the same pale-blue wrapper and navy icon.
@@ -970,6 +992,35 @@ const EmptyState = ({ message }) => (
   </div>
 );
 
+const RateBadge = ({ tone }) => {
+  const colours = tone ? STATUS_SOFT[tone] : null;
+
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold"
+      style={
+        colours
+          ? {
+              backgroundColor: colours.bg,
+              color: STATUS_COLOURS[tone],
+              boxShadow: `inset 0 0 0 1px ${colours.ring}`,
+            }
+          : {
+              backgroundColor: "#F1F5F9",
+              color: "#64748B",
+              boxShadow: "inset 0 0 0 1px #E2E8F0",
+            }
+      }
+    >
+      <span
+        className="h-1.5 w-1.5 rounded-full"
+        style={{ backgroundColor: colours ? colours.dot : "#94A3B8" }}
+      />
+      {tone ? RATE_LABELS[tone] : "No data"}
+    </span>
+  );
+};
+
 const OrganizationLogo = ({ record, size = "md" }) => {
   const logo = getOrganizationLogo(record);
   const name = getOrganizationName(record);
@@ -1044,22 +1095,23 @@ const StatusBadge = ({ status, report, now = new Date() }) => {
 const KpiCard = ({ label, value, caption, icon: Icon }) => (
   <Card className="p-5">
     <div className="flex items-start justify-between gap-4">
-      <div>
-        <p className="text-sm font-medium text-slate-500">{label}</p>
-        <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
-          {value}
-        </p>
-      </div>
+      <p className="text-sm font-medium leading-snug text-slate-500">
+        {label}
+      </p>
 
       <div
-        className="flex h-10 w-10 items-center justify-center rounded-lg"
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
         style={KPI_ICON_STYLE}
       >
         <Icon className="h-5 w-5" />
       </div>
     </div>
 
-    <div className="mt-3 min-h-5 text-xs text-slate-400">
+    <p className="mt-3 text-2xl font-semibold tabular-nums tracking-tight text-slate-900">
+      {value}
+    </p>
+
+    <div className="mt-2 min-h-5 text-xs leading-snug text-slate-500">
       {caption || "No data available"}
     </div>
   </Card>
@@ -2157,6 +2209,14 @@ const Overviews = () => {
     scopeName: scopeLabel,
   });
 
+  const submissionCompletionTone = getRateTone(
+    complianceSummary.submissionCompletion
+  );
+
+  const onTimeComplianceTone = getRateTone(
+    complianceSummary.onTimeCompliance
+  );
+
   if (loading) {
     return (
       <section className="flex min-h-[70vh] items-center justify-center bg-slate-50">
@@ -2197,14 +2257,15 @@ const Overviews = () => {
               </span>
             </div>
 
-            <p className="text-sm text-slate-500">
+            <p className="max-w-2xl text-sm leading-relaxed text-slate-500">
               Monitor station sales volumes, estimated revenue, submission compliance
               and workforce performance.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3 sm:justify-end">
-            <p className="text-xs font-medium text-slate-400">
+            <p className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-500">
+              <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
               {formatUpdatedAt(updatedAt)}
             </p>
 
@@ -2300,82 +2361,117 @@ const Overviews = () => {
 
               <Card className="p-5">
                 {comparisonData.length ? (
-                  <ResponsiveContainer
-                    width="100%"
-                    height={Math.max(300, comparisonData.length * 58)}
-                  >
-                    <BarChart
-                      data={comparisonData}
-                      layout="vertical"
-                      margin={{
-                        top: 8,
-                        right: 20,
-                        left: 16,
-                        bottom: 0,
-                      }}
+                  <>
+                    <div className="mb-5 flex flex-wrap items-end justify-between gap-4 border-b border-slate-100 pb-4">
+                      <div className="flex flex-wrap gap-8">
+                        <div>
+                          <p className="text-xs font-medium text-slate-500">
+                            Total in view
+                          </p>
+
+                          <p className="mt-1 text-xl font-semibold tabular-nums tracking-tight text-slate-900">
+                            {formatNumber(totalDailyProduction)} L
+                          </p>
+                        </div>
+
+                        <div>
+                          <p className="text-xs font-medium text-slate-500">
+                            Top {scopeConfig.comparisonSingular.toLowerCase()}
+                          </p>
+
+                          <p className="mt-1 text-xl font-semibold tracking-tight text-slate-900">
+                            {comparisonData[0]?.name}
+                          </p>
+                        </div>
+                      </div>
+
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+                        {comparisonData.length}{" "}
+                        {comparisonData.length === 1
+                          ? scopeConfig.comparisonSingular.toLowerCase()
+                          : scopeConfig.comparisonPlural.toLowerCase()}
+                      </span>
+                    </div>
+
+                    <ResponsiveContainer
+                      width="100%"
+                      height={Math.max(300, comparisonData.length * 58)}
                     >
-                      <CartesianGrid
-                        strokeDasharray="3 3"
-                        stroke="#E2E8F0"
-                        horizontal={false}
-                      />
-
-                      <XAxis
-                        type="number"
-                        tick={{ fontSize: 12, fill: "#64748B" }}
-                        axisLine={false}
-                        tickLine={false}
-                        tickFormatter={(value) =>
-                          value >= 1000
-                            ? `${formatNumber(value / 1000, 1)}k`
-                            : formatNumber(value)
-                        }
-                      />
-
-                      <YAxis
-                        type="category"
-                        dataKey="name"
-                        width={235}
-                        tickLine={false}
-                        axisLine={false}
-                        tick={(tickProps) => (
-                          <SalesVolumeTick
-                            {...tickProps}
-                            comparisonMap={comparisonMap}
-                          />
-                        )}
-                      />
-
-                      <Tooltip
-                        formatter={(value) => [
-                          `${formatNumber(value)} litres`,
-                          "Sales volume",
-                        ]}
-                        contentStyle={{
-                          fontSize: 13,
-                          borderRadius: 8,
-                          border: "1px solid #e2e8f0",
+                      <BarChart
+                        data={comparisonData}
+                        layout="vertical"
+                        margin={{
+                          top: 8,
+                          right: 20,
+                          left: 16,
+                          bottom: 0,
                         }}
-                      />
-
-                      <Bar
-                        dataKey="value"
-                        radius={[0, 6, 6, 0]}
-                        maxBarSize={32}
                       >
-                        {comparisonData.map((item, index) => (
-                          <Cell
-                            key={item.id}
-                            fill={
-                              GOV_ACCENT_PALETTE[
-                                index % GOV_ACCENT_PALETTE.length
-                              ]
-                            }
-                          />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                        <CartesianGrid
+                          strokeDasharray="3 3"
+                          stroke="#E2E8F0"
+                          horizontal={false}
+                        />
+
+                        <XAxis
+                          type="number"
+                          tick={{ fontSize: 12, fill: "#64748B" }}
+                          axisLine={false}
+                          tickLine={false}
+                          tickFormatter={(value) =>
+                            value >= 1000
+                              ? `${formatNumber(value / 1000, 1)}k`
+                              : formatNumber(value)
+                          }
+                        />
+
+                        <YAxis
+                          type="category"
+                          dataKey="name"
+                          width={235}
+                          tickLine={false}
+                          axisLine={false}
+                          tick={(tickProps) => (
+                            <SalesVolumeTick
+                              {...tickProps}
+                              comparisonMap={comparisonMap}
+                            />
+                          )}
+                        />
+
+                        <Tooltip
+                          cursor={{ fill: "#F1F5F9" }}
+                          formatter={(value) => [
+                            `${formatNumber(value)} litres`,
+                            "Sales volume",
+                          ]}
+                          contentStyle={{
+                            fontSize: 13,
+                            borderRadius: 8,
+                            border: "1px solid #e2e8f0",
+                            boxShadow: "0 4px 12px rgba(15,23,42,0.08)",
+                          }}
+                        />
+
+                        <Bar
+                          dataKey="value"
+                          radius={[0, 6, 6, 0]}
+                          maxBarSize={32}
+                        >
+                          {comparisonData.map((item, index) => (
+                            <Cell
+                              key={item.id}
+                              fill={
+                                GOV_ACCENT_PALETTE[
+                                  index % GOV_ACCENT_PALETTE.length
+                                ]
+                              }
+                            />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </>
                 ) : (
                   <EmptyState message="Daily sales volume data will appear here" />
                 )}
@@ -2429,7 +2525,7 @@ const Overviews = () => {
                           </ResponsiveContainer>
 
                           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                            <span className="text-xl font-semibold text-slate-900">
+                            <span className="text-xl font-semibold tabular-nums text-slate-900">
                               {formatNumber(totalDailyProduction)}
                             </span>
                             <span className="mt-0.5 text-xs text-slate-500">
@@ -2443,7 +2539,7 @@ const Overviews = () => {
                         {comparisonData.map((item, index) => (
                           <div
                             key={item.id}
-                            className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3"
+                            className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3"
                           >
                             <div className="flex min-w-0 items-center gap-2.5">
                               <OrganizationLogo record={item} size="sm" />
@@ -2515,6 +2611,7 @@ const Overviews = () => {
                           />
 
                           <Tooltip
+                            cursor={{ fill: "#F1F5F9" }}
                             formatter={(value, name) => [
                               `${formatNumber(value, 1)}%`,
                               name,
@@ -2523,6 +2620,7 @@ const Overviews = () => {
                               fontSize: 13,
                               borderRadius: 8,
                               border: "1px solid #e2e8f0",
+                              boxShadow: "0 4px 12px rgba(15,23,42,0.08)",
                             }}
                           />
 
@@ -2576,14 +2674,27 @@ const Overviews = () => {
                     </h3>
 
                     {comparisonData.length ? (
-                      <ol className="space-y-3">
+                      <ol className="space-y-2.5">
                         {comparisonData.map((item, index) => (
                           <li
                             key={item.id}
-                            className="flex items-center justify-between gap-4 rounded-lg border border-slate-100 px-3 py-2.5"
+                            className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 px-3 py-2.5"
                           >
                             <div className="flex min-w-0 items-center gap-3">
-                              <span className="w-5 shrink-0 text-center font-mono text-xs font-semibold text-slate-400">
+                              <span
+                                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
+                                style={
+                                  index === 0
+                                    ? {
+                                        backgroundColor: ICON_BLUE,
+                                        color: NAVY,
+                                      }
+                                    : {
+                                        backgroundColor: "#F1F5F9",
+                                        color: "#64748B",
+                                      }
+                                }
+                              >
                                 {index + 1}
                               </span>
                               <OrganizationLogo record={item} size="sm" />
@@ -2621,41 +2732,52 @@ const Overviews = () => {
           </SectionHeader>
 
           <Card className="overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-3.5">
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs font-medium text-slate-600">
-                <p>
-                  Submission completion:{" "}
-                  <span
-                    className="font-semibold"
-                    style={{
-                      color:
-                        complianceSummary.submissionCompletion >= 80
-                          ? FOREST
-                          : BURGUNDY,
-                    }}
-                  >
-                    {formatPercentage(complianceSummary.submissionCompletion)}
-                  </span>
+            <div className="grid grid-cols-1 gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-3">
+              <div className="bg-slate-50 px-5 py-3.5">
+                <p className="text-xs font-medium text-slate-500">
+                  Submission completion
                 </p>
 
-                <p>
-                  On-time compliance:{" "}
-                  <span
-                    className="font-semibold"
-                    style={{
-                      color:
-                        complianceSummary.onTimeCompliance >= 80
-                          ? FOREST
-                          : BURGUNDY,
-                    }}
-                  >
-                    {formatPercentage(complianceSummary.onTimeCompliance)}
-                  </span>
+                <p
+                  className="mt-1 text-lg font-semibold tabular-nums"
+                  style={{
+                    color: STATUS_COLOURS[submissionCompletionTone],
+                  }}
+                >
+                  {formatPercentage(complianceSummary.submissionCompletion)}
+                </p>
+              </div>
+
+              <div className="bg-slate-50 px-5 py-3.5">
+                <p className="text-xs font-medium text-slate-500">
+                  On-time compliance
                 </p>
 
-                <p className="text-slate-400">
-                  {formatNumber(complianceSummary.reportsSubmittedLate)} submitted
-                  late
+                <p
+                  className="mt-1 text-lg font-semibold tabular-nums"
+                  style={{
+                    color: STATUS_COLOURS[onTimeComplianceTone],
+                  }}
+                >
+                  {formatPercentage(complianceSummary.onTimeCompliance)}
+                </p>
+              </div>
+
+              <div className="bg-slate-50 px-5 py-3.5">
+                <p className="text-xs font-medium text-slate-500">
+                  Submitted late
+                </p>
+
+                <p
+                  className="mt-1 text-lg font-semibold tabular-nums"
+                  style={{
+                    color:
+                      complianceSummary.reportsSubmittedLate > 0
+                        ? STATUS_COLOURS.warn
+                        : "#0F172A",
+                  }}
+                >
+                  {formatNumber(complianceSummary.reportsSubmittedLate)}
                 </p>
               </div>
             </div>
@@ -2721,7 +2843,7 @@ const Overviews = () => {
                           <StatusBadge status={report.status} report={report} now={statusNow} />
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-3 text-slate-600">
+                        <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">
                           {formatTime(report.deadlineAt || report.dueAt)}
                         </td>
 
@@ -2729,7 +2851,7 @@ const Overviews = () => {
                           {report.originalSubmittedByName || "—"}
                         </td>
 
-                        <td className="whitespace-nowrap px-4 py-3 text-slate-600">
+                        <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">
                           {formatTime(
                             report.submittedAt || report.submissionTime
                           )}
@@ -2763,102 +2885,109 @@ const Overviews = () => {
 
             {performanceData.length ? (
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                {performanceData.map((unit) => (
-                  <Card key={unit.id} className="p-5">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-sm font-semibold text-slate-900">
-                          {unit.name}
-                        </h3>
-                        <p className="mt-1 text-[11px] text-slate-400">
-                          {unit.latestSubmissionLabel
-                            ? `Latest submission ${unit.latestSubmissionLabel}`
-                            : "No reports submitted yet"}
-                        </p>
+                {performanceData.map((unit) => {
+                  const unitTone =
+                    !unit.hasData || unit.reportsExpected <= 0
+                      ? null
+                      : getRateTone(unit.complianceRate);
 
-                        {unit.latestProductionPeriodLabel && (
-                          <p className="mt-0.5 text-[10px] text-slate-400">
-                            Sales data pulled {unit.latestProductionPeriodLabel}
+                  return (
+                    <Card key={unit.id} className="p-5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h3 className="truncate text-sm font-semibold text-slate-900">
+                            {unit.name}
+                          </h3>
+                          <p className="mt-1 text-[11px] text-slate-400">
+                            {unit.latestSubmissionLabel
+                              ? `Latest submission ${unit.latestSubmissionLabel}`
+                              : "No reports submitted yet"}
                           </p>
-                        )}
+
+                          {unit.latestProductionPeriodLabel && (
+                            <p className="mt-0.5 text-[10px] text-slate-400">
+                              Sales data pulled {unit.latestProductionPeriodLabel}
+                            </p>
+                          )}
+                        </div>
+
+                        <RateBadge tone={unitTone} />
                       </div>
 
-                      <span
-                        className="mt-1 h-2 w-2 rounded-full"
-                        style={{
-                          backgroundColor:
-                            !unit.hasData || unit.reportsExpected <= 0
-                              ? "#CBD5E1"
-                              : unit.complianceRate >= 80
-                              ? FOREST
-                              : unit.complianceRate >= 50
-                              ? GOLD
-                              : BURGUNDY,
-                        }}
-                      />
-                    </div>
-
-                    <div className="mt-4 space-y-3">
-                      <div className="flex items-baseline justify-between gap-4">
-                        <span className="text-xs text-slate-500">
-                          Volume Sold
-                        </span>
-                        <span className="text-sm font-medium tabular-nums text-slate-900">
-                          {unit.latestProductionPeriod
-                            ? `${formatNumber(unit.production)} L`
-                            : "—"}
-                        </span>
-                      </div>
-
-                      <div className="flex items-baseline justify-between gap-4">
-                        <span className="text-xs text-slate-500">
-                          Submission completion
-                        </span>
-                        <span className="text-sm font-semibold tabular-nums text-slate-900">
-                          {unit.reportsExpected > 0
-                            ? formatPercentage(unit.submissionCompletionRate)
-                            : "—"}
-                        </span>
-                      </div>
-
-                      <div className="flex items-baseline justify-between gap-4">
-                        <span className="text-xs text-slate-500">
-                          On-time compliance
-                        </span>
-                        <span
-                          className="text-sm font-semibold tabular-nums"
-                          style={{
-                            color:
-                              unit.reportsExpected <= 0
-                                ? "#94A3B8"
-                                : unit.complianceRate >= 80
-                                ? FOREST
-                                : unit.complianceRate >= 50
-                                ? GOLD
-                                : BURGUNDY,
-                          }}
-                        >
-                          {unit.reportsExpected > 0
-                            ? formatPercentage(unit.complianceRate)
-                            : "—"}
-                        </span>
-                      </div>
-
-                      {unit.activeLabels.length > 0 && (
+                      <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">
                         <div className="flex items-baseline justify-between gap-4">
                           <span className="text-xs text-slate-500">
-                            {scopeConfig.level === "ministry"
-                              ? "Operators active"
-                              : "Branches active"}
+                            Volume Sold
                           </span>
-                          <span className="text-right text-sm font-medium text-slate-900">
-                            {unit.activeLabels.join(", ")}
+                          <span className="text-sm font-semibold tabular-nums text-slate-900">
+                            {unit.latestProductionPeriod
+                              ? `${formatNumber(unit.production)} L`
+                              : "—"}
                           </span>
                         </div>
-                      )}
-                    </div>
-                  </Card>
-                ))}
+
+                        <div>
+                          <div className="flex items-baseline justify-between gap-4">
+                            <span className="text-xs text-slate-500">
+                              Submission completion
+                            </span>
+                            <span className="text-sm font-semibold tabular-nums text-slate-900">
+                              {unit.reportsExpected > 0
+                                ? formatPercentage(unit.submissionCompletionRate)
+                                : "—"}
+                            </span>
+                          </div>
+
+                          {unit.reportsExpected > 0 && (
+                            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                              <div
+                                className="h-full rounded-full"
+                                style={{
+                                  width: `${Math.min(
+                                    100,
+                                    Number(unit.submissionCompletionRate) || 0
+                                  )}%`,
+                                  backgroundColor: PRIMARY,
+                                }}
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex items-baseline justify-between gap-4">
+                          <span className="text-xs text-slate-500">
+                            On-time compliance
+                          </span>
+                          <span
+                            className="text-sm font-semibold tabular-nums"
+                            style={{
+                              color: unitTone
+                                ? STATUS_COLOURS[unitTone]
+                                : "#94A3B8",
+                            }}
+                          >
+                            {unit.reportsExpected > 0
+                              ? formatPercentage(unit.complianceRate)
+                              : "—"}
+                          </span>
+                        </div>
+
+                        {unit.activeLabels.length > 0 && (
+                          <div className="flex items-baseline justify-between gap-4">
+                            <span className="text-xs text-slate-500">
+                              {scopeConfig.level === "ministry"
+                                ? "Operators active"
+                                : "Branches active"}
+                            </span>
+                            <span className="text-right text-sm font-medium text-slate-900">
+                              {unit.activeLabels.join(", ")}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </Card>
+                  );
+                })}
               </div>
             ) : (
               <Card className="p-5">
@@ -2922,7 +3051,7 @@ const Overviews = () => {
                       </ResponsiveContainer>
 
                       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                        <span className="text-3xl font-semibold text-slate-900">
+                        <span className="text-3xl font-semibold tabular-nums text-slate-900">
                           {formatNumber(workforce.total.total)}
                         </span>
                         <span className="mt-1 text-xs text-slate-500">
@@ -2933,16 +3062,16 @@ const Overviews = () => {
                   </div>
 
                   <div className="mt-4 grid grid-cols-3 gap-3">
-                    <div className="rounded-lg bg-slate-50 p-3 text-center">
-                      <p className="text-xs text-slate-500">Total Workforce</p>
-                      <p className="mt-1 text-lg font-semibold text-slate-900">
+                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                      <p className="text-xs font-medium text-slate-500">Total Workforce</p>
+                      <p className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
                         {formatNumber(workforce.total.total)}
                       </p>
                     </div>
 
-                    <div className="rounded-lg bg-slate-50 p-3 text-center">
-                      <p className="text-xs text-slate-500">Local</p>
-                      <p className="mt-1 text-lg font-semibold text-slate-900">
+                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                      <p className="text-xs font-medium text-slate-500">Local</p>
+                      <p className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
                         {formatNumber(workforce.total.local)}
                       </p>
                       <p className="mt-0.5 text-[10px] text-slate-400">
@@ -2952,9 +3081,9 @@ const Overviews = () => {
                       </p>
                     </div>
 
-                    <div className="rounded-lg bg-slate-50 p-3 text-center">
-                      <p className="text-xs text-slate-500">Expat</p>
-                      <p className="mt-1 text-lg font-semibold text-slate-900">
+                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                      <p className="text-xs font-medium text-slate-500">Expat</p>
+                      <p className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
                         {formatNumber(workforce.total.expat)}
                       </p>
                       <p className="mt-0.5 text-[10px] text-slate-400">

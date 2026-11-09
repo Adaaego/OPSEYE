@@ -9,6 +9,7 @@ import TankMonitoring from "./operator-detail/TankMonitoring";
 
 const NAVY = "#020617";
 const ICON_BLUE = "#C8D5E8";
+const PRIMARY = "#1D4ED8";
 const getLevel = (operator) => String(operator?.organizationLevel || operator?.type || operator?.organizationType || operator?.level || "").trim().toLowerCase();
 const formatUpdatedAt = (value) => {
   if (!value) return "No data loaded";
@@ -36,19 +37,43 @@ const OperatorDetail = ({ operator = null, updatedAt = null, backLabel = "Back t
   ];
   return <section ref={detailPdfRef} className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6">
     {showBackButton && <button type="button" data-pdf-ignore="true" onClick={onBack} className="mb-5 flex items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-navy-900"><ArrowLeft className="h-4 w-4" />{backLabel}</button>}
-    <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
+
+    <header className={`flex flex-col justify-between gap-4 sm:flex-row sm:items-end ${isBranch ? "mb-6" : "mb-8 border-b border-slate-200 pb-6"}`}>
       <div className="flex min-w-0 items-start gap-4">
         <OperatorAvatar name={name} logoUrl={operator.logoUrl} />
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap items-center gap-3"><span className="h-6 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: NAVY }} /><h1 className="text-2xl font-semibold leading-tight tracking-tight text-slate-900">{name}</h1><span className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide" style={{ backgroundColor: ICON_BLUE, color: NAVY }}>{profileLabel}</span></div>
-          <p className="text-sm text-slate-500">Monitor sales volume, estimated revenue, reporting compliance and workforce allocation across this scope.</p>
+          <p className="max-w-2xl text-sm leading-relaxed text-slate-500">Monitor sales volume, estimated revenue, reporting compliance and workforce allocation across this scope.</p>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-3 sm:justify-end"><p className="text-xs font-medium text-slate-400">{formatUpdatedAt(updatedAt || operator.updatedAt)}</p><ExportPdfButton targetRef={detailPdfRef} filename={filename} /></div>
+      <div className="flex flex-wrap items-center gap-3 sm:justify-end">
+        <p className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-500">
+          <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+          {formatUpdatedAt(updatedAt || operator.updatedAt)}
+        </p>
+        <ExportPdfButton targetRef={detailPdfRef} filename={filename} />
+      </div>
     </header>
-    {isBranch && <nav data-pdf-ignore="true" aria-label="Branch detail sections" className="mb-6 flex flex-wrap gap-1 rounded-xl border border-slate-200 bg-white p-1.5">
-      {tabs.map(({ id, label, icon: Icon }) => <button key={id} type="button" aria-current={activeTab === id ? "page" : undefined} onClick={() => setActiveTab(id)} className={`inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition ${activeTab === id ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"}`}><Icon className="h-4 w-4" />{label}</button>)}
+
+    {isBranch && <nav data-pdf-ignore="true" aria-label="Branch detail sections" className="mb-8 border-b border-slate-200">
+      <div className="-mb-px flex gap-1 overflow-x-auto">
+        {tabs.map(({ id, label, icon: Icon }) => {
+          const isActive = activeTab === id;
+          return <button
+            key={id}
+            type="button"
+            aria-current={isActive ? "page" : undefined}
+            onClick={() => setActiveTab(id)}
+            className={`inline-flex shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold transition-colors ${isActive ? "text-slate-900" : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800"}`}
+            style={isActive ? { borderBottomColor: PRIMARY } : undefined}
+          >
+            <Icon className="h-4 w-4" style={isActive ? { color: PRIMARY } : undefined} />
+            {label}
+          </button>;
+        })}
+      </div>
     </nav>}
+
     <div hidden={isBranch && activeTab !== "overview"}><OperatorOverview operator={operator} updatedAt={updatedAt} onSelectOrganization={onSelectOrganization} /></div>
     {isBranch && activeTab === "performance" && <StationPerformance operator={operator} reports={operator.scopedReports || []} />}
     {isBranch && activeTab === "tanks" && <TankMonitoring operator={operator} />}

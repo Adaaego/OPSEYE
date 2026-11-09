@@ -1,6 +1,6 @@
 import { initializeApp, getApp, getApps } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore, persistentLocalCache, persistentMultipleTabManager,initializeFirestore } from "firebase/firestore";
 
 
 
@@ -14,9 +14,15 @@ const firebaseConfig = {
   appId: "1:581475120647:web:18259440fe55017c959ca2"
 };
 
-// Initialize Firebase
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig); //checks if firebase has been set  up in the application - this prevents errors
+const isNewApp = getApps().length === 0;
+const app = isNewApp ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
-const db = getFirestore(app);
+const db = isNewApp
+  ? initializeFirestore(app, {
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager(),
+      }),
+    })
+  : getFirestore(app);
 
-export {auth, db};
+export { auth, db };
