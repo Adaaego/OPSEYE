@@ -1001,7 +1001,13 @@ const subscribeToScopedReferences = ({
               );
             }
           },
-          onError
+          (error) => {
+            initializedSources.add(index);
+            onError?.(error);
+            if (initializedSources.size === references.length && sourceDocuments.size) {
+              onData(mergeDocumentLists(Array.from(sourceDocuments.values())));
+            }
+          }
         )
     );
 
@@ -1589,6 +1595,20 @@ const Regions = ({
     setLoadError,
   ] = useState("");
 
+  const [isOffline, setIsOffline] = useState(
+    () => typeof navigator !== "undefined" && !navigator.onLine
+  );
+
+  useEffect(() => {
+    const updateConnection = () => setIsOffline(!navigator.onLine);
+    window.addEventListener("online", updateConnection);
+    window.addEventListener("offline", updateConnection);
+    return () => {
+      window.removeEventListener("online", updateConnection);
+      window.removeEventListener("offline", updateConnection);
+    };
+  }, []);
+
   const [
     loadedSources,
     setLoadedSources,
@@ -1618,6 +1638,10 @@ const Regions = ({
           unsubscribeUser();
 
           if (!firebaseUser?.uid) {
+            setOrganizations([]);
+            setReportSubmissions([]);
+            setCompanyFuelPrices([]);
+            setWorkforceRecords([]);
             setCurrentUserProfile(
               null
             );
@@ -1935,9 +1959,6 @@ const Regions = ({
                             error
                           );
 
-                          setCompanyFuelPrices(
-                            []
-                          );
 
                           setLoadedSources(
                             (current) => ({
@@ -1995,9 +2016,6 @@ const Regions = ({
                             error
                           );
 
-                          setReportSubmissions(
-                            []
-                          );
 
                           setLoadedSources(
                             (current) => ({
@@ -2024,9 +2042,6 @@ const Regions = ({
                     error
                   );
 
-                  setOrganizations(
-                    []
-                  );
 
                   setLoadedSources(
                     (current) => ({
@@ -2056,13 +2071,6 @@ const Regions = ({
             "Unable to load the current organization:",
             error
           );
-
-          clearScopedSubscriptions();
-
-          setOrganizations([]);
-          setReportSubmissions([]);
-          setCompanyFuelPrices([]);
-          setWorkforceRecords([]);
 
           setLoadedSources(
             (current) => ({
@@ -2197,9 +2205,6 @@ const Regions = ({
               error
             );
 
-            setWorkforceRecords(
-              []
-            );
 
             setLoadedSources(
               (current) => ({
@@ -4088,6 +4093,11 @@ const Regions = ({
           transitionDirection
         }
       >
+        {isOffline && (
+          <p role="status" className="mx-4 mt-4 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+            Offline — showing regional data available on this device. Changes made elsewhere will appear after reconnection.
+          </p>
+        )}
         <RegionDetail
           isMinistryUser={isMinistryUser}
           region={
@@ -4135,7 +4145,7 @@ const Regions = ({
     );
   }
 
-  if (loading) {
+  if (loading && !organizations.length && !reportSubmissions.length && !workforceRecords.length) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center">
         <div className="flex items-center gap-3 text-sm font-medium text-slate-600">
@@ -4184,6 +4194,12 @@ const Regions = ({
             />
           }
         />
+
+        {isOffline && (
+          <p role="status" className="mb-5 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+            Offline — showing regional data available on this device. Changes made elsewhere will appear after reconnection.
+          </p>
+        )}
 
         {/*
          * Filters remain interactive on screen, but exported PDFs show one
