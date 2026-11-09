@@ -549,8 +549,6 @@ const Forms = ({
   const [formsLoadError, setFormsLoadError] =
 
     useState("");
-  const [formsFromCache, setFormsFromCache] = useState(false);
-  const [pendingFormWrites, setPendingFormWrites] = useState(false);
 
 
 
@@ -1668,7 +1666,6 @@ try {
 
                 editingForm.id,
 
-              existingForm: editingForm,
 
               formData,
 
@@ -1789,14 +1786,6 @@ formData
     const currentUser =
 
       auth.currentUser;
-
-
-
-
-
-if (typeof navigator !== "undefined" && !navigator.onLine) {
-      throw new Error("Connect to the internet to publish or schedule this form. Save as draft to work offline.");
-    }
 
     try {
 
@@ -2122,16 +2111,6 @@ return (
 
           </div>
 
-
-
-          {(formsFromCache || pendingFormWrites) && (
-          <p className="rounded-lg border border-slate-200 bg-slate-100 px-4 py-3 text-sm text-slate-700" role="status">
-            {pendingFormWrites
-              ? "Changes saved on this device — waiting to sync with Firebase."
-              : "Offline/cache view — showing saved forms."}
-          </p>
-        )}
-
         <Card className="overflow-visible">
 
             <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -2427,9 +2406,6 @@ return (
                               <span className="text-navy-950">
 
                                 {form.name || "—"}
-                              {form.pendingSync && (
-                                <span className="ml-2 text-xs font-medium text-slate-500">Pending sync</span>
-                              )}
 
                               </span>
 

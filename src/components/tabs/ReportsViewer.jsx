@@ -76,8 +76,11 @@ import {
 
 
 
-import { auth, db } from "../../firebase/firebase";
-import { doc, onSnapshot } from "firebase/firestore";
+import {
+
+  auth,
+
+} from "../../firebase/firebase";
 
 
 
@@ -358,9 +361,6 @@ const ReportViewer = ({
   const [submitError, setSubmitError] =
 
     useState("");
-
-  const [draftSyncStatus, setDraftSyncStatus] = useState("");
-  const [draftSaveError, setDraftSaveError] = useState("");
 
 
 
@@ -897,12 +897,10 @@ const ReportViewer = ({
     setErrors({});
 
     setSubmitError("");
-    setDraftSaveError("");
-    setDraftSyncStatus("");
 
     setSubmitting(false);
 
-  }, [report?.id]);
+  }, [report]);
 
 
 
@@ -1051,49 +1049,23 @@ return (
 
 
 
-  useEffect(() => {
-    if (!report?.id || !canSubmitReport) return undefined;
-    const reference = doc(db, "reportSubmissions", report.id);
-    return onSnapshot(reference, { includeMetadataChanges: true }, (snapshot) => {
-      if (!snapshot.exists()) return;
-      if (snapshot.metadata.hasPendingWrites) {
-        setDraftSyncStatus("pending");
-      } else {
-        setDraftSyncStatus((current) => current === "saving" || current === "pending" ? "synced" : current);
-      }
-    }, (error) => {
-      setDraftSaveError(error?.message || "Unable to monitor draft synchronization.");
-    });
-  }, [report?.id, canSubmitReport]);
-
   const handleSaveDraft = () => {
-    setDraftSaveError("");
-    if (!canSubmitReport || !auth.currentUser?.uid) {
-      setDraftSaveError("Only the assigned Branch Admin can save this report draft.");
-      return;
-    }
-    const draftStatus = report?.status === "overdue" ? "overdue" : "draft";
-    const pendingWrite = changes.saveReportDraftHandler({
-      report,
+
+    onUpdate({
+
+      ...report,
+
       fieldValues: values,
-      currentUser: auth.currentUser,
+
+      status: "draft",
+
     });
-    setDraftSyncStatus("saving");
-    pendingWrite.catch((error) => {
-      setDraftSaveError(error?.message || "Unable to save the report draft.");
-      setDraftSyncStatus("error");
-    });
-    // Keep the report in the current workflow stage while the write syncs.
-    onUpdate({ ...report, fieldValues: values, status: draftStatus });
+
   };
 
 
 
   const handleSubmit = async () => {
-    if (typeof navigator !== "undefined" && !navigator.onLine) {
-      setSubmitError("Connect to the internet before submitting or approving a report. Your saved draft remains available offline.");
-      return;
-    }
 
 if (!canAdvanceWorkflow) {
 
@@ -2840,17 +2812,7 @@ firstDate
 
 
 
-        {canSubmitReport && (draftSaveError || draftSyncStatus) && (
-        <div role="status" className="shrink-0 border-t border-slate-200 bg-slate-50 px-5 py-2 text-xs font-medium text-slate-700">
-          {draftSaveError || (draftSyncStatus === "pending"
-            ? "Draft saved locally — pending sync. You can close this report."
-            : draftSyncStatus === "synced"
-              ? "Draft synchronized with Firestore."
-              : "Saving draft locally…")}
-        </div>
-      )}
-
-      {submitError && (
+        {submitError && (
 
           <div className="shrink-0 border-t border-red-200 bg-red-50 px-5 py-3 text-sm font-semibold text-red-700">
 

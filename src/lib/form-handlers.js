@@ -1,7 +1,6 @@
 import {
 
   addDoc,
-  setDoc,
 
   arrayUnion,
 
@@ -2933,18 +2932,21 @@ const createFormHandler = async ({
 
 
 
-  const formReference = doc(collection(db, FORM_TEMPLATES_COLLECTION));
-  if (status === FORM_TEMPLATE_STATUSES.draft) {
-    // setDoc applies to the persistent local cache immediately, even offline.
-    // Its promise resolves only after the server accepts the change.
-    const pendingWrite = setDoc(formReference, formDocument);
-    pendingWrite.catch((error) => {
-      console.error("Offline form draft could not be synced:", error);
-    });
-  } else {
-    // Scheduling is only confirmed after the server accepts the write.
-    await setDoc(formReference, formDocument);
-  }
+  const formReference =
+
+    await addDoc(
+
+      collection(
+
+        db,
+
+        FORM_TEMPLATES_COLLECTION
+
+      ),
+
+      formDocument
+
+    );
 
 
 
@@ -2973,7 +2975,6 @@ const updateFormHandler = async ({
   currentUser,
 
   status,
-  existingForm: suppliedExistingForm = null,
 
 }) => {
 
@@ -3033,13 +3034,23 @@ const updateFormHandler = async ({
 
 
 
-  // The selected form already came from a scoped Firestore listener.
-  // Avoid a network-dependent read when saving drafts offline.
-  let existingForm = suppliedExistingForm;
-  if (!existingForm && status !== FORM_TEMPLATE_STATUSES.draft) {
-    const existingSnapshot = await getDoc(formReference);
-    existingForm = existingSnapshot.exists() ? existingSnapshot.data() : null;
-  }
+  const existingSnapshot =
+
+    await getDoc(
+
+      formReference
+
+    );
+
+  const existingForm =
+
+    existingSnapshot.exists()
+
+      ? existingSnapshot.data()
+
+      : null;
+
+
 
   const scheduleMetadata =
 
@@ -3055,20 +3066,25 @@ const updateFormHandler = async ({
 
 
 
-  const updates = {
-    ...cleanedForm,
-    ...scheduleMetadata,
-    updatedBy: currentUser.uid,
-    updatedAt: serverTimestamp(),
-  };
-  if (status === FORM_TEMPLATE_STATUSES.draft) {
-    const pendingWrite = updateDoc(formReference, updates);
-    pendingWrite.catch((error) => {
-      console.error("Offline form draft update could not be synced:", error);
-    });
-  } else {
-    await updateDoc(formReference, updates);
-  }
+  await updateDoc(
+
+    formReference,
+
+    {
+
+      ...cleanedForm,
+
+      ...scheduleMetadata,
+
+      updatedBy: currentUser.uid,
+
+      updatedAt: serverTimestamp(),
+
+    }
+
+  );
+
+
 
   return {
 
@@ -3313,30 +3329,6 @@ const cleanReportResponses = (
  * It does not approve the report.
 
  */
-
-const saveReportDraftHandler = ({ report, fieldValues, currentUser }) => {
-  if (!currentUser?.uid) {
-    return Promise.reject(new Error("A signed-in user is required."));
-  }
-  const reportId = report?.reportSubmissionId || report?.submissionId || report?.id;
-  if (!reportId || !report?.formTemplateId) {
-    return Promise.reject(new Error("Only scheduled reporting tasks can be saved as drafts."));
-  }
-  if (Number(report.currentStageIndex ?? 0) !== 0 ||
-      normalizeStatusValue(report.currentStageRole) !== "branch_admin" ||
-      !["draft", "pending_submission", "overdue"].includes(normalizeStatusValue(report.status))) {
-    return Promise.reject(new Error("This report is no longer available for Branch draft editing."));
-  }
-  const values = fieldValues && typeof fieldValues === "object" && !Array.isArray(fieldValues)
-    ? fieldValues : {};
-  // Do not change workflow stage or approval fields while saving a draft.
-  return updateDoc(doc(db, REPORT_SUBMISSIONS_COLLECTION, reportId), {
-    fieldValues: values,
-    status: normalizeStatusValue(report.status) === "overdue" ? "overdue" : "draft",
-    updatedBy: currentUser.uid,
-    updatedAt: serverTimestamp(),
-  });
-};
 
 const submitReportHandler = async ({
 
@@ -4566,7 +4558,6 @@ export const changes = {
 
   deleteFormHandler,
 
-  saveReportDraftHandler,
   submitReportHandler,
 
 };
