@@ -633,7 +633,7 @@ const mergeDocumentLists = (documentLists) => {
  * Subscribes to one or more already-scoped Firestore references and merges
  * their snapshots by document ID.
  */
-const subscribeToScopedReferences = ({ references, onData, onError }) => {
+const subscribeToScopedReferences = ({ references, onData, onError, onMetadata }) => {
   if (!references.length) {
     onData([]);
     return () => {};
@@ -641,18 +641,22 @@ const subscribeToScopedReferences = ({ references, onData, onError }) => {
 
   const sourceDocuments = new Map();
   const initializedSources = new Set();
+  const sourceCacheStates = new Map();
 
   const unsubscribers = references.map((reference, index) =>
     onSnapshot(
       reference,
+      { includeMetadataChanges: true },
       (snapshot) => {
         sourceDocuments.set(index, snapshotToDocuments(snapshot));
         initializedSources.add(index);
+        sourceCacheStates.set(index, snapshot.metadata.fromCache);
 
         if (initializedSources.size === references.length) {
-          onData(
-            mergeDocumentLists(Array.from(sourceDocuments.values()))
-          );
+          onData(mergeDocumentLists(Array.from(sourceDocuments.values())));
+          onMetadata?.({
+            fromCache: Array.from(sourceCacheStates.values()).some(Boolean),
+          });
         }
       },
       onError
@@ -1197,6 +1201,23 @@ const Overviews = () => {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [statusNow, setStatusNow] = useState(() => new Date());
+  const [isOffline, setIsOffline] = useState(
+    () => typeof navigator !== "undefined" && !navigator.onLine
+  );
+  const [isReportCache, setIsReportCache] = useState(false);
+  const [lastServerSyncAt, setLastServerSyncAt] = useState(null);
+  const [hasLoadedReports, setHasLoadedReports] = useState(false);
+
+  useEffect(() => {
+    const markOnline = () => setIsOffline(false);
+    const markOffline = () => setIsOffline(true);
+    window.addEventListener("online", markOnline);
+    window.addEventListener("offline", markOffline);
+    return () => {
+      window.removeEventListener("online", markOnline);
+      window.removeEventListener("offline", markOffline);
+    };
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setStatusNow(new Date()), 60_000);
@@ -1227,7 +1248,10 @@ const Overviews = () => {
         doc(db, ORGANIZATION_MEMBERS_COLLECTION, firebaseUser.uid),
         (snapshot) => {
           if (!snapshot.exists()) {
-            setCurrentMember(null);
+            // An empty offline cache is not proof that access was revoked.
+            if (!snapshot.metadata.fromCache) {
+              setCurrentMember(null);
+            }
             setLoading(false);
             return;
           }
@@ -1324,7 +1348,7 @@ const Overviews = () => {
         }
 
         console.error("Unable to establish organization scope:", error);
-        setOrganizations([]);
+        // Retain the last usable organization scope after a network error.
         setLoadError(
           error.message || "Organization access could not be loaded."
         );
@@ -1373,8 +1397,13 @@ const Overviews = () => {
           references: getScopedReportReferences(currentOrganization),
           onData: (records) => {
             setReportSubmissions(records);
+            setHasLoadedReports(true);
             setLoading(false);
             setLoadError("");
+          },
+          onMetadata: ({ fromCache }) => {
+            setIsReportCache(fromCache);
+            if (!fromCache) setLastServerSyncAt(new Date());
           },
           onError: (error) => {
             console.error("Unable to load scoped report submissions:", error);
@@ -2276,7 +2305,28 @@ const Overviews = () => {
           </div>
         </header>
 
-        {loadError && (
+        {(isOffline || isReportCache) && (
+          <div
+            data-pdf-ignore="true"
+            role="status"
+            className="mb-6 rounded-lg border border-slate-200 bg-slate-100 px-4 py-3 text-sm text-slate-700"
+          >
+            <span className="font-semibold">
+              {isOffline ? "Offline" : "Showing cached data"}
+            </span>
+            {" — "}
+            {hasLoadedReports
+              ? "Displaying saved reporting information. Recent changes may not be available."
+              : "No saved reporting information is available on this device yet."}
+            {lastServerSyncAt && (
+              <span className="ml-1 text-slate-500">
+                Last server refresh: {formatReportingDate(lastServerSyncAt)} at {formatTime(lastServerSyncAt)}.
+              </span>
+            )}
+          </div>
+        )}
+
+        {loadError && !isOffline && (
           <div
             data-pdf-ignore="true"
             className="mb-6 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
