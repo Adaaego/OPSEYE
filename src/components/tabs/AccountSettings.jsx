@@ -38,8 +38,10 @@ import {
 import {
   collection,
   doc,
-  getDoc,
-  getDocs,
+  getDoc as getDocFromServer,
+  getDocs as getDocsFromServer,
+  getDocFromCache,
+  getDocsFromCache,
   onSnapshot,
   query,
   serverTimestamp,
@@ -76,6 +78,31 @@ import {
 
 import { Card, EmptyCell, SectionHeader, Table } from "../ui/interface";
 import { Button } from "../ui/Button";
+
+const isOffline = () => typeof navigator !== "undefined" && navigator.onLine === false;
+
+const canFallbackToCache = (error) =>
+  ["unavailable", "deadline-exceeded", "failed-precondition"].includes(error?.code);
+
+const getDoc = async (reference) => {
+  if (isOffline()) return getDocFromCache(reference);
+  try {
+    return await getDocFromServer(reference);
+  } catch (error) {
+    if (!canFallbackToCache(error)) throw error;
+    return getDocFromCache(reference);
+  }
+};
+
+const getDocs = async (reference) => {
+  if (isOffline()) return getDocsFromCache(reference);
+  try {
+    return await getDocsFromServer(reference);
+  } catch (error) {
+    if (!canFallbackToCache(error)) throw error;
+    return getDocsFromCache(reference);
+  }
+};
 
 const NAVY = "#0F172A";
 const PALE_BLUE = "#C8D5E8";
@@ -2004,6 +2031,7 @@ const StationConfigurationModal = ({ open, branch, onClose, onSaved }) => {
   }));
 
   const save = async () => {
+    if (isOffline()) { setError("Connect to the internet to save station configuration."); return; }
     if (!auth.currentUser?.uid || !branchId) { setError("Sign in to save station configuration."); return; }
     if (!configuration.stationType) { setError("Select the station type."); return; }
     const tankNumbers = configuration.tanks.map((tank) => String(tank.number || "").trim());
@@ -2328,6 +2356,17 @@ const StationConfigurationModal = ({ open, branch, onClose, onSaved }) => {
 
 const AccountSettings = ({ roles = [] }) => {
   const [activeTab, setActiveTab] = useState("account");
+  const [offline, setOffline] = useState(isOffline);
+
+  useEffect(() => {
+    const updateConnection = () => setOffline(isOffline());
+    window.addEventListener("online", updateConnection);
+    window.addEventListener("offline", updateConnection);
+    return () => {
+      window.removeEventListener("online", updateConnection);
+      window.removeEventListener("offline", updateConnection);
+    };
+  }, []);
 
   const [profile, setProfile] = useState({});
   const [organization, setOrganization] = useState(null);
@@ -2458,10 +2497,19 @@ const AccountSettings = ({ roles = [] }) => {
        * as users/{uid} and organizationMembers/{uid} resolve so a later Team or
        * hierarchy permission issue can never make the Account tab look unreadable.
        */
-      const [userDocument, organizationMember] = await Promise.all([
-        getUserDocument(currentUser.uid),
-        getOrganizationMember(currentUser.uid),
-      ]);
+      const [userDocument, organizationMember] = isOffline()
+        ? await Promise.all([
+            getDocFromCache(doc(db, "users", currentUser.uid)).then((snapshot) =>
+              snapshot.exists() ? snapshot.data() : null
+            ),
+            getDocFromCache(doc(db, "organizationMembers", currentUser.uid)).then((snapshot) =>
+              snapshot.exists() ? snapshot.data() : null
+            ),
+          ])
+        : await Promise.all([
+            getUserDocument(currentUser.uid),
+            getOrganizationMember(currentUser.uid),
+          ]);
 
       if (!userDocument) {
         throw new Error("Your user profile could not be found.");
@@ -2505,9 +2553,10 @@ const AccountSettings = ({ roles = [] }) => {
       setProfile(loadedProfile);
       setFormData(createProfileForm(loadedProfile));
 
-      const currentOrganization = await getOrganizationDocument(
-        organizationMember.organizationId
-      );
+      const currentOrganization = isOffline()
+        ? await getDocFromCache(doc(db, "organizations", organizationMember.organizationId))
+            .then((snapshot) => snapshot.exists() ? snapshot.data() : null)
+        : await getOrganizationDocument(organizationMember.organizationId);
 
       if (!currentOrganization) {
         throw new Error("Your organization record could not be found.");
@@ -2819,8 +2868,6 @@ const AccountSettings = ({ roles = [] }) => {
       } catch (teamError) {
         console.error("Unable to load the organization team:", teamError);
 
-        setDefaultTeam(null);
-        setTeamMembers([]);
         setTeamLoadError(
           teamError?.message ||
             "The team could not be loaded for this organization."
@@ -3183,8 +3230,9 @@ const AccountSettings = ({ roles = [] }) => {
       console.error("Unable to load account settings:", error);
 
       setPageError(
-        error.message ||
-          "We could not load your account information."
+        isOffline()
+          ? "This account's settings have not been cached on this device. Connect to the internet and open Settings once."
+          : error.message || "We could not load your account information."
       );
     } finally {
       if (showLoading) {
@@ -3555,6 +3603,10 @@ const AccountSettings = ({ roles = [] }) => {
   };
 
   const handleSave = async () => {
+    if (isOffline()) {
+      setPageError("Connect to the internet to update account details.");
+      return;
+    }
     const currentUser = auth.currentUser;
 
     if (!currentUser?.uid) {
@@ -3623,6 +3675,10 @@ const AccountSettings = ({ roles = [] }) => {
   };
 
   const handleInvite = async () => {
+    if (isOffline()) {
+      setPageError("Connect to the internet to send invitations.");
+      return;
+    }
     const email = inviteEmail.trim().toLowerCase();
 
     if (!/^\S+@\S+\.\S+$/.test(email)) {
@@ -3690,6 +3746,9 @@ const AccountSettings = ({ roles = [] }) => {
     selectedUserId,
     administratorEmail,
   }) => {
+    if (isOffline()) {
+      throw new Error("Connect to the internet to create organizations and assign administrators.");
+    }
     if (!organization) {
       throw new Error("The parent organization could not be resolved.");
     }
@@ -4207,6 +4266,10 @@ const AccountSettings = ({ roles = [] }) => {
    * operation cannot prevent the other configuration from being saved.
    */
   const handleSaveOperatingHours = async () => {
+    if (isOffline()) {
+      setPageError("Connect to the internet to save operating hours.");
+      return;
+    }
     const currentUser = auth.currentUser;
 
     if (!currentUser?.uid || !currentOrganizationId) {
@@ -4378,6 +4441,10 @@ const AccountSettings = ({ roles = [] }) => {
   };
 
   const handleSaveBranchShifts = async () => {
+    if (isOffline()) {
+      setPageError("Connect to the internet to save shift definitions.");
+      return;
+    }
     const currentUser = auth.currentUser;
 
     if (!currentUser?.uid || !currentOrganizationId) {
@@ -4767,6 +4834,10 @@ const AccountSettings = ({ roles = [] }) => {
 
   const handleSaveBranchStaff = async (event) => {
     event.preventDefault();
+    if (isOffline()) {
+      setBranchStaffError("Connect to the internet to save Branch Members.");
+      return;
+    }
     const name = branchStaffForm.fullName.trim().replace(/\s+/g, " ");
     const phone = branchStaffForm.phoneNumber.trim();
     if (!isBranchAdmin || !currentOrganizationId) {
@@ -4832,6 +4903,10 @@ const AccountSettings = ({ roles = [] }) => {
   };
 
   const handleSetBranchStaffStatus = async (member, status) => {
+    if (isOffline()) {
+      setBranchStaffError("Connect to the internet to change Branch Member status.");
+      return;
+    }
     try {
       setBranchStaffError("");
       if (!isBranchAdmin || member.organizationId !== currentOrganizationId) {
@@ -4848,6 +4923,10 @@ const AccountSettings = ({ roles = [] }) => {
   };
 
   const handleSaveShiftRoster = async () => {
+    if (isOffline()) {
+      setShiftRosterError("Connect to the internet to save the weekly shift schedule.");
+      return;
+    }
     if (
       !isBranchAdmin ||
       !currentOrganizationId
@@ -5095,6 +5174,12 @@ const AccountSettings = ({ roles = [] }) => {
           </p>
         </div>
       </header>
+
+      {offline && (
+        <div role="status" className="mb-5 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+          Offline · Showing settings previously saved on this device. Administrative changes require a connection.
+        </div>
+      )}
 
       {pageError && (
         <div className="mb-5 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
