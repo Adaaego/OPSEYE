@@ -3314,6 +3314,30 @@ const cleanReportResponses = (
 
  */
 
+const saveReportDraftHandler = ({ report, fieldValues, currentUser }) => {
+  if (!currentUser?.uid) {
+    return Promise.reject(new Error("A signed-in user is required."));
+  }
+  const reportId = report?.reportSubmissionId || report?.submissionId || report?.id;
+  if (!reportId || !report?.formTemplateId) {
+    return Promise.reject(new Error("Only scheduled reporting tasks can be saved as drafts."));
+  }
+  if (Number(report.currentStageIndex ?? 0) !== 0 ||
+      normalizeStatusValue(report.currentStageRole) !== "branch_admin" ||
+      !["draft", "pending_submission", "overdue"].includes(normalizeStatusValue(report.status))) {
+    return Promise.reject(new Error("This report is no longer available for Branch draft editing."));
+  }
+  const values = fieldValues && typeof fieldValues === "object" && !Array.isArray(fieldValues)
+    ? fieldValues : {};
+  // Do not change workflow stage or approval fields while saving a draft.
+  return updateDoc(doc(db, REPORT_SUBMISSIONS_COLLECTION, reportId), {
+    fieldValues: values,
+    status: normalizeStatusValue(report.status) === "overdue" ? "overdue" : "draft",
+    updatedBy: currentUser.uid,
+    updatedAt: serverTimestamp(),
+  });
+};
+
 const submitReportHandler = async ({
 
   report,
@@ -4542,6 +4566,7 @@ export const changes = {
 
   deleteFormHandler,
 
+  saveReportDraftHandler,
   submitReportHandler,
 
 };

@@ -76,11 +76,8 @@ import {
 
 
 
-import {
-
-  auth,
-
-} from "../../firebase/firebase";
+import { auth, db } from "../../firebase/firebase";
+import { doc, onSnapshot } from "firebase/firestore";
 
 
 
@@ -362,6 +359,9 @@ const ReportViewer = ({
 
     useState("");
 
+  const [draftSyncStatus, setDraftSyncStatus] = useState("");
+  const [draftSaveError, setDraftSaveError] = useState("");
+
 
 
   const reportFields =
@@ -437,8 +437,8 @@ const ReportViewer = ({
 
 
 /**
- * Both operator and Ministry views show the internal approval stages.
- * A regulatory destination is not an additional report approval stage.
+ * The regulatory handoff is retained in the workflow record but is displayed
+ * only to Ministry or agency viewers. Operator views end at internal approval.
  */
 
   const isMinistryViewer = ["ministry", "ministry_admin", "agency", "agency_admin"].includes(
@@ -446,11 +446,11 @@ const ReportViewer = ({
   );
 
   /*
-   * Branch, Region and Enterprise approvals remain visible to both sides.
-   * Regulatory routing metadata is not itself a new approval step.
+   * Company users see internal approval stages only. Regulatory stages remain
+   * in the stored workflow, and Ministry/Agency users can view the full trail.
    */
   const displayStages = workflowStages.filter(
-    (stage) => !["ministry", "ministry_admin", "agency", "agency_admin"].includes(normalizeRole(stage?.role))
+    (stage) => isMinistryViewer || !["ministry", "ministry_admin", "agency", "agency_admin"].includes(normalizeRole(stage?.role))
   );
 
 
@@ -838,7 +838,7 @@ const ReportViewer = ({
 
           isCompleted
 
-            ? "Review completed"
+            ? (isMinistryViewer ? "Ministry" : "Review completed")
 
             : report?.assignedTo ||
 
@@ -897,10 +897,12 @@ const ReportViewer = ({
     setErrors({});
 
     setSubmitError("");
+    setDraftSaveError("");
+    setDraftSyncStatus("");
 
     setSubmitting(false);
 
-  }, [report]);
+  }, [report?.id]);
 
 
 
@@ -1049,23 +1051,49 @@ return (
 
 
 
-  const handleSaveDraft = () => {
-
-    onUpdate({
-
-      ...report,
-
-      fieldValues: values,
-
-      status: "draft",
-
+  useEffect(() => {
+    if (!report?.id || !canSubmitReport) return undefined;
+    const reference = doc(db, "reportSubmissions", report.id);
+    return onSnapshot(reference, { includeMetadataChanges: true }, (snapshot) => {
+      if (!snapshot.exists()) return;
+      if (snapshot.metadata.hasPendingWrites) {
+        setDraftSyncStatus("pending");
+      } else {
+        setDraftSyncStatus((current) => current === "saving" || current === "pending" ? "synced" : current);
+      }
+    }, (error) => {
+      setDraftSaveError(error?.message || "Unable to monitor draft synchronization.");
     });
+  }, [report?.id, canSubmitReport]);
 
+  const handleSaveDraft = () => {
+    setDraftSaveError("");
+    if (!canSubmitReport || !auth.currentUser?.uid) {
+      setDraftSaveError("Only the assigned Branch Admin can save this report draft.");
+      return;
+    }
+    const draftStatus = report?.status === "overdue" ? "overdue" : "draft";
+    const pendingWrite = changes.saveReportDraftHandler({
+      report,
+      fieldValues: values,
+      currentUser: auth.currentUser,
+    });
+    setDraftSyncStatus("saving");
+    pendingWrite.catch((error) => {
+      setDraftSaveError(error?.message || "Unable to save the report draft.");
+      setDraftSyncStatus("error");
+    });
+    // Keep the report in the current workflow stage while the write syncs.
+    onUpdate({ ...report, fieldValues: values, status: draftStatus });
   };
 
 
 
   const handleSubmit = async () => {
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setSubmitError("Connect to the internet before submitting or approving a report. Your saved draft remains available offline.");
+      return;
+    }
 
 if (!canAdvanceWorkflow) {
 
@@ -1774,7 +1802,7 @@ return createPortal(
 
                   {isCompleted
 
-                    ? "Internal review completed"
+                    ? (isMinistryViewer ? "Organization review completed and submitted to Ministry" : "Internal review completed")
 
                     : `Stage ${
 
@@ -2022,7 +2050,9 @@ return (
 
                 <CheckCircle2 className="h-4 w-4 shrink-0" />
 
-                {"All internal approval stages are complete."}
+                {isMinistryViewer
+                ? "Organization review is complete. The report has reached the Ministry."
+                : "All internal approval stages are complete."}
 
               </div>
 
@@ -2810,7 +2840,17 @@ firstDate
 
 
 
-        {submitError && (
+        {canSubmitReport && (draftSaveError || draftSyncStatus) && (
+        <div role="status" className="shrink-0 border-t border-slate-200 bg-slate-50 px-5 py-2 text-xs font-medium text-slate-700">
+          {draftSaveError || (draftSyncStatus === "pending"
+            ? "Draft saved locally — pending sync. You can close this report."
+            : draftSyncStatus === "synced"
+              ? "Draft synchronized with Firestore."
+              : "Saving draft locally…")}
+        </div>
+      )}
+
+      {submitError && (
 
           <div className="shrink-0 border-t border-red-200 bg-red-50 px-5 py-3 text-sm font-semibold text-red-700">
 
