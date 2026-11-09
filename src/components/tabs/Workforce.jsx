@@ -4400,7 +4400,13 @@ const subscribeToScopedReferences = ({
               );
             }
           },
-          onError
+          (error) => {
+            initializedSources.add(index);
+            onError(error);
+            if (initializedSources.size === references.length && sourceDocuments.size > 0) {
+              onData(mergeDocumentLists(Array.from(sourceDocuments.values())));
+            }
+          }
         )
     );
 
@@ -4669,6 +4675,7 @@ const Workforce = () => {
     currentUserProfile,
     setCurrentUserProfile,
   ] = useState(null);
+  const activeOrganizationScope = useRef("");
 
   const [
     organizations,
@@ -4788,6 +4795,21 @@ const Workforce = () => {
     setLoadError,
   ] = useState("");
 
+  const [isOffline, setIsOffline] = useState(
+    () => typeof navigator !== "undefined" && !navigator.onLine
+  );
+  const [queuedWorkforceSave, setQueuedWorkforceSave] = useState(false);
+
+  useEffect(() => {
+    const updateConnection = () => setIsOffline(!navigator.onLine);
+    window.addEventListener("online", updateConnection);
+    window.addEventListener("offline", updateConnection);
+    return () => {
+      window.removeEventListener("online", updateConnection);
+      window.removeEventListener("offline", updateConnection);
+    };
+  }, []);
+
   const [
     loadedSources,
     setLoadedSources,
@@ -4821,11 +4843,21 @@ const Workforce = () => {
     let unsubscribeUser =
       () => {};
 
+    let previousUserId = auth.currentUser?.uid || "";
     const unsubscribeAuth =
       onAuthStateChanged(
         auth,
         (firebaseUser) => {
           unsubscribeUser();
+          const nextUserId = firebaseUser?.uid || "";
+          if (previousUserId !== nextUserId) {
+            setCurrentUserProfile(null);
+            setOrganizations([]);
+            setWorkforceRecords([]);
+            setQueuedWorkforceSave(false);
+            setLoadedSources({ user: false, organizations: false, workforce: false });
+          }
+          previousUserId = nextUserId;
 
           if (!firebaseUser?.uid) {
             setCurrentUserProfile(
@@ -4929,6 +4961,7 @@ const Workforce = () => {
       };
 
     if (!currentUserProfile) {
+      activeOrganizationScope.current = "";
       setOrganizations([]);
       setWorkforceRecords([]);
 
@@ -4951,6 +4984,7 @@ const Workforce = () => {
       );
 
     if (!userOrganizationId) {
+      activeOrganizationScope.current = "";
       setOrganizations([]);
       setWorkforceRecords([]);
 
@@ -4969,6 +5003,12 @@ const Workforce = () => {
       );
 
       return clearScopedSubscriptions;
+    }
+
+    if (activeOrganizationScope.current !== userOrganizationId) {
+      setOrganizations([]);
+      setWorkforceRecords([]);
+      activeOrganizationScope.current = userOrganizationId;
     }
 
     setLoadedSources(
@@ -5091,10 +5131,6 @@ const Workforce = () => {
                         signedInOrganization
                       );
                   } catch (error) {
-                    setWorkforceRecords(
-                      []
-                    );
-
                     setLoadedSources(
                       (current) => ({
                         ...current,
@@ -5146,10 +5182,6 @@ const Workforce = () => {
                             error
                           );
 
-                          setWorkforceRecords(
-                            []
-                          );
-
                           setLoadedSources(
                             (current) => ({
                               ...current,
@@ -5173,13 +5205,6 @@ const Workforce = () => {
                   console.error(
                     "Unable to load organizations:",
                     error
-                  );
-
-                  setOrganizations(
-                    []
-                  );
-                  setWorkforceRecords(
-                    []
                   );
 
                   setLoadedSources(
@@ -5210,11 +5235,6 @@ const Workforce = () => {
             "Unable to load the current organization:",
             error
           );
-
-          clearScopedSubscriptions();
-
-          setOrganizations([]);
-          setWorkforceRecords([]);
 
           setLoadedSources(
             (current) => ({
@@ -6846,17 +6866,28 @@ const Workforce = () => {
             serverTimestamp();
         }
 
-        await setDoc(
-          doc(
-            db,
-            WORKFORCE_COLLECTION,
-            recordId
-          ),
+        const savePromise = setDoc(
+          doc(db, WORKFORCE_COLLECTION, recordId),
           payload,
-          {
-            merge: true,
-          }
+          { merge: true }
         );
+
+        if (!navigator.onLine) {
+          setQueuedWorkforceSave(true);
+          savePromise.then(() => {
+            if (auth.currentUser?.uid === currentUserId) {
+              setQueuedWorkforceSave(false);
+            }
+          }).catch((error) => {
+            console.error("Unable to synchronize offline workforce role:", error);
+            if (auth.currentUser?.uid === currentUserId) {
+              setQueuedWorkforceSave(false);
+              setLoadError(error?.message || "An offline workforce change could not be synchronized.");
+            }
+          });
+        } else {
+          await savePromise;
+        }
 
         setModalOpen(false);
         setEditingRecord(null);
@@ -6958,6 +6989,14 @@ const Workforce = () => {
           )}
         </div>
       </header>
+
+      {(isOffline || queuedWorkforceSave) && (
+        <div className="mb-5 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+          {queuedWorkforceSave
+            ? "Workforce changes are saved locally and awaiting Firebase synchronization."
+            : "You are offline. Showing available cached workforce data."}
+        </div>
+      )}
 
       {loadError && (
         <div className="mb-5 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
