@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState, } from "react";
 import { AlertTriangle, ArrowUpDown, Building2, ChevronDown, ChevronRight, Eye, } from "lucide-react";
-import { collection, doc, getDoc, getDocs, query, where, } from "firebase/firestore";
+import { collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, query, where, } from "firebase/firestore";
 import { db, } from "../../firebase/firebase";
 import { Card, StatusBadge, Table, EmptyCell, SearchInput, Select, } from "../ui/interface";
 import { Button, } from "../ui/Button";
@@ -631,8 +631,34 @@ const snapshotDocuments = (snapshot) => {
         ...documentSnapshot.data(),
     }));
 };
+
+// Prefer a normal Firestore read; recover from IndexedDB when the network fails.
+// Do not interpret a missing cached document as proof that it does not exist.
+const readDocumentOfflineAware = async (reference) => {
+    try {
+        return await getDoc(reference);
+    } catch (error) {
+        try {
+            return await getDocFromCache(reference);
+        } catch {
+            throw error;
+        }
+    }
+};
+
+const readQueryOfflineAware = async (reference) => {
+    try {
+        return await getDocs(reference);
+    } catch (error) {
+        try {
+            return await getDocsFromCache(reference);
+        } catch {
+            throw error;
+        }
+    }
+};
 const loadScopedOrganizations = async (organizationId) => {
-    const currentOrganizationSnapshot = await getDoc(doc(db, ORGANIZATIONS_COLLECTION, organizationId));
+    const currentOrganizationSnapshot = await readDocumentOfflineAware(doc(db, ORGANIZATIONS_COLLECTION, organizationId));
     if (!currentOrganizationSnapshot.exists()) {
         throw new Error("The user's organization could not be found.");
     }
@@ -642,30 +668,35 @@ const loadScopedOrganizations = async (organizationId) => {
     };
     const organizationLevel = getOrganizationLevel(currentOrganization);
     let scopedOrganizations = [];
+    let scopedOrganizationsFromCache = false;
     if (isMinistry(currentOrganization)) {
         const sector = String(currentOrganization.sector ||
             "").trim();
         if (!sector) {
             throw new Error("The Ministry organization is missing its sector.");
         }
-        const snapshot = await getDocs(query(collection(db, ORGANIZATIONS_COLLECTION), where("sector", "==", sector)));
+        const snapshot = await readQueryOfflineAware(query(collection(db, ORGANIZATIONS_COLLECTION), where("sector", "==", sector)));
         scopedOrganizations =
             snapshotDocuments(snapshot);
+        scopedOrganizationsFromCache = snapshot.metadata.fromCache;
     }
     else if (organizationLevel ===
         "enterprise") {
-        const snapshot = await getDocs(query(collection(db, ORGANIZATIONS_COLLECTION), where("rootEnterpriseId", "==", organizationId)));
+        const snapshot = await readQueryOfflineAware(query(collection(db, ORGANIZATIONS_COLLECTION), where("rootEnterpriseId", "==", organizationId)));
         scopedOrganizations =
             snapshotDocuments(snapshot);
+        scopedOrganizationsFromCache = snapshot.metadata.fromCache;
     }
     else if (organizationLevel ===
         "region") {
-        const descendantsSnapshot = await getDocs(query(collection(db, ORGANIZATIONS_COLLECTION), where("parentId", "==", organizationId)));
+        const descendantsSnapshot = await readQueryOfflineAware(query(collection(db, ORGANIZATIONS_COLLECTION), where("parentId", "==", organizationId)));
         scopedOrganizations =
             snapshotDocuments(descendantsSnapshot);
+        scopedOrganizationsFromCache = descendantsSnapshot.metadata.fromCache;
     }
     return {
         currentOrganization,
+        fromCache: currentOrganizationSnapshot.metadata.fromCache || scopedOrganizationsFromCache,
         organizations: mergeDocumentLists([
             scopedOrganizations,
             [
@@ -735,8 +766,8 @@ const getScopedWorkforceReferences = (organization) => {
     ];
 };
 const loadScopedDocuments = async (references) => {
-    const snapshots = await Promise.all(references.map((reference) => getDocs(reference)));
-    return mergeDocumentLists(snapshots.map(snapshotDocuments));
+    const snapshots = await Promise.all(references.map(readQueryOfflineAware));
+    return { records: mergeDocumentLists(snapshots.map(snapshotDocuments)), fromCache: snapshots.some((snapshot) => snapshot.metadata.fromCache) };
 };
 const loadFuelPricesForOrganizations = async (organizations) => {
     const enterpriseIds = Array.from(new Set(organizations
@@ -749,13 +780,13 @@ const loadFuelPricesForOrganizations = async (organizations) => {
                 : ""));
     })
         .filter(Boolean)));
-    const snapshots = await Promise.all(enterpriseIds.map((enterpriseId) => getDoc(doc(db, COMPANY_FUEL_PRICES_COLLECTION, enterpriseId))));
-    return snapshots
-        .filter((snapshot) => snapshot.exists())
-        .map((snapshot) => ({
-        id: snapshot.id,
-        ...snapshot.data(),
-    }));
+    const snapshots = await Promise.all(enterpriseIds.map((enterpriseId) => readDocumentOfflineAware(doc(db, COMPANY_FUEL_PRICES_COLLECTION, enterpriseId))));
+    return {
+        records: snapshots
+            .filter((snapshot) => snapshot.exists())
+            .map((snapshot) => ({ id: snapshot.id, ...snapshot.data() })),
+        fromCache: snapshots.some((snapshot) => snapshot.metadata.fromCache),
+    };
 };
 const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelectOperator = () => { }, }) => {
     const [allOrganizations, setAllOrganizations,] = useState([]);
@@ -767,6 +798,21 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
     const [organizationsLoadedAt, setOrganizationsLoadedAt,] = useState(null);
     const [loading, setLoading,] = useState(true);
     const [loadError, setLoadError,] = useState("");
+    const [isOffline, setIsOffline] = useState(() =>
+        typeof navigator !== "undefined" && !navigator.onLine
+    );
+    const [showingCachedData, setShowingCachedData] = useState(false);
+    const [lastServerRefresh, setLastServerRefresh] = useState(null);
+
+    useEffect(() => {
+        const updateConnection = () => setIsOffline(!navigator.onLine);
+        window.addEventListener("online", updateConnection);
+        window.addEventListener("offline", updateConnection);
+        return () => {
+            window.removeEventListener("online", updateConnection);
+            window.removeEventListener("offline", updateConnection);
+        };
+    }, []);
     const [search, setSearch,] = useState("");
     const [regionFilter, setRegionFilter,] = useState("");
     const [statusFilter, setStatusFilter,] = useState("");
@@ -780,6 +826,21 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
      * a time before returning to the Operators table.
      */
     const [detailHistory, setDetailHistory,] = useState([]);
+    // Never carry one signed-in account's cached dashboard into another account.
+    useEffect(() => {
+        setAllOrganizations([]);
+        setVisibleOrganizations([]);
+        setReportSubmissions([]);
+        setCompanyFuelPrices([]);
+        setWorkforceRecords([]);
+        setCurrentOrganization(null);
+        setSelectedOperator(null);
+        setDetailHistory([]);
+        setShowingCachedData(false);
+        setLastServerRefresh(null);
+        setOrganizationsLoadedAt(null);
+    }, [currentUser?.uid]);
+
     /*
      * Resolve the signed-in organization first. Every operational collection is
      * then queried with the same canonical hierarchy predicate enforced by the
@@ -794,7 +855,7 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
                 if (!currentUser?.uid) {
                     throw new Error("No signed-in user was found.");
                 }
-                const memberSnapshot = await getDoc(doc(db, ORGANIZATION_MEMBERS_COLLECTION, currentUser.uid));
+                const memberSnapshot = await readDocumentOfflineAware(doc(db, ORGANIZATION_MEMBERS_COLLECTION, currentUser.uid));
                 if (!memberSnapshot.exists()) {
                     throw new Error("This user's organization membership could not be found.");
                 }
@@ -804,13 +865,20 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
                 if (!organizationId) {
                     throw new Error("This user is not linked to an organization.");
                 }
-                const { currentOrganization: signedInOrganization, organizations, } = await loadScopedOrganizations(organizationId);
+                const { currentOrganization: signedInOrganization, organizations, fromCache: organizationsFromCache } = await loadScopedOrganizations(organizationId);
                 const dataOrganizations = organizations.filter((organization) => !isMinistry(organization));
-                const [reports, prices, workforce,] = await Promise.all([
+                // Each data source is independent. A missing offline query must not
+                // make OpsEye discard successfully loaded or previously visible data.
+                const results = await Promise.allSettled([
                     loadScopedDocuments(getScopedReportReferences(signedInOrganization)),
                     loadFuelPricesForOrganizations(dataOrganizations),
                     loadScopedDocuments(getScopedWorkforceReferences(signedInOrganization)),
                 ]);
+                const [reportsResult, pricesResult, workforceResult] = results;
+                const failedSources = results.filter((result) => result.status === "rejected");
+                const readFromCache = memberSnapshot.metadata.fromCache || organizationsFromCache ||
+                    results.some((result) => result.status === "fulfilled" && result.value.fromCache);
+                const partialData = failedSources.length > 0;
                 let matchingCompanies = [];
                 const signedInOrganizationId = getOrganizationId(signedInOrganization);
                 const signedInLevel = getOrganizationLevel(signedInOrganization);
@@ -883,23 +951,38 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
                 }
                 setAllOrganizations(organizations);
                 setVisibleOrganizations(matchingCompanies);
-                setReportSubmissions(reports);
-                setCompanyFuelPrices(prices);
-                setWorkforceRecords(workforce);
+                if (reportsResult.status === "fulfilled") setReportSubmissions(reportsResult.value.records);
+                if (pricesResult.status === "fulfilled") setCompanyFuelPrices(pricesResult.value.records);
+                if (workforceResult.status === "fulfilled") setWorkforceRecords(workforceResult.value.records);
                 setCurrentOrganization(signedInOrganization);
-                setOrganizationsLoadedAt(new Date());
+                setShowingCachedData(readFromCache || partialData);
+                if (!readFromCache && !partialData) {
+                    setLastServerRefresh(new Date());
+                }
+                if (partialData) {
+                    setLoadError("Some records are unavailable offline. Showing the data saved on this device.");
+                }
+                // Do not fabricate a fresh sync timestamp from cached records.
+                if (!readFromCache && !partialData) setOrganizationsLoadedAt(new Date());
             }
             catch (error) {
                 console.error("Error loading operator data:", error);
                 if (requestIsActive) {
-                    setAllOrganizations([]);
-                    setVisibleOrganizations([]);
-                    setReportSubmissions([]);
+                    if (error?.code === "permission-denied" || error?.code === "unauthenticated") {
+                        // Offline retention must not bypass a confirmed authorization failure.
+                        setAllOrganizations([]);
+                        setVisibleOrganizations([]);
+                        setReportSubmissions([]);
                         setCompanyFuelPrices([]);
-                    setWorkforceRecords([]);
-                    setCurrentOrganization(null);
-                    setLoadError(error?.message ||
-                        "Operator data could not be loaded.");
+                        setWorkforceRecords([]);
+                        setCurrentOrganization(null);
+                    } else {
+                        // Preserve the previous dashboard during ordinary connectivity failures.
+                        setShowingCachedData(true);
+                    }
+                    setLoadError(!navigator.onLine
+                        ? "Some offline data is unavailable. Open this page online to cache it."
+                        : (error?.message || "Operator data could not be loaded."));
                 }
             }
             finally {
@@ -1521,8 +1604,16 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
      *
      * It performs presentation only and does not issue duplicate reads.
      */
+    const offlineNotice = (isOffline || showingCachedData) && (
+        <div data-pdf-ignore="true" className="mx-4 mt-4 rounded-lg border border-slate-200 bg-slate-100 px-4 py-2.5 text-xs font-medium text-slate-700 sm:mx-5 lg:mx-6">
+          {isOffline ? "Offline — showing data saved on this device. Changes elsewhere will appear after reconnection." :
+              "Showing cached or partially available data. Some figures may be outdated."}
+          {lastServerRefresh && ` Last server refresh: ${formatUpdatedAt(lastServerRefresh)}.`}
+        </div>
+    );
     if (activeOperator) {
         return (<div className="w-full">
+        {offlineNotice}
         <OperatorDetail key={activeOperator.organizationId ||
                 activeOperator.id} operator={activeOperator} updatedAt={activeOperator.updatedAt ||
                 organizationsLoadedAt} backLabel={detailHistory.length >
@@ -1534,6 +1625,7 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
       </div>);
     }
     return (<section className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6">
+      {offlineNotice}
       {/*
          * Match Overview exactly: accent bar + title + scope pill + description,
          * with the data timestamp aligned on the right.
