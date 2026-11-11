@@ -1,139 +1,104 @@
 import { auth, db } from "./firebase.js";
-
 import { useState, useEffect, createContext, useContext } from "react";
-
 import { onAuthStateChanged } from "firebase/auth";
-
-import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import {
+  doc,
+  getDocFromCache,
+  getDocFromServer,
+  updateDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 
 const authContext = createContext();
 
-// to access the auth values
-export const useAuth = () => {
-    return useContext(authContext) // custom context to give access to the value stored in auth context
-}
+export const useAuth = () => useContext(authContext);
 
-export function AuthProvider ({ children }) {
+export function AuthProvider({ children }) {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
-    const [currentUser, setCurrentUser] = useState(null);
+  useEffect(() => {
+    let active = true;
+    let generation = 0;
 
-    const [isLoggedIn, setIsLoggedIn] = useState(false);
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      const requestId = ++generation;
+      const isCurrent = () =>
+        active &&
+        generation === requestId &&
+        auth.currentUser?.uid === user?.uid;
 
-    const [isLoading, setIsLoading] = useState(true)
-
-    // runs when a user logs in or logs out x initialize user returns the user object
-    useEffect(() => {
-
-        const unsubscribe = onAuthStateChanged(auth, initializeUser); // tracks the users login state
-
-        return unsubscribe; // stops tracking once the component unmounts
-
-    }, [])
-
-    // callback function to get initialize the current user
-    const initializeUser = async (user) => { // checks if a user is logged in, then updates state to match
-
-        if (user) {
-
-            setCurrentUser({ ...user });
-
-            setIsLoggedIn(true)
-
-            // update Firestore when user logs in
-            try {
-
-                // Fetch user data from Firestore
-                const userRef = doc(db, "users", user.uid);
-
-                const userDoc = await getDoc(userRef);
-
-                if (userDoc.exists()) {
-
-                    const userData = userDoc.data();
-
-                    // Merge Firebase Auth user with Firestore data
-                    setCurrentUser({ ...user, ...userData });
-
-                    /*
-                     * Keep an unfinished onboarding status intact. Existing users and
-                     * users who have completed onboarding continue to become active
-                     * when they sign in.
-                     */
-                    const loginUpdate = {
-                        loggedIn: true,
-                        lastLogin: serverTimestamp(),
-                    };
-
-                    if (userData.onboardingCompleted !== false) {
-                        loginUpdate.status = "active";
-                    }
-
-                    // Update Firestore login status
-                    await updateDoc(userRef, loginUpdate);
-
-                } else {
-
-                    // If no Firestore doc exists, just use auth user
-                    setCurrentUser({ ...user });
-
-                }
-
-                setIsLoggedIn(true);
-
-            } catch (error) {
-
-                console.error("Error initializing user:", error);
-
-                // Still set the user even if Firestore fetch fails
-                setCurrentUser({ ...user });
-
-                setIsLoggedIn(true);
-
-            }
-
-        } else {
-
-            setCurrentUser(null);
-
-            setIsLoggedIn(false);
-
-            // update Firestore when user logs out
-            try {
-
-                const currentUid = auth?.currentUser?.uid;
-
-                if (currentUid) {
-
-                    const userRef = doc(db, "users", currentUid);
-
-                    await updateDoc(userRef, {
-                        loggedIn: false,
-                        status: "offline",
-                    });
-
-                }
-
-            } catch (error) {
-
-                console.error("Error updating logout status:", error);
-
-            }
-
+      if (!user) {
+        if (active) {
+          setCurrentUser(null);
+          setIsLoggedIn(false);
+          setIsLoading(false);
         }
+        return;
+      }
 
-        setIsLoading(false)
+      // Restore the existing Firebase Auth session immediately. Neither a
+      // Firestore read nor a write should prevent the app from rendering.
+      setCurrentUser({ ...user });
+      setIsLoggedIn(true);
+      setIsLoading(false);
 
-    }
+      const userRef = doc(db, "users", user.uid);
 
-    // values to be reused throughout the application
-    const values = {
-        currentUser,
-        isLoggedIn,
-    }
+      // Read cached profile details without making startup depend on the read.
+      getDocFromCache(userRef)
+        .then((snapshot) => {
+          if (isCurrent() && snapshot.exists()) {
+            setCurrentUser({ ...user, ...snapshot.data() });
+          }
+        })
+        .catch(() => {
+          // A profile that was not previously visited may not be cached.
+        });
 
-    return (
-        <authContext.Provider value={values}>
-            {!isLoading && children}
-        </authContext.Provider>
-    )
+      // Refresh profile details when the server is reachable. Unlike getDoc,
+      // this cannot silently fall back to stale data and is never awaited.
+      getDocFromServer(userRef)
+        .then((snapshot) => {
+          if (!isCurrent() || !snapshot.exists()) return;
+
+          const userData = snapshot.data();
+          setCurrentUser({ ...user, ...userData });
+
+          const loginUpdate = {
+            loggedIn: true,
+            lastLogin: serverTimestamp(),
+          };
+          if (userData.onboardingCompleted !== false) {
+            loginUpdate.status = "active";
+          }
+
+          // Preserve the original online login-status behaviour, but never
+          // await server confirmation while deciding whether to render.
+          updateDoc(userRef, loginUpdate).catch((error) => {
+            console.error("Error updating login status:", error);
+          });
+        })
+        .catch((error) => {
+          if (isCurrent() && error.code !== "unavailable") {
+            console.error("Error refreshing user profile:", error);
+          }
+        });
+    });
+
+    return () => {
+      active = false;
+      generation += 1;
+      unsubscribe();
+    };
+  }, []);
+
+  const values = { currentUser, isLoggedIn };
+
+  return (
+    <authContext.Provider value={values}>
+      {isLoading ? <div role="status">Loading OpsEye...</div> : children}
+    </authContext.Provider>
+  );
 }
