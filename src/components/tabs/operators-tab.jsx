@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState, } from "react";
 import { AlertTriangle, ArrowUpDown, Building2, ChevronDown, ChevronRight, Eye, } from "lucide-react";
-import { collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, query, where, } from "firebase/firestore";
+import { collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, onSnapshot, query, where, } from "firebase/firestore";
 import { db, } from "../../firebase/firebase";
 import { Card, StatusBadge, Table, EmptyCell, SearchInput, Select, } from "../ui/interface";
 import { Button, } from "../ui/Button";
@@ -803,9 +803,16 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
     );
     const [showingCachedData, setShowingCachedData] = useState(false);
     const [lastServerRefresh, setLastServerRefresh] = useState(null);
+    const [reconnectVersion, setReconnectVersion] = useState(0);
 
     useEffect(() => {
-        const updateConnection = () => setIsOffline(!navigator.onLine);
+        const updateConnection = () => {
+            const offline = !navigator.onLine;
+            setIsOffline(offline);
+            if (!offline) {
+                setReconnectVersion((version) => version + 1);
+            }
+        };
         window.addEventListener("online", updateConnection);
         window.addEventListener("offline", updateConnection);
         return () => {
@@ -998,6 +1005,7 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
         };
     }, [
         currentUser,
+        reconnectVersion,
     ]);
     const organizationMap = useMemo(() => {
         return new Map(allOrganizations.map((organization) => [
@@ -1403,14 +1411,65 @@ const OperatorsTab = ({ currentUser = null, complianceThreshold = null, onSelect
      * organization object becomes the default detail page as soon as the scoped
      * data has loaded.
      */
+    const detailOrganizationId = selectedOperator
+        ? getOrganizationId(selectedOperator)
+        : isBranchAccount
+            ? getOrganizationId(currentOrganization)
+            : "";
+
+useEffect(() => {
+    if (!currentUser?.uid || !detailOrganizationId) return;
+
+    const unsubscribe = onSnapshot(
+        doc(db, ORGANIZATIONS_COLLECTION, detailOrganizationId),
+        (snapshot) => {
+
+            if (!snapshot.exists()) return;
+
+            const freshOrganization = { id: snapshot.id, ...snapshot.data() };
+            const replaceOrganization = (organizations) => organizations.map((organization) =>
+                getOrganizationId(organization) === snapshot.id
+                    ? freshOrganization
+                    : organization
+            );
+
+            setAllOrganizations(replaceOrganization);
+            setVisibleOrganizations(replaceOrganization);
+            setCurrentOrganization((organization) =>
+                getOrganizationId(organization) === snapshot.id
+                    ? freshOrganization
+                    : organization
+            );
+        },
+        (error) => {
+            console.error("Error listening for organization updates:", error);
+        }
+    );
+
+    return unsubscribe;
+}, [currentUser?.uid, detailOrganizationId]);
+
+
     const branchDefaultOperator = isBranchAccount
         ? mergedOperators.find((operator) => getOrganizationId(operator) ===
             getOrganizationId(currentOrganization)) ||
             mergedOperators[0] ||
             null
         : null;
-    const activeOperator = selectedOperator ||
-        branchDefaultOperator;
+    const latestSelectedOperator = useMemo(() => {
+        if (!selectedOperator) return null;
+        const selectedId = getOrganizationId(selectedOperator);
+        const pending = [...mergedOperators];
+        while (pending.length) {
+            const candidate = pending.pop();
+            if (getOrganizationId(candidate) === selectedId) return candidate;
+            pending.push(...(candidate.branches || []));
+        }
+        return null;
+    }, [mergedOperators, selectedOperator]);
+    const activeOperator = selectedOperator
+        ? latestSelectedOperator
+        : branchDefaultOperator;
     const regionOptions = useMemo(() => {
         return [
             ...new Set([
