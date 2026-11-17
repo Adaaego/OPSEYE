@@ -75,8 +75,8 @@ const PAGE_COMPONENTS = {
 };
 
 
-const SIDEBAR_NAVY = "#020617";
-const SIDEBAR_ICON = "#C8D5E8";
+const SIDEBAR_NAVY = "#111E32";
+const SIDEBAR_ICON = "#D6E2F2";
 
 const PAGE_TRANSITION_DURATION = 180;
 const SideBar = ({
@@ -384,8 +384,8 @@ return (
       <>
         
         <div
-          className={`border-b border-white/10 py-5 ${
-            isCollapsed ? "px-2" : "px-4"
+          className={`border-b border-white/[0.08] py-6 ${
+            isCollapsed ? "px-2" : "px-5"
           }`}
         >
           <div
@@ -397,15 +397,15 @@ return (
           >
             <LogoMark />
             {!isCollapsed && (
-              <span className="text-lg font-bold tracking-wide text-white">
+              <span className="text-[17px] font-semibold tracking-[0.11em] text-slate-50">
                 OPSEYE
               </span>
             )}
           </div>
         </div>
-        <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 py-4">
+        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-6 [scrollbar-width:thin] [scrollbar-color:rgba(148,163,184,0.18)_transparent]">
           {!isCollapsed && (
-            <p className="px-3 pb-2 font-mono text-[10px] uppercase tracking-widest text-slate-500">
+            <p className="px-3 pb-3 text-[10px] font-semibold uppercase tracking-[0.17em] text-slate-400">
               Menu
             </p>
           )}
@@ -430,24 +430,24 @@ return (
                     ? "page"
                     : undefined
                 }
-                className={`relative flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all ${
+                className={`group relative flex min-h-[43px] w-full items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium transition-[background-color,color,box-shadow] duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 ${
                   isCollapsed
                     ? "justify-center"
                     : ""
                 } ${
                   isActive
-                    ? "bg-white/10 text-white"
-                    : "text-slate-300 hover:bg-white/5 hover:text-white"
+                    ? "bg-[#253754] text-white shadow-[inset_0_0_0_1px_rgba(180,204,240,0.12),0_4px_12px_rgba(0,0,0,0.08)]"
+                    : "text-slate-300 hover:bg-white/[0.065] hover:text-white"
                 }`}
               >
                 {isActive && (
-                  <span className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-r bg-[#C8D5E8]" />
+                  <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-[#6B91EC]" />
                 )}
                 <Icon
-                  className={`h-4 w-4 shrink-0 ${
+                  className={`h-[17px] w-[17px] shrink-0 transition-colors duration-200 ${
                     isActive
-                      ? "text-[#C8D5E8]"
-                      : "text-slate-400"
+                      ? "text-[#BCD2FF]"
+                      : "text-slate-400 group-hover:text-slate-200"
                   }`}
                 />
                 {!isCollapsed && (
@@ -466,7 +466,7 @@ return (
                   !currentValue
               )
             }
-            className="hidden items-center justify-center gap-2 border-t border-white/10 px-3 py-2 text-xs text-slate-500 transition-colors hover:bg-white/5 hover:text-white lg:flex"
+            className="hidden min-h-[43px] items-center justify-center gap-2 border-t border-white/[0.08] px-3 py-3 text-xs font-medium text-slate-400 transition-colors hover:bg-white/[0.055] hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400/70 lg:flex"
           >
             <ChevronLeft
               className={`h-3.5 w-3.5 transition-transform ${
@@ -481,27 +481,27 @@ return (
           </button>
         )}
         <div
-          className={`border-t border-white/10 p-2 ${
+          className={`border-t border-white/[0.08] p-3 ${
             isCollapsed ? "px-2" : ""
           }`}
         >
           <div
-            className={`mb-1 flex items-center gap-3 rounded-lg px-2 py-2 ${
+            className={`mb-2 flex items-center gap-3 rounded-xl bg-white/[0.045] px-2.5 py-3 ring-1 ring-inset ring-white/[0.055] ${
               isCollapsed
                 ? "justify-center"
                 : ""
             }`}
           >
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-medium text-[#C8D5E8]">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#304668] text-xs font-semibold text-[#E4EDFF] ring-1 ring-inset ring-white/[0.10]">
               {userInitial}
             </div>
             {!isCollapsed && (
               <div className="min-w-0">
-                <p className="truncate text-xs font-medium text-slate-200">
+                <p className="truncate text-xs font-semibold text-slate-100">
                   {userName}
                 </p>
                 {userJobTitle && (
-                  <p className="truncate text-[11px] text-slate-500">
+                  <p className="mt-0.5 truncate text-[11px] text-slate-400">
                     {userJobTitle}
                   </p>
                 )}
@@ -518,7 +518,7 @@ return (
                   ? "Sign Out"
                   : undefined
               }
-              className={`w-full border-transparent bg-transparent text-slate-300 hover:border-red-500/20 hover:bg-red-500/10 hover:text-red-300 ${
+              className={`w-full rounded-lg border-transparent bg-transparent text-slate-400 shadow-none transition-colors hover:border-white/[0.06] hover:bg-white/[0.055] hover:text-slate-100 ${
                 isCollapsed
                   ? "justify-center px-2"
                   : "justify-start gap-3"
@@ -535,9 +535,9 @@ return (
     );
   };
 return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-[#F8FAFC]">
       <aside
-        className={`fixed inset-y-0 left-0 z-30 hidden flex-col border-r border-white/10 transition-all duration-200 lg:flex ${
+        className={`fixed inset-y-0 left-0 z-30 hidden flex-col border-r border-white/[0.08] shadow-[4px_0_24px_rgba(15,23,42,0.04)] transition-all duration-200 lg:flex ${
           collapsed ? "w-16" : "w-60"
         }`}
         style={{
@@ -549,14 +549,14 @@ return (
         />
       </aside>
       <header
-        className="fixed inset-x-0 top-0 z-40 flex items-center justify-between border-b border-white/10 px-4 py-3 lg:hidden"
+        className="fixed inset-x-0 top-0 z-40 flex items-center justify-between border-b border-white/[0.08] px-4 py-3 shadow-[0_3px_14px_rgba(15,23,42,0.09)] lg:hidden"
         style={{
           backgroundColor: SIDEBAR_NAVY,
         }}
       >
         <div className="flex items-center gap-3">
           <LogoMark />
-          <span className="text-lg font-bold tracking-wide text-white">
+          <span className="text-[17px] font-semibold tracking-[0.11em] text-slate-50">
             OPSEYE
           </span>
         </div>
@@ -565,7 +565,7 @@ return (
           onClick={() =>
             setMobileOpen(true)
           }
-          className="rounded-lg p-2 text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+          className="rounded-lg p-2 text-slate-200 transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
           aria-label="Open menu"
         >
           <Menu className="h-5 w-5" />
@@ -579,10 +579,10 @@ return (
             onClick={() =>
               setMobileOpen(false)
             }
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            className="absolute inset-0 bg-slate-950/60 backdrop-blur-[3px]"
           />
           <aside
-            className="absolute inset-y-0 left-0 flex w-60 flex-col border-r border-white/10"
+            className="absolute inset-y-0 left-0 flex w-60 flex-col border-r border-white/[0.08] shadow-2xl"
             style={{
               backgroundColor: SIDEBAR_NAVY,
             }}
@@ -592,7 +592,7 @@ return (
               onClick={() =>
                 setMobileOpen(false)
               }
-              className="absolute right-4 top-4 z-10 rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+              className="absolute right-4 top-5 z-10 rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
               aria-label="Close menu"
             >
               <X className="h-5 w-5" />
