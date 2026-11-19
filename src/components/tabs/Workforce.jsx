@@ -86,7 +86,6 @@ import {
 
 import {
   Card,
-  SectionHeader,
 } from "../ui/interface";
 
 import {
@@ -108,10 +107,13 @@ const NAVY = "#0F172A";
 const GOLD = "#B7791F";
 const SLATE = "#94A3B8";
 const PALE_BLUE = "#C8D5E8";
+const UI_BLUE = "#456BC0";
+const UI_SAGE = "#80A79F";
+const UI_BLUE_PALE = "#EAF0FC";
 
 const WORKFORCE_COLORS = {
-  local: NAVY,
-  expat: GOLD,
+  local: UI_BLUE,
+  expat: UI_SAGE,
   vacancy: SLATE,
 };
 
@@ -1192,6 +1194,16 @@ const EmptyState = ({
   );
 };
 
+const WorkforceSectionHeader = ({ children, description }) => (
+  <div className="mb-4 flex items-start gap-3">
+    <span className="mt-1 h-5 w-1 shrink-0 rounded-full bg-[#C8D5E8]" />
+    <div>
+      <h2 className="text-base font-semibold tracking-tight text-slate-900">{children}</h2>
+      {description && <p className="mt-1 text-xs leading-relaxed text-slate-500">{description}</p>}
+    </div>
+  </div>
+);
+
 const KpiCard = ({
   label,
   value,
@@ -1588,7 +1600,7 @@ const RoleRankingList = ({
   records = [],
   valueKey,
   valueLabel,
-  barColor = NAVY,
+  barColor = UI_BLUE,
   emptyMessage,
   mode = "headcount",
   pageSize = 5,
@@ -2468,26 +2480,22 @@ const RoleDrilldownDrawer = ({
         aria-label={`${role.name} workforce breakdown`}
       >
         <header
-          className="shrink-0 px-5 py-5 text-white sm:px-6"
-          style={{
-            backgroundColor:
-              NAVY,
-          }}
+          className="shrink-0 border-b border-slate-200 bg-white px-5 py-5 sm:px-6"
         >
           <div className="flex items-start justify-between gap-5">
             <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-600">
                 {mode ===
                 "shortage"
                   ? "Role shortage drill-down"
                   : "Role headcount drill-down"}
               </p>
 
-              <h2 className="mt-2 text-xl font-semibold tracking-tight">
+              <h2 className="mt-2 text-xl font-semibold tracking-tight text-slate-900">
                 {role.name}
               </h2>
 
-              <p className="mt-1 text-sm text-slate-300">
+              <p className="mt-1 text-sm text-slate-500">
                 {role.category}
               </p>
             </div>
@@ -2497,7 +2505,7 @@ const RoleDrilldownDrawer = ({
               onClick={
                 onClose
               }
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white transition hover:bg-white/20"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
               aria-label="Close role breakdown"
             >
               <X className="h-4 w-4" />
@@ -3858,23 +3866,20 @@ const WorkforceRoleModal = ({
     <div className="fixed inset-0 z-[100] flex min-h-[100dvh] w-screen items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
       <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl">
         <div
-          className="flex items-start justify-between gap-4 px-6 py-5 text-white"
-          style={{
-            backgroundColor: NAVY,
-          }}
+          className="flex items-start justify-between gap-4 border-b border-slate-200 bg-white px-6 py-5"
         >
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-600">
               Workforce Structure
             </p>
 
-            <h2 className="mt-1 text-xl font-semibold">
+            <h2 className="mt-1 text-xl font-semibold text-slate-900">
               {mode === "edit"
                 ? "Update workforce role"
                 : "Add workforce role"}
             </h2>
 
-            <p className="mt-1 text-sm text-slate-300">
+            <p className="mt-1 text-sm text-slate-500">
               Expatriate headcount is calculated automatically from total employees minus local employees.
             </p>
           </div>
@@ -3882,7 +3887,7 @@ const WorkforceRoleModal = ({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+            className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
             aria-label="Close workforce form"
           >
             <X className="h-5 w-5" />
@@ -3988,7 +3993,7 @@ const WorkforceRoleModal = ({
                   mode === "edit"
                 }
                 required
-                className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-100 disabled:text-slate-500"
+                className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-500"
               >
                 <option value="">
                   Select a workforce role
@@ -4062,7 +4067,7 @@ const WorkforceRoleModal = ({
                   )
                 }
                 required
-                className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
               />
             </label>
 
@@ -4092,7 +4097,7 @@ const WorkforceRoleModal = ({
                   )
                 }
                 required
-                className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
               />
             </label>
 
@@ -4131,7 +4136,7 @@ const WorkforceRoleModal = ({
                     })
                   )
                 }
-                className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
               />
             </label>
 
@@ -4156,7 +4161,7 @@ const WorkforceRoleModal = ({
                     })
                   )
                 }
-                className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className="h-11 w-full rounded-lg border border-slate-300 px-3 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
               />
 
               <span className="mt-1.5 block text-[11px] leading-relaxed text-slate-500">
@@ -4182,7 +4187,7 @@ const WorkforceRoleModal = ({
                 }
                 rows={3}
                 placeholder="Optional context about vacancies, recruitment plans or future hiring needs."
-                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
               />
             </label>
           </div>
@@ -4258,11 +4263,7 @@ const WorkforceRoleModal = ({
             <Button
               type="submit"
               disabled={saving}
-              className="text-white hover:opacity-90"
-              style={{
-                backgroundColor:
-                  NAVY,
-              }}
+              className="!bg-[#456BC0] !text-white hover:!bg-[#3658A5]"
             >
               <span className="inline-flex items-center gap-2">
                 {saving ? (
@@ -6907,7 +6908,7 @@ const Workforce = () => {
     };
 
   const filterClassName =
-    "h-10 rounded-lg border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200";
+    "h-10 rounded-lg border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100";
 
   if (loading) {
     return (
@@ -6932,11 +6933,7 @@ const Workforce = () => {
         <div>
           <div className="mb-2 flex flex-wrap items-center gap-3">
             <span
-              className="h-6 w-1.5 rounded-full"
-              style={{
-                backgroundColor:
-                  NAVY,
-              }}
+              className="h-6 w-1 rounded-full bg-[#C8D5E8]"
             />
 
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
@@ -6944,13 +6941,7 @@ const Workforce = () => {
             </h1>
 
             <span
-              className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
-              style={{
-                backgroundColor:
-                  PALE_BLUE,
-                color:
-                  NAVY,
-              }}
+              className="rounded-full border border-blue-100 bg-[#EAF0FC] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-[#456BC0]"
             >
               {scopeLabel}
             </span>
@@ -6975,11 +6966,7 @@ const Workforce = () => {
               onClick={
                 openAddRole
               }
-              className="text-white hover:opacity-90"
-              style={{
-                backgroundColor:
-                  NAVY,
-              }}
+              className="!bg-[#456BC0] !text-white hover:!bg-[#3658A5]"
             >
               <span className="inline-flex items-center gap-2">
                 <Plus className="h-4 w-4" />
@@ -7034,17 +7021,10 @@ const Workforce = () => {
               }
               className={`inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-all ${
                 selected
-                  ? "text-white shadow-sm"
+                  ? "bg-[#EAF0FC] text-[#456BC0] shadow-sm"
                   : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
               }`}
-              style={
-                selected
-                  ? {
-                      backgroundColor:
-                        NAVY,
-                    }
-                  : undefined
-              }
+
             >
               <Icon className="h-4 w-4" />
               {tab.label}
@@ -7288,9 +7268,9 @@ const Workforce = () => {
 
             <div className="mb-8 grid grid-cols-1 gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
               <div>
-                <SectionHeader>
+                <WorkforceSectionHeader>
                   Local vs Expat
-                </SectionHeader>
+                </WorkforceSectionHeader>
 
                 <Card className="p-5">
                   {sectorChartData.length >
@@ -7401,9 +7381,9 @@ const Workforce = () => {
               </div>
 
               <div>
-                <SectionHeader description="Total employee headcount at the end of each reporting period.">
+                <WorkforceSectionHeader description="Total employee headcount at the end of each reporting period.">
                   Workforce Growth
-                </SectionHeader>
+                </WorkforceSectionHeader>
 
                 <Card className="p-5">
                   {trendData.length >
@@ -7478,7 +7458,7 @@ const Workforce = () => {
                           type="monotone"
                           dataKey="total"
                           name="Total workforce"
-                          stroke={NAVY}
+                          stroke={UI_BLUE}
                           strokeWidth={3}
                           dot={false}
                         />
@@ -7492,9 +7472,9 @@ const Workforce = () => {
             </div>
 
             <div className="mb-8">
-              <SectionHeader description="Tracks local and expatriate headcount separately so changes in workforce composition are easy to identify.">
+              <WorkforceSectionHeader description="Tracks local and expatriate headcount separately so changes in workforce composition are easy to identify.">
                 Local vs Expat Trend
-              </SectionHeader>
+              </WorkforceSectionHeader>
 
               <Card className="p-5">
                 {trendData.length >
@@ -7602,9 +7582,9 @@ const Workforce = () => {
               currentOrganizationLevel
             ) && (
               <div className="mb-8">
-                <SectionHeader description="Interactive Ghana map showing current workforce totals by region. Enterprise Admin workforce remains in the overall totals but is not assigned to a Region unless explicitly configured.">
+                <WorkforceSectionHeader description="Interactive Ghana map showing current workforce totals by region. Enterprise Admin workforce remains in the overall totals but is not assigned to a Region unless explicitly configured.">
                   Workforce Distribution by Region
-                </SectionHeader>
+                </WorkforceSectionHeader>
 
                 <Card className="overflow-hidden">
                   <WorkforceRegionalMap
@@ -7624,9 +7604,9 @@ const Workforce = () => {
 
             {hierarchyComparisonTitle && (
             <div className="mb-8">
-              <SectionHeader description={hierarchyComparisonDescription}>
+              <WorkforceSectionHeader description={hierarchyComparisonDescription}>
                 {hierarchyComparisonTitle}
-              </SectionHeader>
+              </WorkforceSectionHeader>
 
               <Card className="p-5">
                 {hierarchyComparisonData.length >
@@ -7727,9 +7707,9 @@ const Workforce = () => {
 
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
               <div>
-                <SectionHeader description="Roles ranked by current employee headcount across the selected scope.">
+                <WorkforceSectionHeader description="Roles ranked by current employee headcount across the selected scope.">
                   Top Roles by Headcount
-                </SectionHeader>
+                </WorkforceSectionHeader>
 
                 <Card className="p-5">
                   <RoleRankingList
@@ -7738,7 +7718,7 @@ const Workforce = () => {
                     }
                     valueKey="headcount"
                     valueLabel="employees"
-                    barColor={NAVY}
+                    barColor={UI_BLUE}
                     mode="headcount"
                     pageSize={5}
                     onSelectRole={(role) =>
@@ -7753,9 +7733,9 @@ const Workforce = () => {
               </div>
 
               <div>
-                <SectionHeader description="Current vacancies plus additional future hiring requirements, ranked by role.">
+                <WorkforceSectionHeader description="Current vacancies plus additional future hiring requirements, ranked by role.">
                   Roles with Highest Shortages
-                </SectionHeader>
+                </WorkforceSectionHeader>
 
                 <Card className="p-5">
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
@@ -7805,7 +7785,7 @@ const Workforce = () => {
                     }
                     valueKey="shortage"
                     valueLabel="people needed"
-                    barColor={GOLD}
+                    barColor={UI_SAGE}
                     mode="shortage"
                     pageSize={5}
                     resetKey={
@@ -7839,7 +7819,7 @@ const Workforce = () => {
                       )
                     }
                     placeholder="Search roles, categories or organisations..."
-                    className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                   />
                 </div>
 
@@ -7949,20 +7929,15 @@ const Workforce = () => {
               </div>
             </Card>
 
-            <SectionHeader>
+            <WorkforceSectionHeader>
               Roles & Workforce Structure
-            </SectionHeader>
+            </WorkforceSectionHeader>
 
             <Card className="overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[1240px]">
                   <thead>
-                    <tr
-                      style={{
-                        backgroundColor:
-                          NAVY,
-                      }}
-                    >
+                    <tr className="border-b border-slate-200 bg-slate-50/80">
                       {[
                         {
                           label:
@@ -8028,7 +8003,7 @@ const Workforce = () => {
                             title={
                               heading.title
                             }
-                            className={`whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-200 ${heading.align}`}
+                            className={`whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600 ${heading.align}`}
                           >
                             {heading.label}
                           </th>
@@ -8209,11 +8184,7 @@ const Workforce = () => {
                                       record
                                     )
                                   }
-                                  className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90"
-                                  style={{
-                                    backgroundColor:
-                                      NAVY,
-                                  }}
+                                  className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
                                 >
                                   <Pencil className="h-3.5 w-3.5" />
                                   Edit
