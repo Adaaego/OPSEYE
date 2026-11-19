@@ -16,8 +16,8 @@ const WORKFORCE_COLLECTION = "workforce";
  * Match the Overview heading treatment so all top-level Ministry pages use
  * one visual language.
  */
-const NAVY = "#0F172A";
-const ICON_BLUE = "#C8D5E8";
+const NAVY = "#334155";
+const ICON_BLUE = "#EFF4FF";
 /*
  * These statuses mean a scheduled report has been submitted.
  *
@@ -586,8 +586,8 @@ const CompanyLogo = ({ name, logoUrl, }) => {
         .join("")
         .slice(0, 2)
         .toUpperCase();
-    return (<div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white">
-      {logoUrl ? (<img src={logoUrl} alt={`${name} logo`} className="h-full w-full object-contain p-1"/>) : (<span className="text-xs font-semibold text-navy-700">
+    return (<div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.035)]">
+      {logoUrl ? (<img src={logoUrl} alt={`${name} logo`} className="h-full w-full object-contain p-1"/>) : (<span className="text-xs font-semibold text-slate-600">
           {initials}
         </span>)}
     </div>);
@@ -595,11 +595,11 @@ const CompanyLogo = ({ name, logoUrl, }) => {
 const SortHeader = ({ label, sortKey, activeSortKey, sortDirection, onSort, }) => {
     const isActive = activeSortKey ===
         sortKey;
-    return (<th className="cursor-pointer select-none whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-slate-500 hover:text-navy-700" onClick={() => onSort(sortKey)}>
+    return (<th className="cursor-pointer select-none whitespace-nowrap px-5 py-4 text-left text-[11px] font-semibold uppercase tracking-[0.045em] text-slate-500 transition-colors hover:text-blue-700" onClick={() => onSort(sortKey)}>
       <span className="inline-flex items-center gap-1">
         {label}
 
-        <ArrowUpDown className={`h-3 w-3 ${isActive
+        <ArrowUpDown className={`h-3.5 w-3.5 ${isActive
             ? "opacity-100"
             : "opacity-40"} ${isActive &&
             sortDirection ===
@@ -1664,7 +1664,7 @@ useEffect(() => {
      * It performs presentation only and does not issue duplicate reads.
      */
     const offlineNotice = (isOffline || showingCachedData) && (
-        <div data-pdf-ignore="true" className="mx-4 mt-4 rounded-lg border border-slate-200 bg-slate-100 px-4 py-2.5 text-xs font-medium text-slate-700 sm:mx-5 lg:mx-6">
+        <div data-pdf-ignore="true" className="mx-4 mt-4 rounded-xl border border-amber-200/70 bg-amber-50/70 px-4 py-3 text-xs font-medium leading-relaxed text-amber-900 sm:mx-5 lg:mx-6">
           {isOffline ? "Offline — showing data saved on this device. Changes elsewhere will appear after reconnection." :
               "Showing cached or partially available data. Some figures may be outdated."}
           {lastServerRefresh && ` Last server refresh: ${formatUpdatedAt(lastServerRefresh)}.`}
@@ -1683,49 +1683,44 @@ useEffect(() => {
                 : "Back to Operators"} onBack={handleDetailBack} onSelectOrganization={handleSelectChildOrganization} showBackButton={!isBranchAccount}/>
       </div>);
     }
-    return (<section className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6">
+    return (<section className="min-h-full w-full bg-[#F8FAFC] px-4 py-6 sm:px-5 lg:px-7">
       {offlineNotice}
       {/*
          * Match Overview exactly: accent bar + title + scope pill + description,
          * with the data timestamp aligned on the right.
          */}
-      <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
+      <header className="mb-7 flex flex-col justify-between gap-4 border-b border-slate-200/80 pb-6 sm:flex-row sm:items-end">
         <div>
           <div className="mb-2 flex flex-wrap items-center gap-3">
-            <span className="h-6 w-1.5 rounded-full" style={{
-            backgroundColor: NAVY,
-        }}/>
+            <span className="h-6 w-1 rounded-full bg-slate-300"/>
 
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
               {listLabel.title}
             </h1>
 
-            <span className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide" style={{
-            backgroundColor: ICON_BLUE,
-            color: NAVY,
-        }}>
+            <span className="rounded-full border border-blue-100 bg-[#EFF4FF] px-3 py-1.5 text-[11px] font-semibold tracking-wide text-blue-700">
               {scopeLabel}
             </span>
           </div>
 
-          <p className="text-sm text-slate-500">
+          <p className="max-w-2xl text-sm leading-relaxed text-slate-500">
             Monitor sales volume, estimated revenue, reporting compliance and workforce allocation across this scope.
           </p>
         </div>
 
-        <p className="text-xs font-medium text-slate-400">
+        <p className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500 shadow-[0_1px_2px_rgba(15,23,42,0.025)]">
           {formatUpdatedAt(dataUpdatedAt)}
         </p>
       </header>
 
-      {loadError && (<div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+      {loadError && (<div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
           <p className="text-sm font-medium text-red-700">
             {loadError}
           </p>
         </div>)}
 
       {flaggedOperators.length >
-            0 && (<div className="mb-5 flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+            0 && (<div className="mb-5 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3.5">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600"/>
 
           <div className="min-w-0 flex-1">
@@ -1747,13 +1742,13 @@ useEffect(() => {
               .
             </p>
 
-            <button type="button" onClick={() => handleSelectOperator(flaggedOperators[0])} className="mt-1 text-sm font-medium text-amber-900 underline hover:no-underline">
+            <button type="button" onClick={() => handleSelectOperator(flaggedOperators[0])} className="mt-2 inline-flex items-center rounded-lg border border-amber-200 bg-white/80 px-3 py-1.5 text-xs font-semibold text-amber-900 transition-colors hover:bg-white">
               View details →
             </button>
           </div>
         </div>)}
 
-      <div className="mb-5 flex flex-wrap items-center gap-3">
+      <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-slate-200/80 bg-white p-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.035)] [&_input]:rounded-lg [&_input]:border-slate-200 [&_input]:bg-slate-50/50 [&_input]:text-slate-800 [&_input]:placeholder:text-slate-400 [&_input:focus]:border-blue-300 [&_select]:rounded-lg [&_select]:border-slate-200 [&_select]:bg-slate-50/50 [&_button]:transition-colors">
         <SearchInput value={search} onChange={setSearch} placeholder={listLabel.search}/>
         {(isMinistryAccount ||
             currentOrganizationLevel === "enterprise") && (<Select value={regionFilter} onChange={setRegionFilter} options={regionOptions} placeholder="All Regions"/>)}
@@ -1761,12 +1756,12 @@ useEffect(() => {
         <Select value={statusFilter} onChange={setStatusFilter} options={statusOptions} placeholder="All Statuses"/>
       </div>
 
-      <Card className="overflow-hidden">
+      <Card className="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-[0_2px_10px_rgba(15,23,42,0.035)]">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1060px]">
+          <table className="w-full min-w-[1060px] border-separate border-spacing-0">
             <thead>
-              <tr className="border-b border-slate-200">
-                <th className="w-10 px-4 py-3" aria-label="Expand operator"/>
+              <tr className="bg-slate-50/90 [&>th]:border-b [&>th]:border-slate-200/80">
+                <th className="w-10 px-4 py-4" aria-label="Expand operator"/>
 
                 <SortHeader label={listLabel.singular} sortKey="name" activeSortKey={sortKey} sortDirection={sortDirection} onSort={toggleSort}/>
 
@@ -1776,17 +1771,17 @@ useEffect(() => {
 
                 <SortHeader label="Local Workforce %" sortKey="localWorkforcePct" activeSortKey={sortKey} sortDirection={sortDirection} onSort={toggleSort}/>
 
-                <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-slate-500">
+                <th className="whitespace-nowrap px-5 py-4 text-left text-[11px] font-semibold uppercase tracking-[0.045em] text-slate-500">
                   Submissions Today
                 </th>
 
                 <SortHeader label="On-time Compliance" sortKey="compliance" activeSortKey={sortKey} sortDirection={sortDirection} onSort={toggleSort}/>
 
-                <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-slate-500">
+                <th className="whitespace-nowrap px-5 py-4 text-left text-[11px] font-semibold uppercase tracking-[0.045em] text-slate-500">
                   Status
                 </th>
 
-                <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-slate-500">
+                <th className="whitespace-nowrap px-5 py-4 text-left text-[11px] font-semibold uppercase tracking-[0.045em] text-slate-500">
                   Details
                 </th>
               </tr>
@@ -1795,7 +1790,7 @@ useEffect(() => {
             <tbody>
               {loading ? (<tr>
                   <td colSpan={9} className="px-4 py-14 text-center">
-                    <span className="mx-auto block h-6 w-6 animate-spin rounded-full border-2 border-navy-200 border-t-navy-700"/>
+                    <span className="mx-auto block h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-blue-600"/>
 
                     <p className="mt-3 text-sm text-slate-500">
                       Loading operators...
@@ -1823,16 +1818,16 @@ useEffect(() => {
                 "overdue",
             ].includes(normalizeStatus(displayStatus));
             return (<Fragment key={operatorId}>
-                        <tr className={`border-b border-slate-100 text-[13px] text-navy-900 transition-colors ${requiresAttention
-                    ? "bg-amber-50/40 hover:bg-amber-50/70"
-                    : "cursor-pointer hover:bg-slate-50"}`} onClick={() => handleSelectOperator(operator)}>
+                        <tr className={`border-b border-slate-100 text-[13px] text-slate-700 transition-colors ${requiresAttention
+                    ? "bg-amber-50/30 hover:bg-amber-50/60"
+                    : "cursor-pointer hover:bg-blue-50/35"}`} onClick={() => handleSelectOperator(operator)}>
                           <td className="px-4 py-3">
                             {canExpandOperator ? (<button type="button" onClick={(event) => {
                         event.stopPropagation();
                         toggleOperator(operatorId);
                     }} aria-expanded={isExpanded} aria-label={isExpanded
                         ? `Collapse ${operator.name}`
-                        : `Expand ${operator.name}`} className="rounded p-1 transition-colors hover:bg-slate-200">
+                        : `Expand ${operator.name}`} className="rounded-lg border border-transparent p-1.5 text-slate-500 transition-colors hover:border-slate-200 hover:bg-white hover:text-blue-700">
                                 {isExpanded ? (<ChevronDown className="h-4 w-4 text-slate-500"/>) : (<ChevronRight className="h-4 w-4 text-slate-500"/>)}
                               </button>) : (<span className="block h-6 w-6"/>)}
                           </td>
@@ -1842,7 +1837,7 @@ useEffect(() => {
                               <CompanyLogo name={operator.name} logoUrl={operator.logoUrl}/>
 
                               <div className="min-w-0">
-                                <p className="whitespace-nowrap font-medium text-navy-900">
+                                <p className="whitespace-nowrap font-medium text-slate-800">
                                   {operator.name}
                                 </p>
 
@@ -1862,7 +1857,7 @@ useEffect(() => {
                           <td className="whitespace-nowrap px-4 py-3 tabular-nums">
                             {operator.productionToday >
                     0 ? (<div>
-                                <p className="font-semibold text-navy-950">
+                                <p className="font-semibold text-slate-900">
                                   {formatNumber(operator.productionToday)}{" "}
                                   L
                                 </p>
@@ -1878,7 +1873,7 @@ useEffect(() => {
                           <td className="whitespace-nowrap px-4 py-3 tabular-nums">
                             {operator.estimatedDailyRevenue >
                     0 ? (<div>
-                                <p className="font-semibold text-navy-950">
+                                <p className="font-semibold text-slate-900">
                                   {formatCurrency(operator.estimatedDailyRevenue)}
                                 </p>
 
@@ -1890,7 +1885,7 @@ useEffect(() => {
                               </div>) : ("—")}
                           </td>
 
-                          <td className="whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-navy-950">
+                          <td className="whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-slate-900">
                             {operator.workforce
                     ?.total >
                     0
@@ -1909,7 +1904,7 @@ useEffect(() => {
                             {operator.reportsExpected >
                     0
                     ? (<div>
-                                  <p className="font-semibold text-navy-950">
+                                  <p className="font-semibold text-slate-900">
                                     {`${formatNumber(operator.compliance, 1)}%`}
                                   </p>
 
@@ -1942,7 +1937,7 @@ useEffect(() => {
                           </td>
 
                           <td className="px-4 py-3">
-                            <Button variant="ghost" size="sm" className="text-slate-600 hover:bg-slate-100 hover:text-navy-950" onClick={(event) => {
+                            <Button variant="ghost" size="sm" className="gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700" onClick={(event) => {
                     event.stopPropagation();
                     handleSelectOperator(operator);
                 }}>
@@ -1955,7 +1950,7 @@ useEffect(() => {
                         {canExpandOperator &&
                     isExpanded && (<tr className="bg-slate-50/60">
                             <td colSpan={9} className="px-4 py-3">
-                              <div className="ml-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                              <div className="ml-6 overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.03)] [&_thead]:bg-slate-50 [&_th]:text-slate-500 [&_th]:font-semibold [&_th]:tracking-wide [&_tr]:border-slate-100">
                                 {operatorBranches.length >
                         0 ? (<Table headers={[
                             (operator.organizationLevel === "enterprise" ? "Region / Branch" : "Station / Branch"),
@@ -1978,7 +1973,7 @@ useEffect(() => {
                                               <CompanyLogo name={childName} logoUrl={branch.logoUrl}/>
 
                                               <div className="min-w-0">
-                                                <p className="truncate font-semibold text-navy-900">
+                                                <p className="truncate font-semibold text-slate-800">
                                                   {childName}
                                                 </p>
 
@@ -1991,36 +1986,36 @@ useEffect(() => {
                                             </div>
                                           </td>
 
-                                          <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold text-navy-900">
+                                          <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold text-slate-800">
                                             <EmptyCell value={branch.region}/>
                                           </td>
 
-                                          <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold text-navy-900">
+                                          <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold text-slate-800">
                                             <EmptyCell value={branch.adminName}/>
                                           </td>
 
-                                          <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold tabular-nums text-navy-900">
+                                          <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold tabular-nums text-slate-800">
                                             <EmptyCell value={branch.productionToday >
                                     0
                                     ? `${formatNumber(branch.productionToday)} L`
                                     : null}/>
                                           </td>
 
-                                          <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold tabular-nums text-navy-900">
+                                          <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold tabular-nums text-slate-800">
                                             <EmptyCell value={branch.workforce?.total >
                                     0
                                     ? `${formatNumber(branch.localWorkforce)} (${formatNumber(branch.localWorkforcePct, 1)}%)`
                                     : null}/>
                                           </td>
 
-                                          <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold tabular-nums text-navy-900">
+                                          <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold tabular-nums text-slate-800">
                                             <EmptyCell value={branch.estimatedDailyRevenue >
                                     0
                                     ? formatCurrency(branch.estimatedDailyRevenue)
                                     : null}/>
                                           </td>
 
-                                          <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold tabular-nums text-navy-900">
+                                          <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-2.5 font-semibold tabular-nums text-slate-800">
                                             <EmptyCell value={branch.reportsExpected >
                                     0
                                     ? `${formatNumber(branch.compliance, 1)}%`
@@ -2032,7 +2027,7 @@ useEffect(() => {
                                           </td>
 
                                           <td className="px-4 py-2.5">
-                                            <Button variant="ghost" size="sm" className="text-slate-600 hover:bg-slate-100 hover:text-navy-950" onClick={(event) => {
+                                            <Button variant="ghost" size="sm" className="gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700" onClick={(event) => {
                                     event.stopPropagation();
                                     openChild();
                                 }}>
@@ -2071,7 +2066,7 @@ useEffect(() => {
           </table>
         </div>
 
-        <div className="border-t border-slate-200 px-4 py-3 text-xs text-slate-500">
+        <div className="border-t border-slate-100 bg-slate-50/60 px-5 py-3.5 text-xs font-medium text-slate-500">
           Showing {filteredOperators.length} of{" "}
           {mergedOperators.length} {listLabel.plural}
         </div>
