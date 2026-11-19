@@ -39,8 +39,8 @@ import {
   calculateSubmissionMetrics,
 } from "../../lib/calculation-metrics";
 import ReportViewer from "./ReportsViewer";
-const NAVY = "#0F172A";
-const PALE_BLUE = "#C8D5E8";
+const NAVY = "#334155";
+const PALE_BLUE = "#E8F0FC";
 const COMPANY_FUEL_PRICES_COLLECTION =
   "companyFuelPrices";
 const AUTO_APPROVAL_DELAY_OPTIONS = [
@@ -1142,35 +1142,35 @@ return [
         label: "Due Today",
         value: dueToday,
         icon: CalendarClock,
-        iconClassName: "text-navy-600",
+        iconClassName: "text-[#456BC0]",
         wrapperClassName:
-          "bg-navy-50 ring-navy-200",
+          "bg-[#EDF3FD] ring-blue-100",
       },
       {
         label: "Awaiting My Action",
         value: actionableReports.length,
         icon: Clock3,
         iconClassName:
-          "text-amber-600",
+          "text-[#B58C50]",
         wrapperClassName:
-          "bg-amber-50 ring-amber-200",
+          "bg-[#FAF5EB] ring-amber-100",
       },
       {
         label: "Overdue",
         value: overdue,
         icon: AlertTriangle,
-        iconClassName: "text-red-600",
+        iconClassName: "text-[#C66B6B]",
         wrapperClassName:
-          "bg-red-50 ring-red-200",
+          "bg-[#FCF0F0] ring-red-100",
       },
       {
         label: "Upcoming",
         value: upcoming,
         icon: CheckCircle2,
         iconClassName:
-          "text-emerald-600",
+          "text-[#69988D]",
         wrapperClassName:
-          "bg-emerald-50 ring-emerald-200",
+          "bg-[#EAF4F1] ring-emerald-100",
       },
     ];
   }, [
@@ -1359,13 +1359,13 @@ if (onUpdateReport) {
         : "Complete reports assigned to this Branch. Submitted reports move to the next workflow stage and leave this queue.";
 if (organizationLevel === "ministry") {
 return (
-      <section className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6">
-        <header className="mb-8 border-b border-slate-200 pb-6">
+      <section className="min-h-full w-full bg-[#F8FAFC] px-4 py-6 sm:px-5 lg:px-6">
+        <header className="mb-7 border-b border-slate-200/80 pb-5">
           <div className="mb-2 flex items-center gap-3">
             <span
-              className="h-6 w-1.5 rounded-full"
+              className="h-6 w-1 rounded-full"
               style={{
-                backgroundColor: NAVY,
+                backgroundColor: "#C6D8F4",
               }}
             />
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
@@ -1390,14 +1390,14 @@ return (
   }
 return (
     <>
-      <section className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6">
-        <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
+      <section className="min-h-full w-full bg-[#F8FAFC] px-4 py-6 sm:px-5 lg:px-6">
+        <header className="mb-7 flex flex-col justify-between gap-4 border-b border-slate-200/80 pb-5 sm:flex-row sm:items-end">
           <div>
             <div className="mb-2 flex flex-wrap items-center gap-3">
               <span
-                className="h-6 w-1.5 rounded-full"
+                className="h-6 w-1 rounded-full"
                 style={{
-                  backgroundColor: NAVY,
+                  backgroundColor: "#C6D8F4",
                 }}
               />
               <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
@@ -1408,7 +1408,7 @@ return (
                 style={{
                   backgroundColor:
                     PALE_BLUE,
-                  color: NAVY,
+                  color: "#456BC0",
                 }}
               >
                 {scopeLabel}
@@ -1424,7 +1424,7 @@ return (
               onClick={
                 openAutoApprovalSettings
               }
-              className="!border-slate-300 !bg-white !text-slate-800 shadow-sm hover:!bg-slate-50"
+              className="!rounded-lg !border-slate-200 !bg-white !px-3.5 !py-2 !text-slate-700 shadow-none hover:!border-blue-200 hover:!bg-blue-50/50 hover:!text-[#1D4ED8]"
             >
               <Clock3 className="h-4 w-4" />
               {autoApprovalButtonLabel}
@@ -1443,19 +1443,19 @@ return (
               }) => (
                 <Card
                   key={label}
-                  className="p-5"
+                  className="p-5 transition-[border-color,box-shadow] duration-200 hover:border-slate-300/70 hover:shadow-[0_4px_16px_rgba(15,23,42,0.04)]"
                 >
                   <div className="flex items-center justify-between gap-4">
                     <div>
-                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">
+                      <p className="text-[12px] font-medium tracking-tight text-slate-500">
                         {label}
                       </p>
-                      <p className="mt-2 text-2xl font-bold text-navy-950">
+                      <p className="mt-2 text-[27px] font-semibold tabular-nums tracking-tight text-slate-900">
                         {value}
                       </p>
                     </div>
                     <div
-                      className={`flex h-10 w-10 items-center justify-center rounded-lg ring-1 ${wrapperClassName}`}
+                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1 ring-inset ${wrapperClassName}`}
                     >
                       <Icon
                         className={`h-5 w-5 ${iconClassName}`}
@@ -1466,8 +1466,8 @@ return (
               )
             )}
           </div>
-          <Card className="overflow-hidden">
-            <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center">
+          <Card className="overflow-hidden border-slate-200/80 shadow-[0_1px_3px_rgba(15,23,42,0.03)]">
+            <div className="flex flex-col gap-3 border-b border-slate-100 bg-white px-5 py-4 sm:flex-row sm:items-center">
               <SearchInput
                 value={search}
                 onChange={setSearch}
@@ -1486,33 +1486,33 @@ return (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[980px]">
                 <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50/50">
-                    <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                  <tr className="border-b border-slate-200 bg-[#F5F8FC]">
+                    <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold tracking-wide text-slate-500">
                       Report
                     </th>
-                    <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold tracking-wide text-slate-500">
                       Reporting Date
                     </th>
                     {showRegionColumn && (
-                      <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold tracking-wide text-slate-500">
                         Region
                       </th>
                     )}
                     {showBranchColumn && (
-                      <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold tracking-wide text-slate-500">
                         Branch
                       </th>
                     )}
-                    <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold tracking-wide text-slate-500">
                       Due
                     </th>
-                    <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold tracking-wide text-slate-500">
                       Status
                     </th>
-                    <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    <th className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold tracking-wide text-slate-500">
                       Current Stage
                     </th>
-                    <th className="whitespace-nowrap px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    <th className="whitespace-nowrap px-5 py-3 text-right text-xs font-semibold tracking-wide text-slate-500">
                       Action
                     </th>
                   </tr>
@@ -1542,7 +1542,7 @@ return (
                             }`}
                           >
                             <td className="px-5 py-4">
-                              <p className="text-sm font-semibold text-navy-950">
+                              <p className="text-sm font-semibold text-slate-900">
                                 <EmptyCell
                                   value={
                                     report.reportName ||
@@ -1612,7 +1612,7 @@ return (
                                     report
                                   )
                                 }
-                                className="!border-navy-950 !bg-navy-950 !text-white shadow-sm hover:!bg-navy-900"
+                                className="!rounded-lg !border-blue-100 !bg-[#EDF3FD] !px-3 !py-2 !font-semibold !text-[#1D4ED8] shadow-none hover:!border-blue-200 hover:!bg-[#DDE9FC]"
                               >
                                 <ExternalLink className="h-3.5 w-3.5" />
                                 {isReviewStage
@@ -1687,7 +1687,7 @@ return (
                   onClick={() =>
                     setAutoApprovalOpen(false)
                   }
-                  className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                  className="rounded-lg p-1.5 text-slate-400 transition hover:bg-blue-50 hover:text-slate-700"
                   aria-label="Close auto-approval settings"
                 >
                   <X className="h-4 w-4" />
@@ -1711,13 +1711,13 @@ return (
                         event.target.checked
                       )
                     }
-                    className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 accent-[#1D4ED8]"
                   />
                 </label>
                 <div>
                   <label
                     htmlFor="auto-approval-delay"
-                    className="text-xs font-semibold uppercase tracking-wide text-slate-600"
+                    className="text-xs font-semibold tracking-wide text-slate-500"
                   >
                     Approve after
                   </label>
@@ -1732,7 +1732,7 @@ return (
                       )
                     }
                     disabled={!autoApprovalEnabled}
-                    className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                    className="mt-2 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-[#8DABE6] focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     {AUTO_APPROVAL_DELAY_OPTIONS.map(
                       (option) => (
@@ -1767,7 +1767,7 @@ return (
                     saveAutoApprovalSettings
                   }
                   disabled={autoApprovalSaving}
-                  className="!bg-navy-950 !text-white hover:!bg-navy-900"
+                  className="!rounded-lg !bg-[#1D4ED8] !text-white shadow-sm hover:!bg-[#1E40AF]"
                 >
                   {autoApprovalSaving
                     ? "Saving..."
