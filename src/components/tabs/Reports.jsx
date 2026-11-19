@@ -100,7 +100,13 @@ const COMPANY_FUEL_PRICES_COLLECTION =
  * Overview, Operators and Regions pages.
  */
 const NAVY =
-  "#0F172A";
+  "#456BC0";
+
+const SAGE =
+  "#80A79F";
+
+const PALE_ACCENT =
+  "#DCE7FA";
 
 const ICON_BLUE =
   "#C8D5E8";
@@ -2520,7 +2526,7 @@ const FilterSelect = ({
           event.target.value
         )
       }
-      className={`h-9 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200 ${className}`}
+      className={`h-9 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 outline-none transition hover:border-slate-300 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 ${className}`}
     >
       <option value="">
         {placeholder}
@@ -2629,7 +2635,7 @@ const PeriodFilterControl = ({
                 "custom"
             );
           }}
-          className="h-9 w-44 rounded-md border border-slate-300 bg-white pl-8 pr-8 text-xs font-medium text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+          className="h-9 w-44 rounded-md border border-slate-200 bg-white pl-8 pr-8 text-xs font-medium text-slate-700 outline-none transition hover:border-slate-300 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
         >
           {PERIOD_OPTIONS.map(
             (option) => (
@@ -2711,7 +2717,7 @@ const PeriodFilterControl = ({
                   event.preventDefault()
                 }
                 inputMode="none"
-                className="h-10 w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className="h-10 w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
               />
             </label>
 
@@ -2760,7 +2766,7 @@ const PeriodFilterControl = ({
                   event.preventDefault()
                 }
                 inputMode="none"
-                className="h-10 w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                className="h-10 w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
               />
             </label>
           </div>
@@ -2773,11 +2779,7 @@ const PeriodFilterControl = ({
                   false
                 )
               }
-              className="h-9 rounded-md px-4 text-xs font-semibold text-white transition-opacity hover:opacity-90"
-              style={{
-                backgroundColor:
-                  NAVY,
-              }}
+              className="h-9 rounded-lg bg-[#456BC0] px-4 text-xs font-semibold text-white transition-colors hover:bg-[#3659A5]"
             >
               Done
             </button>
@@ -3013,11 +3015,7 @@ const SubmissionViewer = ({
         aria-label="Submitted report details"
       >
         <div
-          className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-800 px-5 py-4"
-          style={{
-            backgroundColor:
-              NAVY,
-          }}
+          className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]"
         >
           <div className="flex min-w-0 items-center gap-3">
             <OperatorLogo
@@ -3030,11 +3028,11 @@ const SubmissionViewer = ({
             />
 
             <div className="min-w-0">
-              <p className="truncate text-base font-semibold text-white">
+              <p className="truncate text-base font-semibold text-slate-900">
                 {report.reportType}
               </p>
 
-              <p className="mt-0.5 truncate text-xs text-slate-300">
+              <p className="mt-0.5 truncate text-xs text-slate-500">
                 {report.operator} · {report.organizationName}
               </p>
             </div>
@@ -3045,7 +3043,7 @@ const SubmissionViewer = ({
             onClick={
               closeViewer
             }
-            className="rounded-md p-2 text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+            className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
             aria-label="Close report details"
           >
             <X className="h-5 w-5" />
@@ -3053,7 +3051,7 @@ const SubmissionViewer = ({
         </div>
 
         <div className="space-y-5 p-5">
-          <Card className="overflow-hidden border-t-4 border-t-slate-900">
+          <Card className="overflow-hidden border-t-2 border-t-[#DCE7FA]">
             <div className="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
               <div className="p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
@@ -3168,11 +3166,7 @@ const SubmissionViewer = ({
           <div>
             <div className="mb-3 flex items-start gap-3">
               <span
-                className="mt-1 h-4 w-1 shrink-0 rounded-full"
-                style={{
-                  backgroundColor:
-                    NAVY,
-                }}
+                className="mt-1 h-4 w-1 shrink-0 rounded-full bg-[#DCE7FA]"
               />
 
               <div>
@@ -3186,7 +3180,7 @@ const SubmissionViewer = ({
               </div>
             </div>
 
-            <Card className="overflow-hidden border-t-4 border-t-slate-900">
+            <Card className="overflow-hidden border-t-2 border-t-[#DCE7FA]">
               {responses.length >
               0 ? (
                 <div className="divide-y divide-slate-100">
@@ -3226,11 +3220,7 @@ const SubmissionViewer = ({
           <div>
             <div className="mb-3 flex items-start gap-3">
               <span
-                className="mt-1 h-4 w-1 shrink-0 rounded-full"
-                style={{
-                  backgroundColor:
-                    NAVY,
-                }}
+                className="mt-1 h-4 w-1 shrink-0 rounded-full bg-[#DCE7FA]"
               />
 
               <div>
@@ -3244,7 +3234,7 @@ const SubmissionViewer = ({
               </div>
             </div>
 
-            <Card className="overflow-hidden border-t-4 border-t-slate-900">
+            <Card className="overflow-hidden border-t-2 border-t-[#DCE7FA]">
               {fuelMetrics.hasFuelData ? (
                 <>
                   <div className="grid grid-cols-1 divide-y divide-slate-100 md:grid-cols-2 md:divide-x md:divide-y-0">
@@ -3280,7 +3270,7 @@ const SubmissionViewer = ({
                               className="h-4 w-4"
                               style={{
                                 color:
-                                  NAVY,
+                                  "#456BC0",
                               }}
                             />
 
@@ -3326,18 +3316,14 @@ const SubmissionViewer = ({
                   </div>
 
                   <div
-                    className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 px-4 py-3"
-                    style={{
-                      backgroundColor:
-                        NAVY,
-                    }}
+                    className="flex flex-wrap items-center justify-between gap-3 border-t border-blue-100 bg-[#F0F5FF] px-4 py-3"
                   >
                     <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                         Total fuel sold
                       </p>
 
-                      <p className="mt-1 text-sm font-semibold tabular-nums text-white">
+                      <p className="mt-1 text-sm font-semibold tabular-nums text-slate-900">
                         {formatLitres(
                           fuelMetrics.totalVolume
                         )}
@@ -3345,11 +3331,11 @@ const SubmissionViewer = ({
                     </div>
 
                     <div className="text-right">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                         Total estimated value
                       </p>
 
-                      <p className="mt-1 text-sm font-semibold tabular-nums text-white">
+                      <p className="mt-1 text-sm font-semibold tabular-nums text-slate-900">
                         {formatCurrency(
                           fuelMetrics.totalRevenue
                         )}
@@ -3378,11 +3364,7 @@ const SubmissionViewer = ({
           <div>
             <div className="mb-3 flex items-start gap-3">
               <span
-                className="mt-1 h-4 w-1 shrink-0 rounded-full"
-                style={{
-                  backgroundColor:
-                    NAVY,
-                }}
+                className="mt-1 h-4 w-1 shrink-0 rounded-full bg-[#DCE7FA]"
               />
 
               <div>
@@ -3416,7 +3398,7 @@ const SubmissionViewer = ({
               </div>
             )}
 
-            <Card className="border-t-4 border-t-slate-900 p-4">
+            <Card className="border-t-2 border-t-[#DCE7FA] p-4">
               {timeline.length > 0 ? (
                 <div>
                   {timeline.map(
@@ -3443,7 +3425,7 @@ const SubmissionViewer = ({
                               ? "border-amber-300 bg-amber-50"
                               : index === timeline.length - 1
                                 ? "border-emerald-200 bg-emerald-50"
-                                : "border-slate-900 bg-slate-900"
+                                : "border-blue-200 bg-blue-50"
                           }`}
                         >
                           {normalizeText(
@@ -3455,7 +3437,7 @@ const SubmissionViewer = ({
                               className={`h-4 w-4 ${
                                 index === timeline.length - 1
                                   ? "text-emerald-600"
-                                  : "text-white"
+                                  : "text-[#456BC0]"
                               }`}
                             />
                           ) : index ===
@@ -3463,7 +3445,7 @@ const SubmissionViewer = ({
                               1 ? (
                             <CheckCircle2 className="h-4 w-4 text-emerald-600" />
                           ) : (
-                            <History className="h-4 w-4 text-white" />
+                            <History className="h-4 w-4 text-[#456BC0]" />
                           )}
                         </div>
 
@@ -5920,11 +5902,7 @@ const Reports = ({
         <div>
           <div className="mb-2 flex flex-wrap items-center gap-3">
             <span
-              className="h-6 w-1.5 rounded-full"
-              style={{
-                backgroundColor:
-                  NAVY,
-              }}
+              className="h-6 w-1 rounded-full bg-[#DCE7FA]"
             />
 
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
@@ -5935,9 +5913,9 @@ const Reports = ({
               className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
               style={{
                 backgroundColor:
-                  ICON_BLUE,
+                  "#EFF5FF",
                 color:
-                  NAVY,
+                  "#456BC0",
               }}
             >
               {scopeLabel}
@@ -6337,7 +6315,7 @@ const Reports = ({
                       activeDot={{
                         r: 6,
                         fill:
-                          GOLD,
+                          "#D5A54A",
                         stroke:
                           "#ffffff",
                         strokeWidth: 2,
@@ -6441,7 +6419,7 @@ const Reports = ({
                         name="Submitted"
                         stackId="submissionStatus"
                         fill={
-                          NAVY
+                          SAGE
                         }
                         barSize={34}
                         radius={[
@@ -6491,7 +6469,7 @@ const Reports = ({
                       percentage:
                         currentSubmissionBreakdown.submittedPercentage,
                       color:
-                        NAVY,
+                        SAGE,
                     },
                     {
                       key:
@@ -6573,12 +6551,7 @@ const Reports = ({
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1120px] table-fixed">
             <thead>
-              <tr
-                style={{
-                  backgroundColor:
-                    NAVY,
-                }}
-              >
+              <tr className="border-b border-slate-200 bg-[#F3F6FB]">
                 {[
                   {
                     label: "Branch",
@@ -6619,7 +6592,7 @@ const Reports = ({
                   ) => (
                     <th
                       key={`${heading.label}-${index}`}
-                      className={`whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-200 ${heading.className}`}
+                      className={`whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600 ${heading.className}`}
                     >
                       {heading.label}
                     </th>
@@ -6637,7 +6610,7 @@ const Reports = ({
                       key={
                         report.id
                       }
-                      className="border-b border-slate-100 transition-colors last:border-0 hover:bg-slate-50"
+                      className="border-b border-slate-100 transition-colors last:border-0 hover:bg-blue-50/40"
                     >
                       <td className="whitespace-nowrap px-4 py-3">
                         <div className="flex items-center gap-3">
@@ -6722,7 +6695,7 @@ const Reports = ({
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                          className="!text-[#456BC0] hover:!bg-blue-50 hover:!text-[#3659A5]"
                           onClick={() =>
                             setSelectedReport(
                               report
