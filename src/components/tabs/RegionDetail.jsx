@@ -8,7 +8,7 @@ import ExportPdfButton from "../ui/ExportPdfButton";
 import { buildPdfFilename } from "../../lib/pdf-export";
 import { CHART_COLORS } from "../../lib/util";
 import { Button } from "../ui/Button";
-import { NAVY, ICON_BLUE, FOREST, KPI_ICON_STYLE, normalizeStatus, getRegionName, getTimestampValue, getDateKey, getOrganizationId, getOrganizationLogo, isBranchOrganization, isEnterpriseOrganization, getEnterpriseIdForOrganization, getActualSubmittedAt, getDeadlineAt, getReportName, formatNumber, formatPercentage, formatCurrency, formatDate, formatTime, formatUpdatedAt, getComplianceClassName, PRODUCT_FILTER_OPTIONS, getProductLabel, calculateProductTotals, calculateAccountability, calculateWorkforceSummary, isOutstandingReport, humanizeValue, getWorkflowStage, getWorkflowOwner, formatLastSubmission, getHealthAction, getHealthOrder } from "../../lib/region-utils";
+import { FOREST, normalizeStatus, getRegionName, getTimestampValue, getDateKey, getOrganizationId, getOrganizationLogo, isBranchOrganization, isEnterpriseOrganization, getEnterpriseIdForOrganization, getActualSubmittedAt, getDeadlineAt, getReportName, formatNumber, formatPercentage, formatCurrency, formatDate, formatTime, formatUpdatedAt, getComplianceClassName, PRODUCT_FILTER_OPTIONS, getProductLabel, calculateProductTotals, calculateAccountability, calculateWorkforceSummary, isOutstandingReport, humanizeValue, getWorkflowStage, getWorkflowOwner, formatLastSubmission, getHealthAction, getHealthOrder } from "../../lib/region-utils";
 
 
 
@@ -129,7 +129,7 @@ export const SectionHeader = ({
       <span
         className="mt-1 h-4 w-1 shrink-0 rounded-full"
         style={{
-          backgroundColor: NAVY,
+          backgroundColor: "#BFDBFE",
         }}
       />
 
@@ -156,14 +156,14 @@ const KpiCard = ({
   icon: Icon,
 }) => {
   return (
-    <Card className="p-5">
+    <Card className="p-5 transition-shadow duration-200 hover:shadow-[0_4px_16px_rgba(15,23,42,0.06)]">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
             {label}
           </p>
 
-          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+          <p className="mt-3 text-2xl font-semibold tabular-nums tracking-tight text-slate-900">
             {value}
           </p>
         </div>
@@ -171,14 +171,14 @@ const KpiCard = ({
         {Icon && (
           <div
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
-            style={KPI_ICON_STYLE}
+            style={{ backgroundColor: "#EEF3FF", color: "#3465D9" }}
           >
             <Icon className="h-5 w-5" />
           </div>
         )}
       </div>
 
-      <p className="mt-3 text-xs leading-snug text-slate-500">
+      <p className="mt-3 text-xs leading-relaxed text-slate-500">
         {caption ||
           "No data available"}
       </p>
@@ -195,13 +195,13 @@ export const DashboardHeader = ({
   action = null,
 }) => {
   return (
-    <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-5 sm:flex-row sm:items-end">
+    <header className="mb-7 flex flex-col justify-between gap-4 border-b border-slate-200 pb-5 sm:flex-row sm:items-end">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-3">
           <span
             className="h-6 w-1 shrink-0 rounded-full"
             style={{
-              backgroundColor: NAVY,
+              backgroundColor: "#BFDBFE",
             }}
           />
 
@@ -211,10 +211,10 @@ export const DashboardHeader = ({
 
           {scopeLabel && (
             <span
-              className="rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide"
+              className="rounded-full border border-blue-100 px-2.5 py-1 text-[10px] font-semibold tracking-wide"
               style={{
-                backgroundColor: ICON_BLUE,
-                color: NAVY,
+                backgroundColor: "#EFF6FF",
+                color: "#315FC4",
               }}
             >
               {scopeLabel}
@@ -230,7 +230,7 @@ export const DashboardHeader = ({
       </div>
 
       <div className="flex shrink-0 flex-wrap items-center gap-3 sm:justify-end">
-        <p className="text-xs font-medium text-slate-400">
+        <p className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-500">
           {formatUpdatedAt(
             updatedAt
           )}
@@ -585,7 +585,7 @@ export const PeriodFilterControl = ({
                 "custom"
             );
           }}
-          className="h-9 w-44 rounded-md border border-slate-300 bg-white pl-8 pr-8 text-xs font-medium text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+          className="h-9 w-44 rounded-lg border border-slate-200 bg-white pl-8 pr-8 text-xs font-medium text-slate-700 shadow-sm outline-none transition-colors focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
         >
           <option value="today">
             Today
@@ -697,7 +697,7 @@ export const PeriodFilterControl = ({
                     event.preventDefault()
                   }
                   inputMode="none"
-                  className="h-10 w-full cursor-pointer rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                  className="h-10 w-full cursor-pointer rounded-lg border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-700 outline-none transition-colors focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                 />
               </div>
             </label>
@@ -748,7 +748,7 @@ export const PeriodFilterControl = ({
                       event.preventDefault()
                     }
                     inputMode="none"
-                    className="h-10 w-full cursor-pointer rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    className="h-10 w-full cursor-pointer rounded-lg border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-700 outline-none transition-colors focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                   />
                 </div></label>
 
@@ -805,7 +805,7 @@ export const PeriodFilterControl = ({
                       event.preventDefault()
                     }
                     inputMode="none"
-                    className="h-10 w-full cursor-pointer rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+                    className="h-10 w-full cursor-pointer rounded-lg border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-700 outline-none transition-colors focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                   />
                 </div>
               </label>
@@ -827,10 +827,10 @@ export const PeriodFilterControl = ({
                   false
                 )
               }
-              className="h-9 rounded-md px-4 text-xs font-semibold text-white transition-opacity hover:opacity-90"
+              className="h-9 rounded-lg px-4 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
               style={{
                 backgroundColor:
-                  NAVY,
+                  "#1D4ED8",
               }}
             >
               Done
@@ -1937,10 +1937,10 @@ export const RegionDetail = ({
     };
 
   const tableHeaderClassName =
-    "whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-200";
+    "whitespace-nowrap border-b border-slate-200 px-4 py-3 text-left text-[11px] font-semibold tracking-wide text-slate-600";
 
   const filterClassName =
-    "h-9 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200";
+    "h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 shadow-sm outline-none transition-colors focus:border-blue-400 focus:ring-2 focus:ring-blue-100";
 
   if (!region) {
     return (
@@ -1976,7 +1976,7 @@ export const RegionDetail = ({
           onClick={
             onBack
           }
-          className="mb-5 flex items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3 text-sm font-medium text-slate-500 transition-all duration-200 hover:bg-slate-100 hover:text-slate-900 active:scale-[0.98]"
+          className="mb-5 inline-flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
         >
           <ArrowLeft className="h-4 w-4" />
           Back to Regions
@@ -2040,7 +2040,7 @@ export const RegionDetail = ({
 
         <div
           data-pdf-remove="true"
-          className="mb-6 rounded-xl border border-slate-200/80 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]"
+          className="mb-5 rounded-xl border border-slate-200/80 bg-white px-3 py-2.5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]"
         >
           <div className="flex flex-wrap items-end gap-2">
             <div className="flex h-9 items-center gap-2 px-1 pr-3">
@@ -2209,7 +2209,7 @@ export const RegionDetail = ({
                   onClick={
                     clearDetailFilters
                   }
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 transition-colors hover:text-slate-900"
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
                 >
                   <RefreshCw className="h-3.5 w-3.5" />
                   Reset
@@ -2218,7 +2218,7 @@ export const RegionDetail = ({
             </div>
           </div>
 
-          <p className="mt-2 pl-1 text-[11px] leading-relaxed text-slate-400">
+          <p className="mt-1.5 pl-1 text-[11px] leading-relaxed text-slate-400">
             {isMinistryUser ? "Period and operator filters update this profile. " : "Period filters update this profile. "}Product selection recalculates sales volume and estimated revenue without changing reporting compliance. Status filters narrow the comparisons.
           </p>
         </div>
@@ -2318,7 +2318,7 @@ export const RegionDetail = ({
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1360px]">
                 <thead>
-                  <tr style={{ backgroundColor: NAVY }}>
+                  <tr className="bg-slate-50/90">
                     <th className={tableHeaderClassName}>
                       Operator
                     </th>
@@ -2479,7 +2479,7 @@ export const RegionDetail = ({
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1660px]">
                 <thead>
-                  <tr style={{ backgroundColor: NAVY }}>
+                  <tr className="bg-slate-50/90">
                     {[
                       "Station / Site",
                       ...(isMinistryUser ? ["Operator"] : []),
@@ -2663,7 +2663,7 @@ export const RegionDetail = ({
                                         : branch.id
                                     );
                                   }}
-                                  className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-all hover:bg-slate-100 hover:text-slate-900 active:scale-[0.98]"
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition-colors hover:border-blue-100 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-200"
                                 >
                                   <Eye className="h-3.5 w-3.5" />
                                   {branch.action}
@@ -2841,7 +2841,7 @@ export const RegionDetail = ({
                     </colgroup>
 
                     <thead>
-                      <tr style={{ backgroundColor: NAVY }}>
+                      <tr className="bg-slate-50/90">
                         <th className={tableHeaderClassName}>
                           Station
                         </th>
@@ -2960,7 +2960,7 @@ export const RegionDetail = ({
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[820px]">
                   <thead>
-                    <tr style={{ backgroundColor: NAVY }}>
+                    <tr className="bg-slate-50/90">
                       <th className={tableHeaderClassName}>
                         Operator
                       </th>
