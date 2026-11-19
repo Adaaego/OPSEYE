@@ -75,8 +75,8 @@ const PAGE_COMPONENTS = {
 };
 
 
-const SIDEBAR_NAVY = "#111E32";
-const SIDEBAR_ICON = "#D6E2F2";
+const SIDEBAR_NAVY = "#FFFFFF";
+const SIDEBAR_ICON = "#58739C";
 
 const PAGE_TRANSITION_DURATION = 180;
 const SideBar = ({
@@ -384,7 +384,7 @@ return (
       <>
         
         <div
-          className={`border-b border-white/[0.08] py-6 ${
+          className={`border-b border-slate-200/80 py-6 ${
             isCollapsed ? "px-2" : "px-5"
           }`}
         >
@@ -397,15 +397,15 @@ return (
           >
             <LogoMark />
             {!isCollapsed && (
-              <span className="text-[17px] font-semibold tracking-[0.11em] text-slate-50">
+              <span className="text-[17px] font-semibold tracking-[0.09em] text-slate-900">
                 OPSEYE
               </span>
             )}
           </div>
         </div>
-        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-6 [scrollbar-width:thin] [scrollbar-color:rgba(148,163,184,0.18)_transparent]">
+        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-6 [scrollbar-width:thin] [scrollbar-color:rgba(148,163,184,0.28)_transparent]">
           {!isCollapsed && (
-            <p className="px-3 pb-3 text-[10px] font-semibold uppercase tracking-[0.17em] text-slate-400">
+            <p className="px-3 pb-3 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-400">
               Menu
             </p>
           )}
@@ -430,24 +430,24 @@ return (
                     ? "page"
                     : undefined
                 }
-                className={`group relative flex min-h-[43px] w-full items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium transition-[background-color,color,box-shadow] duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70 ${
+                className={`group relative flex min-h-[43px] w-full items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium transition-[background-color,color,box-shadow] duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${
                   isCollapsed
                     ? "justify-center"
                     : ""
                 } ${
                   isActive
-                    ? "bg-[#253754] text-white shadow-[inset_0_0_0_1px_rgba(180,204,240,0.12),0_4px_12px_rgba(0,0,0,0.08)]"
-                    : "text-slate-300 hover:bg-white/[0.065] hover:text-white"
+                    ? "bg-[#EFF4FF] text-[#1E40AF] shadow-[inset_0_0_0_1px_rgba(147,177,229,0.32)]"
+                    : "text-slate-600 hover:bg-slate-100/80 hover:text-slate-900"
                 }`}
               >
                 {isActive && (
-                  <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-[#6B91EC]" />
+                  <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-[#3B6FE0]" />
                 )}
                 <Icon
                   className={`h-[17px] w-[17px] shrink-0 transition-colors duration-200 ${
                     isActive
-                      ? "text-[#BCD2FF]"
-                      : "text-slate-400 group-hover:text-slate-200"
+                      ? "text-[#1D4ED8]"
+                      : "text-slate-500 group-hover:text-slate-700"
                   }`}
                 />
                 {!isCollapsed && (
@@ -466,7 +466,7 @@ return (
                   !currentValue
               )
             }
-            className="hidden min-h-[43px] items-center justify-center gap-2 border-t border-white/[0.08] px-3 py-3 text-xs font-medium text-slate-400 transition-colors hover:bg-white/[0.055] hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400/70 lg:flex"
+            className="hidden min-h-[43px] items-center justify-center gap-2 border-t border-slate-200/80 px-3 py-3 text-xs font-medium text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 lg:flex"
           >
             <ChevronLeft
               className={`h-3.5 w-3.5 transition-transform ${
@@ -481,27 +481,27 @@ return (
           </button>
         )}
         <div
-          className={`border-t border-white/[0.08] p-3 ${
+          className={`border-t border-slate-200/80 p-3 ${
             isCollapsed ? "px-2" : ""
           }`}
         >
           <div
-            className={`mb-2 flex items-center gap-3 rounded-xl bg-white/[0.045] px-2.5 py-3 ring-1 ring-inset ring-white/[0.055] ${
+            className={`mb-2 flex items-center gap-3 rounded-xl bg-[#F7F9FC] px-2.5 py-3 ring-1 ring-inset ring-slate-200/80 ${
               isCollapsed
                 ? "justify-center"
                 : ""
             }`}
           >
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#304668] text-xs font-semibold text-[#E4EDFF] ring-1 ring-inset ring-white/[0.10]">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#E8EFFB] text-xs font-semibold text-[#27539A] ring-1 ring-inset ring-[#D8E4F6]">
               {userInitial}
             </div>
             {!isCollapsed && (
               <div className="min-w-0">
-                <p className="truncate text-xs font-semibold text-slate-100">
+                <p className="truncate text-xs font-semibold text-slate-800">
                   {userName}
                 </p>
                 {userJobTitle && (
-                  <p className="mt-0.5 truncate text-[11px] text-slate-400">
+                  <p className="mt-0.5 truncate text-[11px] text-slate-500">
                     {userJobTitle}
                   </p>
                 )}
@@ -518,7 +518,7 @@ return (
                   ? "Sign Out"
                   : undefined
               }
-              className={`w-full rounded-lg border-transparent bg-transparent text-slate-400 shadow-none transition-colors hover:border-white/[0.06] hover:bg-white/[0.055] hover:text-slate-100 ${
+              className={`w-full rounded-lg border-transparent bg-transparent text-slate-600 shadow-none transition-colors hover:border-slate-200 hover:bg-slate-100 hover:text-slate-900 ${
                 isCollapsed
                   ? "justify-center px-2"
                   : "justify-start gap-3"
@@ -537,7 +537,7 @@ return (
 return (
     <div className="min-h-screen bg-[#F8FAFC]">
       <aside
-        className={`fixed inset-y-0 left-0 z-30 hidden flex-col border-r border-white/[0.08] shadow-[4px_0_24px_rgba(15,23,42,0.04)] transition-all duration-200 lg:flex ${
+        className={`fixed inset-y-0 left-0 z-30 hidden flex-col border-r border-slate-200/90 shadow-[3px_0_18px_rgba(15,23,42,0.025)] transition-all duration-200 lg:flex ${
           collapsed ? "w-16" : "w-60"
         }`}
         style={{
@@ -549,14 +549,14 @@ return (
         />
       </aside>
       <header
-        className="fixed inset-x-0 top-0 z-40 flex items-center justify-between border-b border-white/[0.08] px-4 py-3 shadow-[0_3px_14px_rgba(15,23,42,0.09)] lg:hidden"
+        className="fixed inset-x-0 top-0 z-40 flex items-center justify-between border-b border-slate-200/80 px-4 py-3 shadow-[0_3px_12px_rgba(15,23,42,0.035)] lg:hidden"
         style={{
           backgroundColor: SIDEBAR_NAVY,
         }}
       >
         <div className="flex items-center gap-3">
           <LogoMark />
-          <span className="text-[17px] font-semibold tracking-[0.11em] text-slate-50">
+          <span className="text-[17px] font-semibold tracking-[0.09em] text-slate-900">
             OPSEYE
           </span>
         </div>
@@ -565,7 +565,7 @@ return (
           onClick={() =>
             setMobileOpen(true)
           }
-          className="rounded-lg p-2 text-slate-200 transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
+          className="rounded-lg p-2 text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
           aria-label="Open menu"
         >
           <Menu className="h-5 w-5" />
@@ -582,7 +582,7 @@ return (
             className="absolute inset-0 bg-slate-950/60 backdrop-blur-[3px]"
           />
           <aside
-            className="absolute inset-y-0 left-0 flex w-60 flex-col border-r border-white/[0.08] shadow-2xl"
+            className="absolute inset-y-0 left-0 flex w-60 flex-col border-r border-slate-200/80 shadow-2xl"
             style={{
               backgroundColor: SIDEBAR_NAVY,
             }}
@@ -592,7 +592,7 @@ return (
               onClick={() =>
                 setMobileOpen(false)
               }
-              className="absolute right-4 top-5 z-10 rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
+              className="absolute right-4 top-5 z-10 rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
               aria-label="Close menu"
             >
               <X className="h-5 w-5" />
