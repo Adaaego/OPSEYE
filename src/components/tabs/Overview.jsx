@@ -28,6 +28,7 @@ import {
   Factory,
   Loader2,
   Users,
+  WifiOff,
 } from "lucide-react";
 
 import {
@@ -68,22 +69,24 @@ const WORKFORCE_COLLECTION = "workforce";
  * The sidebar and dark table headers use this same value so the platform
  * reads as one consistent, minimal visual system.
  */
-const NAVY = "#0F172A";
-const ICON_BLUE = "#C8D5E8";
-const GOLD = "#B7791F";
-const FOREST = "#166534";
-const BURGUNDY = "#9F1239";
-const SLATE_BLUE = "#3B5171";
+const NAVY = "#334155";
+const ICON_BLUE = "#EFF4FF";
+const GOLD = "#C99A3B";
+const FOREST = "#2A9D8F";
+const BURGUNDY = "#B7845A";
+const SLATE_BLUE = "#6B70C9";
 const PRIMARY = "#1D4ED8";
 
 const GOV_ACCENT_PALETTE = [
-  NAVY,
-  GOLD,
-  FOREST,
-  BURGUNDY,
-  SLATE_BLUE,
-  "#8A6D3B",
+  "#456BC1",
+  "#82A7A0",
+  "#D0B27B",
+  "#9B9BC6",
+  "#8DA4B8",
+  "#C7A59A",
 ];
+
+const WORKFORCE_COLOURS = ["#5077C5", "#C6D6E8"];
 
 const STATUS_COLOURS = {
   ok: "#047857",
@@ -112,8 +115,9 @@ const RATE_LABELS = {
  * decorative colours to individual government reporting metrics.
  */
 const KPI_ICON_STYLE = {
-  backgroundColor: ICON_BLUE,
-  color: NAVY,
+  backgroundColor: "#EFF4FF",
+  color: PRIMARY,
+  boxShadow: "inset 0 0 0 1px #E2EAFB",
 };
 
 /*
@@ -959,9 +963,16 @@ const CustomPieSector = ({ index = 0, ...sectorProps }) => (
   />
 );
 
+const WorkforcePieSector = ({ index = 0, ...sectorProps }) => (
+  <Sector
+    {...sectorProps}
+    fill={WORKFORCE_COLOURS[index % WORKFORCE_COLOURS.length]}
+  />
+);
+
 const Card = ({ children, className = "" }) => (
   <div
-    className={`rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] ${className}`}
+    className={`rounded-2xl border border-slate-200/80 bg-white shadow-[0_2px_8px_rgba(15,23,42,0.035)] ${className}`}
   >
     {children}
   </div>
@@ -969,10 +980,7 @@ const Card = ({ children, className = "" }) => (
 
 const SectionHeader = ({ children, description = "" }) => (
   <div className="mb-4 flex items-start gap-3">
-    <span
-      className="mt-1 h-4 w-1 shrink-0 rounded-full"
-      style={{ backgroundColor: NAVY }}
-    />
+    <span className="mt-1.5 h-3.5 w-1 shrink-0 rounded-full bg-blue-200" />
 
     <div>
       <h2 className="text-base font-semibold tracking-tight text-slate-900">
@@ -987,8 +995,8 @@ const SectionHeader = ({ children, description = "" }) => (
 );
 
 const EmptyState = ({ message }) => (
-  <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50/70 px-6 text-center">
-    <BarChart3 className="mb-3 h-7 w-7 text-slate-300" />
+  <div className="flex min-h-52 flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50/80 px-6 text-center">
+    <span className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-white text-slate-400 ring-1 ring-slate-200/80"><BarChart3 className="h-5 w-5" /></span>
     <p className="text-sm font-medium text-slate-600">{message}</p>
     <p className="mt-1 text-xs text-slate-400">
       This section will update when report data becomes available.
@@ -1097,25 +1105,25 @@ const StatusBadge = ({ status, report, now = new Date() }) => {
 };
 
 const KpiCard = ({ label, value, caption, icon: Icon }) => (
-  <Card className="p-5">
+  <Card className="flex h-full flex-col p-5 sm:p-6">
     <div className="flex items-start justify-between gap-4">
       <p className="text-sm font-medium leading-snug text-slate-500">
         {label}
       </p>
 
       <div
-        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
         style={KPI_ICON_STYLE}
       >
-        <Icon className="h-5 w-5" />
+        <Icon className="h-[18px] w-[18px]" />
       </div>
     </div>
 
-    <p className="mt-3 text-2xl font-semibold tabular-nums tracking-tight text-slate-900">
+    <p className="mt-4 text-[26px] font-semibold leading-tight tabular-nums tracking-tight text-slate-900">
       {value}
     </p>
 
-    <div className="mt-2 min-h-5 text-xs leading-snug text-slate-500">
+    <div className="mt-auto min-h-5 pt-3 text-xs leading-relaxed text-slate-500">
       {caption || "No data available"}
     </div>
   </Card>
@@ -1155,8 +1163,8 @@ const SalesVolumeTick = ({ x, y, payload, comparisonMap }) => {
                 width: 22,
                 height: 22,
                 borderRadius: "50%",
-                backgroundColor: "#C8D5E8",
-                color: "#0F172A",
+                backgroundColor: "#F1F5F9",
+                color: "#475569",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -2263,24 +2271,15 @@ const Overviews = () => {
       className="min-h-full w-full bg-slate-50 px-4 py-6 sm:px-5 lg:px-6"
     >
       <div className="w-full">
-        <header className="mb-8 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
+        <header className="mb-7 flex flex-col justify-between gap-5 border-b border-slate-200/80 pb-6 sm:flex-row sm:items-end">
           <div>
             <div className="mb-2 flex flex-wrap items-center gap-3">
-              <span
-                className="h-6 w-1.5 rounded-full"
-                style={{ backgroundColor: NAVY }}
-              />
-
-              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+              <h1 className="text-[28px] font-semibold tracking-tight text-slate-900">
                 Overview
               </h1>
 
               <span
-                className="rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
-                style={{
-                  backgroundColor: ICON_BLUE,
-                  color: NAVY,
-                }}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-medium tracking-wide text-slate-600"
               >
                 {scopeLabel}
               </span>
@@ -2293,15 +2292,17 @@ const Overviews = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-3 sm:justify-end">
-            <p className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-500">
+            <p className="inline-flex items-center gap-2 rounded-lg border border-slate-200/90 bg-white px-3 py-2 text-xs font-medium text-slate-500 shadow-[0_1px_2px_rgba(15,23,42,0.025)]">
               <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
               {formatUpdatedAt(updatedAt)}
             </p>
 
-            <ExportPdfButton
-              targetRef={overviewPdfRef}
-              filename={overviewPdfFilename}
-            />
+            <div className="[&_button]:!rounded-lg [&_button]:!border [&_button]:!border-slate-200 [&_button]:!bg-white [&_button]:!text-slate-700 [&_button]:!shadow-sm [&_button]:transition-colors [&_button]:duration-150 [&_button:hover]:!bg-slate-50">
+              <ExportPdfButton
+                targetRef={overviewPdfRef}
+                filename={overviewPdfFilename}
+              />
+            </div>
           </div>
         </header>
 
@@ -2309,20 +2310,41 @@ const Overviews = () => {
           <div
             data-pdf-ignore="true"
             role="status"
-            className="mb-6 rounded-lg border border-slate-200 bg-slate-100 px-4 py-3 text-sm text-slate-700"
+            className="mb-6 flex items-start gap-3 rounded-lg px-4 py-3 text-sm"
+            style={
+              isOffline
+                ? {
+                    backgroundColor: STATUS_SOFT.warn.bg,
+                    color: "#92400E",
+                    boxShadow: `inset 0 0 0 1px ${STATUS_SOFT.warn.ring}`,
+                  }
+                : {
+                    backgroundColor: "#EFF4FF",
+                    color: "#1E3A8A",
+                    boxShadow: "inset 0 0 0 1px #C7D7FB",
+                  }
+            }
           >
-            <span className="font-semibold">
-              {isOffline ? "Offline" : "Showing cached data"}
-            </span>
-            {" — "}
-            {hasLoadedReports
-              ? "Displaying saved reporting information. Recent changes may not be available."
-              : "No saved reporting information is available on this device yet."}
-            {lastServerSyncAt && (
-              <span className="ml-1 text-slate-500">
-                Last server refresh: {formatReportingDate(lastServerSyncAt)} at {formatTime(lastServerSyncAt)}.
-              </span>
+            {isOffline ? (
+              <WifiOff className="mt-0.5 h-4 w-4 shrink-0" />
+            ) : (
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             )}
+
+            <p>
+              <span className="font-semibold">
+                {isOffline ? "Offline" : "Showing cached data"}
+              </span>
+              {" — "}
+              {hasLoadedReports
+                ? "Displaying saved reporting information. Recent changes may not be available."
+                : "No saved reporting information is available on this device yet."}
+              {lastServerSyncAt && (
+                <span className="ml-1 opacity-75">
+                  Last server refresh: {formatReportingDate(lastServerSyncAt)} at {formatTime(lastServerSyncAt)}.
+                </span>
+              )}
+            </p>
           </div>
         )}
 
@@ -2336,7 +2358,7 @@ const Overviews = () => {
           </div>
         )}
 
-        <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mb-9 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <KpiCard
             label="Total Daily Sales Volume"
             value={
@@ -2409,10 +2431,10 @@ const Overviews = () => {
                 Daily Sales Volume by {scopeConfig.comparisonSingular}
               </SectionHeader>
 
-              <Card className="p-5">
+              <Card className="p-5 sm:p-6">
                 {comparisonData.length ? (
                   <>
-                    <div className="mb-5 flex flex-wrap items-end justify-between gap-4 border-b border-slate-100 pb-4">
+                    <div className="mb-6 flex flex-wrap items-end justify-between gap-4 border-b border-slate-100 pb-5">
                       <div className="flex flex-wrap gap-8">
                         <div>
                           <p className="text-xs font-medium text-slate-500">
@@ -2435,7 +2457,7 @@ const Overviews = () => {
                         </div>
                       </div>
 
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+                      <span className="rounded-full border border-slate-200/80 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
                         {comparisonData.length}{" "}
                         {comparisonData.length === 1
                           ? scopeConfig.comparisonSingular.toLowerCase()
@@ -2459,7 +2481,7 @@ const Overviews = () => {
                       >
                         <CartesianGrid
                           strokeDasharray="3 3"
-                          stroke="#E2E8F0"
+                          stroke="#EDF1F5"
                           horizontal={false}
                         />
 
@@ -2490,7 +2512,7 @@ const Overviews = () => {
                         />
 
                         <Tooltip
-                          cursor={{ fill: "#F1F5F9" }}
+                          cursor={{ fill: "#F8FAFC" }}
                           formatter={(value) => [
                             `${formatNumber(value)} litres`,
                             "Sales volume",
@@ -2505,8 +2527,8 @@ const Overviews = () => {
 
                         <Bar
                           dataKey="value"
-                          radius={[0, 6, 6, 0]}
-                          maxBarSize={32}
+                          radius={[0, 8, 8, 0]}
+                          maxBarSize={28}
                         >
                           {comparisonData.map((item, index) => (
                             <Cell
@@ -2540,7 +2562,7 @@ const Overviews = () => {
               </SectionHeader>
 
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <Card className="p-5">
+                <Card className="p-5 sm:p-6">
                   <h3 className="mb-4 text-sm font-semibold text-slate-900">
                     Sales Volume Share
                   </h3>
@@ -2570,6 +2592,12 @@ const Overviews = () => {
                                   `${formatNumber(value)} litres`,
                                   name,
                                 ]}
+                                contentStyle={{
+                                  fontSize: 13,
+                                  borderRadius: 8,
+                                  border: "1px solid #e2e8f0",
+                                  boxShadow: "0 4px 12px rgba(15,23,42,0.08)",
+                                }}
                               />
                             </PieChart>
                           </ResponsiveContainer>
@@ -2589,7 +2617,7 @@ const Overviews = () => {
                         {comparisonData.map((item, index) => (
                           <div
                             key={item.id}
-                            className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3"
+                            className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/70 p-3.5 transition-colors hover:bg-slate-100/70"
                           >
                             <div className="flex min-w-0 items-center gap-2.5">
                               <OrganizationLogo record={item} size="sm" />
@@ -2622,7 +2650,7 @@ const Overviews = () => {
                 </Card>
 
                 <div className="flex flex-col gap-4">
-                  <Card className="p-5">
+                  <Card className="p-5 sm:p-6">
                     <h3 className="text-sm font-semibold text-slate-900">
                       Regional Sales Trend
                     </h3>
@@ -2640,14 +2668,14 @@ const Overviews = () => {
                         >
                           <CartesianGrid
                             strokeDasharray="3 3"
-                            stroke="#e2e8f0"
+                            stroke="#EDF1F5"
                             vertical={false}
                           />
 
                           <XAxis
                             dataKey="day"
                             tick={{ fontSize: 12, fill: "#64748b" }}
-                            axisLine={{ stroke: "#cbd5e1" }}
+                            axisLine={false}
                             tickLine={false}
                           />
 
@@ -2661,7 +2689,7 @@ const Overviews = () => {
                           />
 
                           <Tooltip
-                            cursor={{ fill: "#F1F5F9" }}
+                            cursor={{ fill: "#F8FAFC" }}
                             formatter={(value, name) => [
                               `${formatNumber(value, 1)}%`,
                               name,
@@ -2675,7 +2703,7 @@ const Overviews = () => {
                           />
 
                           <Legend
-                            iconType="square"
+                            iconType="circle"
                             iconSize={8}
                             wrapperStyle={{
                               fontSize: 12,
@@ -2718,7 +2746,7 @@ const Overviews = () => {
                     )}
                   </Card>
 
-                  <Card className="p-5">
+                  <Card className="p-5 sm:p-6">
                     <h3 className="mb-3 text-sm font-semibold text-slate-900">
                       {scopeConfig.comparisonSingular} Sales Ranking
                     </h3>
@@ -2728,7 +2756,7 @@ const Overviews = () => {
                         {comparisonData.map((item, index) => (
                           <li
                             key={item.id}
-                            className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 px-3 py-2.5"
+                            className="flex items-center justify-between gap-4 rounded-xl border border-slate-100 bg-slate-50/60 px-3.5 py-3 transition-colors hover:bg-slate-100/70"
                           >
                             <div className="flex min-w-0 items-center gap-3">
                               <span
@@ -2736,8 +2764,8 @@ const Overviews = () => {
                                 style={
                                   index === 0
                                     ? {
-                                        backgroundColor: ICON_BLUE,
-                                        color: NAVY,
+                                        backgroundColor: "#EFF4FF",
+                                        color: PRIMARY,
                                       }
                                     : {
                                         backgroundColor: "#F1F5F9",
@@ -2782,8 +2810,8 @@ const Overviews = () => {
           </SectionHeader>
 
           <Card className="overflow-hidden">
-            <div className="grid grid-cols-1 gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-3">
-              <div className="bg-slate-50 px-5 py-3.5">
+            <div className="grid grid-cols-1 gap-px border-b border-slate-200/80 bg-slate-200/70 sm:grid-cols-3">
+              <div className="bg-slate-50/80 px-5 py-4">
                 <p className="text-xs font-medium text-slate-500">
                   Submission completion
                 </p>
@@ -2798,7 +2826,7 @@ const Overviews = () => {
                 </p>
               </div>
 
-              <div className="bg-slate-50 px-5 py-3.5">
+              <div className="bg-slate-50/80 px-5 py-4">
                 <p className="text-xs font-medium text-slate-500">
                   On-time compliance
                 </p>
@@ -2813,7 +2841,7 @@ const Overviews = () => {
                 </p>
               </div>
 
-              <div className="bg-slate-50 px-5 py-3.5">
+              <div className="bg-slate-50/80 px-5 py-4">
                 <p className="text-xs font-medium text-slate-500">
                   Submitted late
                 </p>
@@ -2824,7 +2852,7 @@ const Overviews = () => {
                     color:
                       complianceSummary.reportsSubmittedLate > 0
                         ? STATUS_COLOURS.warn
-                        : "#0F172A",
+                        : "#0F1F3D",
                   }}
                 >
                   {formatNumber(complianceSummary.reportsSubmittedLate)}
@@ -2835,10 +2863,7 @@ const Overviews = () => {
             <div className="overflow-x-auto">
               <table className="w-full min-w-[940px]">
                 <thead>
-                  <tr
-                    className="border-b"
-                    style={{ backgroundColor: NAVY, borderColor: NAVY }}
-                  >
+                  <tr className="border-b border-slate-200 bg-slate-50/90">
                     {[
                       "Station / Branch",
                       "Report",
@@ -2850,7 +2875,7 @@ const Overviews = () => {
                     ].map((heading) => (
                       <th
                         key={heading}
-                        className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-200"
+                        className="whitespace-nowrap px-5 py-3.5 text-left text-[11px] font-semibold uppercase tracking-[0.075em] text-slate-500"
                       >
                         {heading}
                       </th>
@@ -2863,7 +2888,7 @@ const Overviews = () => {
                     todaysReports.map((report) => (
                       <tr
                         key={report.id}
-                        className="border-b border-slate-100 text-sm last:border-0 hover:bg-slate-50/70"
+                        className="border-b border-slate-100 text-sm transition-colors last:border-0 hover:bg-blue-50/40"
                       >
                         <td className="min-w-56 px-4 py-3">
                           <OrganizationIdentity
@@ -2942,7 +2967,7 @@ const Overviews = () => {
                       : getRateTone(unit.complianceRate);
 
                   return (
-                    <Card key={unit.id} className="p-5">
+                    <Card key={unit.id} className="p-5 sm:p-6">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <h3 className="truncate text-sm font-semibold text-slate-900">
@@ -2964,7 +2989,7 @@ const Overviews = () => {
                         <RateBadge tone={unitTone} />
                       </div>
 
-                      <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">
+                      <div className="mt-5 space-y-3.5 border-t border-slate-100 pt-4">
                         <div className="flex items-baseline justify-between gap-4">
                           <span className="text-xs text-slate-500">
                             Volume Sold
@@ -3040,7 +3065,7 @@ const Overviews = () => {
                 })}
               </div>
             ) : (
-              <Card className="p-5">
+              <Card className="p-5 sm:p-6">
                 <EmptyState message="Performance data will appear here" />
               </Card>
             )}
@@ -3057,7 +3082,7 @@ const Overviews = () => {
               scopeConfig.showComparisonSections ? "lg:grid-cols-2" : ""
             }`}
           >
-            <Card className="p-5">
+            <Card className="p-5 sm:p-6">
               <h3 className="mb-4 text-sm font-semibold text-slate-900">
                 {scopeConfig.workforceTitle}
               </h3>
@@ -3088,7 +3113,7 @@ const Overviews = () => {
                             startAngle={90}
                             endAngle={-270}
                             stroke="none"
-                            shape={CustomPieSector}
+                            shape={WorkforcePieSector}
                           />
 
                           <Tooltip
@@ -3096,6 +3121,12 @@ const Overviews = () => {
                               formatNumber(value),
                               name,
                             ]}
+                            contentStyle={{
+                              fontSize: 13,
+                              borderRadius: 8,
+                              border: "1px solid #e2e8f0",
+                              boxShadow: "0 4px 12px rgba(15,23,42,0.08)",
+                            }}
                           />
                         </PieChart>
                       </ResponsiveContainer>
@@ -3112,14 +3143,14 @@ const Overviews = () => {
                   </div>
 
                   <div className="mt-4 grid grid-cols-3 gap-3">
-                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                    <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5 text-center">
                       <p className="text-xs font-medium text-slate-500">Total Workforce</p>
                       <p className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
                         {formatNumber(workforce.total.total)}
                       </p>
                     </div>
 
-                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                    <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5 text-center">
                       <p className="text-xs font-medium text-slate-500">Local</p>
                       <p className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
                         {formatNumber(workforce.total.local)}
@@ -3131,7 +3162,7 @@ const Overviews = () => {
                       </p>
                     </div>
 
-                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                    <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5 text-center">
                       <p className="text-xs font-medium text-slate-500">Expat</p>
                       <p className="mt-1 text-lg font-semibold tabular-nums text-slate-900">
                         {formatNumber(workforce.total.expat)}
@@ -3150,7 +3181,7 @@ const Overviews = () => {
             </Card>
 
             {scopeConfig.showComparisonSections && (
-              <Card className="p-5">
+              <Card className="p-5 sm:p-6">
                 <h3 className="mb-4 text-sm font-semibold text-slate-900">
                   Local vs Expat by {scopeConfig.comparisonSingular}
                 </h3>
@@ -3189,11 +3220,12 @@ const Overviews = () => {
                             </div>
                           </div>
 
-                          <div className="flex h-7 overflow-hidden rounded-md bg-slate-100">
+                          <div className="flex h-6 overflow-hidden rounded-lg bg-slate-100">
                             <div
-                              className="flex items-center justify-center bg-slate-900 text-[10px] font-medium text-white"
+                              className="flex items-center justify-center text-[10px] font-medium text-white"
                               style={{
                                 width: `${percentages.localWorkforcePercentage}%`,
+                                backgroundColor: WORKFORCE_COLOURS[0],
                               }}
                               title={`${formatNumber(
                                 group.local
@@ -3205,9 +3237,11 @@ const Overviews = () => {
                             </div>
 
                             <div
-                              className="flex items-center justify-center bg-slate-300 text-[10px] font-medium text-slate-700"
+                              className="flex items-center justify-center text-[10px] font-medium"
                               style={{
                                 width: `${percentages.expatWorkforcePercentage}%`,
+                                backgroundColor: WORKFORCE_COLOURS[1],
+                                color: "#334155",
                               }}
                               title={`${formatNumber(
                                 group.expat
