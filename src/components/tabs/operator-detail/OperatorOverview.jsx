@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, } from "recharts";
-import { BarChart3, Banknote, Building2, ClipboardList, Eye, Factory, Filter, Search, Users, X, } from "lucide-react";
+import { BarChart3, Banknote, Building2, ChevronDown, ClipboardList, Eye, Factory, Filter, Search, Users, X, } from "lucide-react";
 import { CHART_COLORS, } from "../../../lib/util";
 import { calculateOnTimeCompliance, calculateSubmissionCompletion, } from "../../../lib/calculation-metrics";
 import { StatusBadge, Table, EmptyCell, Select, } from "../../ui/interface";
@@ -12,12 +12,12 @@ import { Button, } from "../../ui/Button";
  * Every KPI icon now uses one pale-blue wrapper and one deep-navy icon.
  * This avoids decorative colour coding and keeps the dashboard minimal.
  */
-const NAVY = "#020617";
-const ICON_BLUE = "#C8D5E8";
+const NAVY = "#475569";
+const ICON_BLUE = "#EFF4FF";
 const REPORTING_HISTORY_PAGE_SIZE = 5;
 const KPI_ICON_STYLE = {
     backgroundColor: ICON_BLUE,
-    color: NAVY,
+    color: "#4164A6",
 };
 const STATUS_COLOURS = {
     ok: "#047857",
@@ -29,20 +29,18 @@ const getRateColour = (value) => value >= 80
     : value >= 50
         ? STATUS_COLOURS.warn
         : STATUS_COLOURS.crit;
-const FILTER_FIELD_CLASS_NAME = "h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200";
+const FILTER_FIELD_CLASS_NAME = "h-10 w-full rounded-xl border border-slate-200 bg-white px-3.5 text-[13px] font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.025)] outline-none transition-colors placeholder:text-slate-400 hover:border-slate-300 focus:border-blue-300 focus:ring-2 focus:ring-blue-100";
 const Card = ({ children, className = "", }) => {
-    return (<div className={`rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] ${className}`}>
+    return (<div className={`rounded-2xl border border-slate-200/80 bg-white shadow-[0_2px_12px_rgba(15,23,42,0.035)] ${className}`}>
       {children}
     </div>);
 };
 const SectionHeader = ({ children, description = "", }) => {
     return (<div className="mb-4 flex items-start gap-3">
-      <span className="mt-1 h-4 w-1 shrink-0 rounded-full" style={{
-            backgroundColor: NAVY,
-        }}/>
+      <span className="mt-[7px] h-3.5 w-[3px] shrink-0 rounded-full bg-slate-300"/>
 
       <div>
-        <h2 className="text-base font-semibold tracking-tight text-slate-900">
+        <h2 className="text-[15px] font-semibold tracking-tight text-slate-800">
           {children}
         </h2>
 
@@ -53,22 +51,22 @@ const SectionHeader = ({ children, description = "", }) => {
     </div>);
 };
 const KpiCard = ({ label, value, caption, icon: Icon, }) => {
-    return (<Card className="p-5">
+    return (<Card className="group p-5 transition-[border-color,box-shadow] duration-200 hover:border-slate-300/80 hover:shadow-[0_5px_20px_rgba(15,23,42,0.055)]">
       <div className="flex items-start justify-between gap-4">
         <p className="text-sm font-medium leading-snug text-slate-500">
           {label}
         </p>
 
-        {Icon && (<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg" style={KPI_ICON_STYLE}>
+        {Icon && (<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-blue-100/80" style={KPI_ICON_STYLE}>
             <Icon className="h-5 w-5"/>
           </div>)}
       </div>
 
-      <p className="mt-3 text-2xl font-semibold tabular-nums tracking-tight text-slate-900">
+      <p className="mt-4 text-[25px] font-semibold tabular-nums tracking-tight text-slate-900">
         {value}
       </p>
 
-      <p className="mt-2 text-xs leading-snug text-slate-500">
+      <p className="mt-2 min-h-[30px] text-xs leading-relaxed text-slate-500">
         {caption ||
             "No data available"}
       </p>
@@ -94,7 +92,7 @@ const getChartColor = (operator) => {
         return CHART_COLORS[operator.name];
     }
     return (COLOR_PALETTE[0] ||
-        "#1e293b");
+        "#647FC7");
 };
 const formatNumber = (value, maximumFractionDigits = 0) => {
     if (value === null ||
@@ -658,7 +656,7 @@ const clampPercentage = (value) => {
     return Math.min(Math.max(percentage, 0), 100);
 };
 const EmptyState = ({ message, }) => {
-    return (<div className="flex min-h-48 flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50/70 px-6 text-center">
+    return (<div className="flex min-h-48 flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-6 text-center">
       <BarChart3 className="mb-3 h-7 w-7 text-slate-300"/>
 
       <p className="text-sm font-medium text-slate-600">
@@ -725,6 +723,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
      * the same screen-faithful PDF export without duplicating export logic.
      */
     const [reportingSearch, setReportingSearch,] = useState("");
+    const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
     const [reportingPeriod, setReportingPeriod,] = useState("all_time");
     const [customStartDate, setCustomStartDate,] = useState("");
     const [customEndDate, setCustomEndDate,] = useState("");
@@ -1388,7 +1387,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
         setBranchRegion("");
         setBranchStatus("");
     };
-    const filterControlClassName = "h-9 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200";
+    const filterControlClassName = "h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 outline-none transition-colors hover:border-slate-300 focus:border-blue-300 focus:ring-2 focus:ring-blue-100";
     if (!operator) {
         return <div className="py-16 text-center text-sm text-slate-500">Branch not found.</div>;
     }
@@ -1420,7 +1419,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
             ? "Branch"
             : "Organization";
     const canFilterByRegion = organizationLevel === "enterprise";
-    const operatorColor = getChartColor(operator);
+    const operatorColor = "#6885C3";
     /*
      * Include both the organization name and hierarchy profile in the exported
      * filename so a Ministry can distinguish enterprise, regional and branch
@@ -1506,14 +1505,8 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                 0
             ) /
                 childComplianceRates.length;
-    const localWorkforceColour = !Array.isArray(CHART_COLORS) &&
-        CHART_COLORS?.local
-        ? CHART_COLORS.local
-        : operatorColor;
-    const expatWorkforceColour = !Array.isArray(CHART_COLORS) &&
-        CHART_COLORS?.expat
-        ? CHART_COLORS.expat
-        : "#7C8DA6";
+    const localWorkforceColour = "#6885C3";
+    const expatWorkforceColour = "#CBD5E1";
     const trendProductLabel = reportingProduct
         ? getProductLabel(reportingProduct)
         : "All fuels";
@@ -1539,239 +1532,118 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
         </p>
       </div>
 
-      <div data-pdf-remove="true" className="mb-6 overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-          <div className="flex items-center gap-2.5">
-            <span className="flex h-7 w-7 items-center justify-center rounded-md" style={{
-            backgroundColor: ICON_BLUE,
-            color: NAVY,
-        }}>
-              <Filter className="h-3.5 w-3.5"/>
-            </span>
-
-            <span className="text-sm font-semibold text-slate-900">
-              Reporting Filters
-            </span>
+      <div data-pdf-remove="true" className="mb-6 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_2px_12px_rgba(15,23,42,0.035)]">
+        <div className="flex flex-wrap items-center gap-3 px-4 py-3 sm:px-5">
+          <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-800">
+            <Filter className="h-4 w-4 text-slate-400"/>
+            <span className="whitespace-nowrap">Filters</span>
+            <span className="hidden whitespace-nowrap text-[11px] font-normal text-slate-400 xl:inline">{formatNumber(reportingHistory.length)} / {formatNumber(scopedReports.length)} reports</span>
           </div>
 
-          <div className="flex items-center gap-3">
-            <p className="text-xs font-medium text-slate-500">
-              Showing{" "}
-              <span className="font-semibold text-slate-800">
-                {formatNumber(reportingHistory.length)}
-              </span>{" "}
-              of{" "}
-              <span className="font-semibold text-slate-800">
-                {formatNumber(scopedReports.length)}
-              </span>{" "}
-              reports
-            </p>
-
-            {hasReportingFilters && (<button type="button" onClick={clearReportingFilters} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900">
-                Reset filters
-              </button>)}
+          <div className="relative min-w-[180px] flex-[2_1_220px]">
+            <label htmlFor="operator-report-search" className="sr-only">Search reports or submitters</label>
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"/>
+            <input id="operator-report-search" type="search" value={reportingSearch} onChange={(event) => setReportingSearch(event.target.value)} placeholder="Search reports or submitters" className={`${FILTER_FIELD_CLASS_NAME} pl-9`}/>
           </div>
-        </div>
 
-        <div className="grid grid-cols-1 gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-          <label className="block sm:col-span-2">
-            <span className="mb-1 block text-[11px] font-semibold text-slate-500">
-              Search
-            </span>
-
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400"/>
-
-              <input type="search" value={reportingSearch} onChange={(event) => setReportingSearch(event.target.value)} placeholder="Search reports or submitters" className={`${FILTER_FIELD_CLASS_NAME} pl-9`}/>
-            </div>
-          </label>
-
-          <label className="block">
-            <span className="mb-1 block text-[11px] font-semibold text-slate-500">
-              Period
-            </span>
-
+          <label className="min-w-[145px] flex-[1_1_160px]">
+            <span className="sr-only">Reporting period</span>
             <select value={reportingPeriod} onChange={(event) => setReportingPeriod(event.target.value)} className={FILTER_FIELD_CLASS_NAME} aria-label="Reporting period">
-              <option value="all_time">
-                All time
-              </option>
-
-              <option value="today">
-                Today
-              </option>
-
-              <option value="last_7_days">
-                Last 7 days
-              </option>
-
-              <option value="last_30_days">
-                Last 30 days
-              </option>
-
-              <option value="current_quarter">
-                This quarter
-              </option>
-
-              <option value="custom">
-                Custom range
-              </option>
+              <option value="all_time">All time</option>
+              <option value="today">Today</option>
+              <option value="last_7_days">Last 7 days</option>
+              <option value="last_30_days">Last 30 days</option>
+              <option value="current_quarter">This quarter</option>
+              <option value="custom">Custom range</option>
             </select>
           </label>
 
-          {canFilterByRegion && (<label className="block">
-              <span className="mb-1 block text-[11px] font-semibold text-slate-500">
-                Region
-              </span>
-
-              <select value={reportingRegion} onChange={(event) => setReportingRegion(event.target.value)} className={FILTER_FIELD_CLASS_NAME} aria-label="Report region">
-                <option value="">
-                  All regions
-                </option>
-
-                {regionOptions.map((region) => (<option key={region} value={region}>
-                      {region}
-                    </option>))}
-              </select>
-            </label>)}
-
-          <label className="block">
-            <span className="mb-1 block text-[11px] font-semibold text-slate-500">
-              Report type
-            </span>
-
-            <select value={reportingType} onChange={(event) => setReportingType(event.target.value)} className={FILTER_FIELD_CLASS_NAME} aria-label="Report type">
-              <option value="">
-                All report types
-              </option>
-
-              {reportingTypeOptions.map((reportType) => (<option key={reportType} value={reportType}>
-                    {reportType}
-                  </option>))}
-            </select>
-          </label>
-
-          <label className="block">
-            <span className="mb-1 block text-[11px] font-semibold text-slate-500">
-              Status
-            </span>
-
-            <select value={reportingStatus} onChange={(event) => setReportingStatus(event.target.value)} className={FILTER_FIELD_CLASS_NAME} aria-label="Report status">
-              <option value="">
-                All statuses
-              </option>
-
-              {reportingStatusOptions.map((status) => (<option key={status} value={status}>
-                    {status}
-                  </option>))}
-            </select>
-          </label>
-
-          <div className="sm:col-span-2">
-            <span className="mb-1 block text-[11px] font-semibold text-slate-500">
-              Fuel product
-            </span>
-
-            <div className="flex h-10 rounded-lg bg-slate-100 p-1" role="group" aria-label="Product type">
-              {PRODUCT_FILTER_OPTIONS.map((option) => {
-            const selected = reportingProduct === option.value;
-            return (<button key={option.value ||
-                    "all-products"} type="button" aria-pressed={selected} onClick={() => setReportingProduct(option.value)} className={`flex-1 rounded-md px-3 text-xs font-semibold transition ${selected
-                    ? "bg-white text-slate-900 shadow-sm"
-                    : "text-slate-500 hover:text-slate-800"}`}>
-                    {option.value
-                    ? option.label
-                    : "All fuels"}
+          <div className="flex h-10 min-w-[230px] flex-[1.3_1_245px] items-center rounded-xl border border-slate-200 bg-slate-50 p-1" role="group" aria-label="Fuel product">
+            {PRODUCT_FILTER_OPTIONS.map((option) => {
+                const selected = reportingProduct === option.value;
+                return (<button key={option.value || "all-products"} type="button" aria-pressed={selected} onClick={() => setReportingProduct(option.value)} className={`h-full flex-1 rounded-lg px-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 ${selected
+                    ? "bg-white text-blue-700 shadow-[0_1px_3px_rgba(15,23,42,0.09)] ring-1 ring-slate-200/80"
+                    : "text-slate-500 hover:bg-white/60 hover:text-slate-800"}`}>
+                    {option.value ? option.label : "All fuels"}
                   </button>);
-        })}
-            </div>
+            })}
           </div>
 
-          {reportingPeriod ===
-            "custom" && (<>
-              <label className="block">
-                <span className="mb-1 block text-[11px] font-semibold text-slate-500">
-                  Start date
-                </span>
+          <button type="button" onClick={() => setShowAdvancedFilters((current) => !current)} aria-expanded={showAdvancedFilters} aria-controls="operator-report-advanced-filters" className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-3 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-200 ${showAdvancedFilters || reportingRegion || reportingType || reportingStatus ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900"}`}>
+            More filters
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAdvancedFilters ? "rotate-180" : ""}`}/>
+          </button>
 
-                <input ref={startDateRef} type="date" value={customStartDate} onChange={(event) => setCustomStartDate(event.target.value)} onClick={() => openDatePicker(startDateRef)} onFocus={() => openDatePicker(startDateRef)} onKeyDown={(event) => event.preventDefault()} onPaste={(event) => event.preventDefault()} inputMode="none" className={`${FILTER_FIELD_CLASS_NAME} cursor-pointer`}/>
-              </label>
-
-              <label className="block">
-                <span className="mb-1 block text-[11px] font-semibold text-slate-500">
-                  End date
-                </span>
-
-                <input ref={endDateRef} type="date" value={customEndDate} min={customStartDate ||
-                undefined} onChange={(event) => setCustomEndDate(event.target.value)} onClick={() => openDatePicker(endDateRef)} onFocus={() => openDatePicker(endDateRef)} onKeyDown={(event) => event.preventDefault()} onPaste={(event) => event.preventDefault()} inputMode="none" className={`${FILTER_FIELD_CLASS_NAME} cursor-pointer`}/>
-              </label>
-            </>)}
+          {hasReportingFilters && (<button type="button" onClick={clearReportingFilters} className="h-10 rounded-xl px-2.5 text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900">
+              Reset
+            </button>)}
         </div>
 
-        {hasReportingFilters && (<div className="flex flex-wrap items-center gap-2 border-t border-slate-100 bg-slate-50/60 px-4 py-3">
-            <span className="text-[11px] font-semibold text-slate-500">
-              Active:
-            </span>
+        {reportingPeriod === "custom" && (<div className="flex flex-wrap items-end gap-3 border-t border-slate-100 bg-slate-50/40 px-4 py-3 sm:px-5">
+          <label className="min-w-[160px] flex-1 sm:max-w-[230px]">
+            <span className="mb-1 block text-[11px] font-medium text-slate-500">Start date</span>
+            <input ref={startDateRef} type="date" value={customStartDate} onChange={(event) => setCustomStartDate(event.target.value)} onClick={() => openDatePicker(startDateRef)} onFocus={() => openDatePicker(startDateRef)} onKeyDown={(event) => event.preventDefault()} onPaste={(event) => event.preventDefault()} inputMode="none" className={`${FILTER_FIELD_CLASS_NAME} cursor-pointer`}/>
+          </label>
+          <label className="min-w-[160px] flex-1 sm:max-w-[230px]">
+            <span className="mb-1 block text-[11px] font-medium text-slate-500">End date</span>
+            <input ref={endDateRef} type="date" value={customEndDate} min={customStartDate || undefined} onChange={(event) => setCustomEndDate(event.target.value)} onClick={() => openDatePicker(endDateRef)} onFocus={() => openDatePicker(endDateRef)} onKeyDown={(event) => event.preventDefault()} onPaste={(event) => event.preventDefault()} inputMode="none" className={`${FILTER_FIELD_CLASS_NAME} cursor-pointer`}/>
+          </label>
+        </div>)}
 
-            {[
-                reportingSearch && {
-                    key: "search",
-                    label: `Search: ${reportingSearch}`,
-                    clear: () => setReportingSearch(""),
-                },
-                (reportingPeriod !== "all_time" ||
-                    customStartDate ||
-                    customEndDate) && {
-                    key: "period",
-                    label: selectedPeriodLabel,
-                    clear: () => {
-                        setReportingPeriod("all_time");
-                        setCustomStartDate("");
-                        setCustomEndDate("");
-                    },
-                },
-                reportingRegion && {
-                    key: "region",
-                    label: reportingRegion,
-                    clear: () => setReportingRegion(""),
-                },
-                reportingType && {
-                    key: "type",
-                    label: reportingType,
-                    clear: () => setReportingType(""),
-                },
-                reportingProduct && {
-                    key: "product",
-                    label: getProductLabel(reportingProduct),
-                    clear: () => setReportingProduct(""),
-                },
-                reportingStatus && {
-                    key: "status",
-                    label: reportingStatus,
-                    clear: () => setReportingStatus(""),
-                },
-            ]
-                .filter(Boolean)
-                .map((chip) => (<span key={chip.key} className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white py-1 pl-3 pr-1.5 text-xs font-medium text-slate-700">
-                  {chip.label}
+        {showAdvancedFilters && (<div id="operator-report-advanced-filters" className="grid grid-cols-1 gap-3 border-t border-slate-100 bg-slate-50/40 px-4 py-3 sm:grid-cols-2 sm:px-5 lg:grid-cols-3">
+          {canFilterByRegion && (<label className="block">
+            <span className="mb-1 block text-[11px] font-medium text-slate-500">Region</span>
+            <select value={reportingRegion} onChange={(event) => setReportingRegion(event.target.value)} className={FILTER_FIELD_CLASS_NAME} aria-label="Report region">
+              <option value="">All regions</option>
+              {regionOptions.map((region) => (<option key={region} value={region}>{region}</option>))}
+            </select>
+          </label>)}
+          <label className="block">
+            <span className="mb-1 block text-[11px] font-medium text-slate-500">Report type</span>
+            <select value={reportingType} onChange={(event) => setReportingType(event.target.value)} className={FILTER_FIELD_CLASS_NAME} aria-label="Report type">
+              <option value="">All report types</option>
+              {reportingTypeOptions.map((reportType) => (<option key={reportType} value={reportType}>{reportType}</option>))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[11px] font-medium text-slate-500">Status</span>
+            <select value={reportingStatus} onChange={(event) => setReportingStatus(event.target.value)} className={FILTER_FIELD_CLASS_NAME} aria-label="Report status">
+              <option value="">All statuses</option>
+              {reportingStatusOptions.map((status) => (<option key={status} value={status}>{status}</option>))}
+            </select>
+          </label>
+          <details className="sm:col-span-2 lg:col-span-3">
+            <summary className="cursor-pointer text-[11px] font-medium text-slate-500 hover:text-slate-700">How filters work</summary>
+            <p className="mt-2 max-w-xl text-[11px] leading-relaxed text-slate-500">Product filtering recalculates sales volume, estimated revenue, charts, reporting history and station/branch product performance. Compliance remains report-level because the reporting obligation itself is not product-specific. Region also filters the dedicated workforce records. Current period: {selectedPeriodLabel}.</p>
+          </details>
+        </div>)}
 
-                  <button type="button" onClick={chip.clear} aria-label={`Remove filter ${chip.label}`} className="flex h-4 w-4 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700">
-                    <X className="h-3 w-3"/>
-                  </button>
-                </span>))}
-          </div>)}
+        {hasReportingFilters && (<div className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-4 py-2.5 sm:px-5">
+          <span className="mr-1 text-[11px] font-medium text-slate-400">Active</span>
+          {[
+            reportingSearch && { key: "search", label: `Search: ${reportingSearch}`, clear: () => setReportingSearch("") },
+            (reportingPeriod !== "all_time" || customStartDate || customEndDate) && {
+              key: "period", label: selectedPeriodLabel, clear: () => {
+                setReportingPeriod("all_time");
+                setCustomStartDate("");
+                setCustomEndDate("");
+              },
+            },
+            reportingRegion && { key: "region", label: reportingRegion, clear: () => setReportingRegion("") },
+            reportingType && { key: "type", label: reportingType, clear: () => setReportingType("") },
+            reportingProduct && { key: "product", label: getProductLabel(reportingProduct), clear: () => setReportingProduct("") },
+            reportingStatus && { key: "status", label: reportingStatus, clear: () => setReportingStatus("") },
+          ].filter(Boolean).map((chip) => (<span key={chip.key} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 py-1 pl-2.5 pr-1.5 text-[11px] font-medium text-slate-600">
+            {chip.label}
+            <button type="button" onClick={chip.clear} aria-label={`Remove filter ${chip.label}`} className="flex h-5 w-5 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700">
+              <X className="h-3 w-3"/>
+            </button>
+          </span>))}
+        </div>)}
 
-        <details className="border-t border-slate-100 px-4 py-2.5">
-          <summary className="cursor-pointer text-[11px] font-semibold text-slate-400 transition-colors hover:text-slate-600">
-            How these filters work
-          </summary>
-
-          <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
-            Product filtering recalculates sales volume, estimated revenue, charts, reporting history and station/branch product performance. Compliance remains report-level because the reporting obligation itself is not product-specific. Region also filters the dedicated workforce records. Current period: {selectedPeriodLabel}.
-          </p>
-        </details>
       </div>
 
-      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      <div className="mb-9 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <KpiCard label={reportingProduct ? `${getProductLabel(reportingProduct)} Volume Sold (Period)` : "Total Volume Sold (Period)"} value={productionToday >
             0
             ? `${formatNumber(productionToday)} L`
@@ -1845,13 +1717,13 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                 left: 0,
                 bottom: 0,
             }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false}/>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E9EDF3" vertical={false}/>
 
                 <XAxis dataKey="day" tick={{
                 fontSize: 13,
                 fill: "#64748b",
             }} axisLine={{
-                stroke: "#cbd5e1",
+                stroke: "#E2E8F0",
             }} tickLine={false}/>
 
                 <YAxis tick={{
@@ -1864,15 +1736,16 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                 : formatNumber(value)}/>
 
                 <Tooltip cursor={{
-                fill: "#f1f5f9",
+                fill: "#F7F9FC",
             }} formatter={(value) => [
                 `${formatNumber(value)} litres`,
                 "Sales volume",
             ]} contentStyle={{
                 fontSize: 13,
-                borderRadius: 8,
-                border: "1px solid #e2e8f0",
-                boxShadow: "0 4px 12px rgba(15,23,42,0.08)",
+                borderRadius: 12,
+                border: "1px solid #E2E8F0",
+                backgroundColor: "#FFFFFF",
+                boxShadow: "0 8px 24px rgba(15,23,42,0.07)",
             }}/>
 
                 <Bar dataKey="production" fill={operatorColor} radius={[
@@ -1880,7 +1753,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                 3,
                 0,
                 0,
-            ]} maxBarSize={48}/>
+            ]} maxBarSize={42}/>
               </BarChart>
             </ResponsiveContainer>
             </>) : (<EmptyState message="Sales volume trends will appear when sales reports are submitted"/>)}
@@ -1904,13 +1777,13 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                 left: 0,
                 bottom: 0,
             }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false}/>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E9EDF3" vertical={false}/>
 
                 <XAxis dataKey="period" tick={{
                 fontSize: 13,
                 fill: "#64748b",
             }} axisLine={{
-                stroke: "#cbd5e1",
+                stroke: "#E2E8F0",
             }} tickLine={false}/>
 
                 <YAxis tick={{
@@ -1923,15 +1796,16 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                 : formatNumber(value)}/>
 
                 <Tooltip cursor={{
-                fill: "#f1f5f9",
+                fill: "#F7F9FC",
             }} formatter={(value) => [
                 `${formatNumber(value)} litres`,
                 "Sales volume",
             ]} contentStyle={{
                 fontSize: 13,
-                borderRadius: 8,
-                border: "1px solid #e2e8f0",
-                boxShadow: "0 4px 12px rgba(15,23,42,0.08)",
+                borderRadius: 12,
+                border: "1px solid #E2E8F0",
+                backgroundColor: "#FFFFFF",
+                boxShadow: "0 8px 24px rgba(15,23,42,0.07)",
             }}/>
 
                 <Bar dataKey="value" fill={operatorColor} radius={[
@@ -1939,7 +1813,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                 3,
                 0,
                 0,
-            ]} maxBarSize={48}/>
+            ]} maxBarSize={42}/>
               </BarChart>
             </ResponsiveContainer>
             </>) : (<EmptyState message="Monthly sales volume data will appear here"/>)}
@@ -2005,7 +1879,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
             </div>) : (<EmptyState message="No reporting records match the selected filters"/>)}
 
           {reportingHistory.length >
-            0 && (<div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            0 && (<div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50/50 px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs font-medium text-slate-500">
                 Showing {formatNumber((resolvedReportingHistoryPage - 1) *
                 REPORTING_HISTORY_PAGE_SIZE +
@@ -2014,7 +1888,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
               </p>
 
               <div data-pdf-remove="true" className="flex items-center gap-2">
-                <Button variant="outline" size="sm" disabled={resolvedReportingHistoryPage <= 1} onClick={() => changeReportingHistoryPage(resolvedReportingHistoryPage - 1)}>
+                <Button variant="outline" size="sm" className="rounded-lg border-slate-200 bg-white text-slate-600 shadow-none hover:border-slate-300 hover:bg-slate-50 disabled:opacity-40" disabled={resolvedReportingHistoryPage <= 1} onClick={() => changeReportingHistoryPage(resolvedReportingHistoryPage - 1)}>
                   Previous
                 </Button>
 
@@ -2022,7 +1896,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                   Page {resolvedReportingHistoryPage} of {reportingHistoryPageCount}
                 </span>
 
-                <Button variant="outline" size="sm" disabled={resolvedReportingHistoryPage >=
+                <Button variant="outline" size="sm" className="rounded-lg border-slate-200 bg-white text-slate-600 shadow-none hover:border-slate-300 hover:bg-slate-50 disabled:opacity-40" disabled={resolvedReportingHistoryPage >=
                 reportingHistoryPageCount} onClick={() => changeReportingHistoryPage(resolvedReportingHistoryPage + 1)}>
                   Next
                 </Button>
@@ -2036,7 +1910,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
           {childSectionLabel}
         </SectionHeader>
 
-        <div data-pdf-remove="true" className="mb-4 rounded-xl border border-slate-200/80 bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        <div data-pdf-remove="true" className="mb-4 rounded-2xl border border-slate-200/80 bg-white px-5 py-4 shadow-[0_2px_12px_rgba(15,23,42,0.035)]">
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex h-9 items-center gap-2.5 pr-2">
               <span className="flex h-7 w-7 items-center justify-center rounded-md" style={{
@@ -2107,7 +1981,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                         <OperatorAvatar name={childName} logoUrl={branch.logoUrl} compact/>
 
                         <div className="min-w-0">
-                          <p className="truncate font-semibold text-navy-900">
+                          <p className="truncate font-semibold text-slate-800">
                             {childName}
                           </p>
 
@@ -2120,15 +1994,15 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                       </div>
                     </td>
 
-                    <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold text-navy-900">
+                    <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold text-slate-800">
                       <EmptyCell value={branch.region}/>
                     </td>
 
-                    <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold text-navy-900">
+                    <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold text-slate-800">
                       <EmptyCell value={branch.adminName}/>
                     </td>
 
-                    <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-navy-900">
+                    <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-slate-800">
                       <EmptyCell value={Number(branch.productionToday ??
                             branch.production) >
                             0
@@ -2137,21 +2011,21 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                             : null}/>
                     </td>
 
-                    <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-navy-900">
+                    <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-slate-800">
                       <EmptyCell value={branch.workforce?.total >
                             0
                             ? `${formatNumber(branch.localWorkforce)} (${formatNumber(branch.localWorkforcePct, 1)}%)`
                             : null}/>
                     </td>
 
-                    <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-navy-900">
+                    <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-slate-800">
                       <EmptyCell value={Number(branch.estimatedDailyRevenue) >
                             0
                             ? formatCurrency(branch.estimatedDailyRevenue)
                             : null}/>
                     </td>
 
-                    <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-navy-900">
+                    <td onClick={openChild} className="cursor-pointer whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-slate-800">
                       <EmptyCell value={branch.reportsExpected >
                             0
                             ? `${formatNumber(branch.compliance, 1)}%`
@@ -2163,7 +2037,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                     </td>
 
                     <td className="px-4 py-3">
-                      <Button variant="ghost" size="sm" onClick={openChild} disabled={!onSelectOrganization} className="text-slate-600 hover:bg-slate-100 hover:text-navy-950">
+                      <Button variant="ghost" size="sm" onClick={openChild} disabled={!onSelectOrganization} className="rounded-lg border border-transparent text-slate-600 hover:border-blue-100 hover:bg-blue-50/70 hover:text-blue-700">
                         <Eye className="h-4 w-4"/>
                         View
                       </Button>
@@ -2221,12 +2095,12 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                     caption: `${formatNumber(workforceVacancies)} current + ${formatNumber(workforceFutureNeed)} future`,
                     alert: true,
                 },
-            ].map((item) => (<div key={item.label} className="rounded-xl border border-slate-200 bg-white p-4">
+            ].map((item) => (<div key={item.label} className="rounded-xl border border-slate-200/80 bg-slate-50/50 p-4">
                       <p className="text-xs font-medium text-slate-500">
                         {item.label}
                       </p>
 
-                      <p className="mt-2 text-2xl font-semibold tabular-nums tracking-tight text-navy-950" style={item.alert && item.value > 0
+                      <p className="mt-2 text-2xl font-semibold tabular-nums tracking-tight text-slate-900" style={item.alert && item.value > 0
                     ? { color: STATUS_COLOURS.warn }
                     : undefined}>
                         {formatNumber(item.value)}
@@ -2238,7 +2112,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                     </div>))}
               </div>
 
-              {hasWorkforceData && (<div className="mt-6 rounded-xl bg-slate-50/70 p-4">
+              {hasWorkforceData && (<div className="mt-6 rounded-xl border border-slate-100 bg-slate-50/60 p-5">
                   <div className="mb-3 flex items-center justify-between gap-4">
                     <p className="text-sm font-semibold text-slate-800">
                       Workforce Composition
@@ -2252,7 +2126,7 @@ const OperatorOverview = ({ operator = null, updatedAt = null, onSelectOrganizat
                     </p>
                   </div>
 
-                  <div className="flex h-3 overflow-hidden rounded-full bg-slate-200">
+                  <div className="flex h-2.5 overflow-hidden rounded-full bg-slate-200/80">
                     <div className="transition-[width] duration-300" style={{
                     width: `${localWorkforcePercentage}%`,
                     backgroundColor: localWorkforceColour,
