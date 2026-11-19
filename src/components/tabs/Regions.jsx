@@ -13,7 +13,7 @@ import { buildPdfFilename } from "../../lib/pdf-export";
 import { calculateOnTimeCompliance, calculateSubmissionCompletion, calculateSubmissionMetrics } from "../../lib/calculation-metrics";
 import ghanaRegions from "../../data/ghana-regions.json";
 import { NAVY, getChartColor, normalizeValue, normalizeStatus, normalizeRegionId, getRegionName, toNumber, toDate, getTimestampValue, getDateKey, getPeriodRange, getOrganizationId, getUserOrganizationId, getOrganizationLogo, getOrganizationCategory, getOrganizationLevel, getOrganizationSector, getOrganizationSegment, isBranchOrganization, isEnterpriseOrganization, getEnterpriseIdForOrganization, belongsToOrganizationHierarchy, getReportDate, getActualSubmittedAt, getDeadlineAt, isReportSubmitted, isReportSubmittedLate, isReportSubmittedOnTime, isReportEligibleForCompliance, getReportFields, getReportValues, getReportName, formatNumber, formatPercentage, formatCurrency, getRegionHealthStatus, formatDate, formatTime, clampPercentage, getComplianceClassName, PRODUCT_FILTER_OPTIONS, getProductLabel, calculateProductTotals, getWorkforceOrganizationId, calculateWorkforceSummary } from "../../lib/region-utils";
-import RegionDetail, { RegionHealthBadge, Card, SectionHeader, DashboardHeader, PeriodFilterControl, ViewTransition, EmptyState } from "./RegionDetail";
+import RegionDetail, { RegionHealthBadge, Card, SectionHeader, PeriodFilterControl, ViewTransition, EmptyState } from "./RegionDetail";
 
 
 
@@ -258,6 +258,16 @@ const getRegionIdentityColor = (
   );
 };
 
+
+const RegionsSectionHeader = ({ children, description = "" }) => (
+  <div className="mb-4 flex items-start gap-2.5">
+    <span className="mt-1 h-3.5 w-[3px] shrink-0 rounded-full bg-blue-200" aria-hidden="true" />
+    <div className="min-w-0">
+      <h2 className="text-sm font-semibold tracking-tight text-slate-900">{children}</h2>
+      {description && <p className="mt-1 text-xs leading-relaxed text-slate-500">{description}</p>}
+    </div>
+  </div>
+);
 
 const RegionalPerformanceMap = ({
   regions = [],
@@ -4079,7 +4089,7 @@ const Regions = ({
   };
 
   const filterClassName =
-    "h-9 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200";
+    "h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 outline-none transition-colors hover:border-slate-300 focus:border-blue-400 focus:ring-2 focus:ring-blue-100";
 
   if (
     selectedRegion
@@ -4172,28 +4182,21 @@ const Regions = ({
         className="min-h-full w-full bg-slate-50 px-3 py-4 sm:px-4 sm:py-6 lg:px-5 lg:py-8 xl:px-6"
       >
       <div className="w-full max-w-none">
-        <DashboardHeader
-          title="Regions"
-          scopeLabel={
-            scopeLabel
-          }
-          description={
-            scopeDescription
-          }
-          updatedAt={
-            updatedAt
-          }
-          action={
-            <ExportPdfButton
-              targetRef={
-                regionsPdfRef
-              }
-              filename={
-                regionsPdfFilename
-              }
-            />
-          }
-        />
+        <header className="mb-7 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-end">
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap items-center gap-3">
+              <span className="h-5 w-[3px] shrink-0 rounded-full bg-blue-200" aria-hidden="true" />
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Regions</h1>
+              <span className="rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700">
+                {scopeLabel}
+              </span>
+            </div>
+            <p className="max-w-2xl text-sm leading-relaxed text-slate-500">{scopeDescription}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 sm:justify-end">
+            <ExportPdfButton targetRef={regionsPdfRef} filename={regionsPdfFilename} />
+          </div>
+        </header>
 
         {isOffline && (
           <p role="status" className="mb-5 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
@@ -4267,10 +4270,10 @@ const Regions = ({
 
         <div
           data-pdf-remove="true"
-          className="mb-6 flex flex-wrap items-end gap-2 rounded-xl border border-slate-200/80 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]"
+          className="mb-7 flex flex-wrap items-center gap-2.5 rounded-xl border border-slate-200/80 bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,23,42,0.035)]"
         >
-          <div className="flex h-9 items-center gap-2 px-1 pr-3">
-            <Filter className="h-4 w-4 text-slate-500" />
+          <div className="flex h-9 items-center gap-2 border-r border-slate-200 pr-3 mr-1">
+            <Filter className="h-4 w-4 text-blue-600" />
 
             <span className="text-xs font-semibold text-slate-700">
               Filters
@@ -4464,7 +4467,7 @@ const Regions = ({
             </select>
           </label>
 
-          <span className="ml-auto pb-2 text-[11px] font-medium text-slate-400">
+          <span className="ml-auto text-[11px] font-medium text-slate-500">
             {selectedPeriodLabel} · {getProductLabel(
               productFilter
             )}
@@ -4476,7 +4479,7 @@ const Regions = ({
               onClick={
                 clearFilters
               }
-              className="h-9 rounded-md px-3 text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+              className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
             >
               Reset
             </button>
@@ -4484,11 +4487,11 @@ const Regions = ({
         </div>
 
         <div className="mb-8">
-          <SectionHeader
+          <RegionsSectionHeader
             description={`Total reported ${getProductLabel(productFilter).toLowerCase()} sales volume for ${selectedPeriodLabel.toLowerCase()}, grouped by station region.`}
           >
             Regional Sales Volume Ranking
-          </SectionHeader>
+          </RegionsSectionHeader>
 
           <Card className="p-5">
             {displayedRegionalData.length >
@@ -4534,9 +4537,7 @@ const Regions = ({
                               width:
                                 `${outputPercentage}%`,
                               backgroundColor:
-                                getChartColor(
-                                  index
-                                ),
+                                index % 2 === 0 ? "#456BC0" : "#80A79F",
                             }}
                           >
                             {outputPercentage >
@@ -4569,15 +4570,15 @@ const Regions = ({
         </div>
 
         <div className="mb-8">
-          <SectionHeader description="Compare operator activity, stations, sales volumes, estimated revenue, reporting performance and workforce by region.">
+          <RegionsSectionHeader description="Compare operator activity, stations, sales volumes, estimated revenue, reporting performance and workforce by region.">
             Regional Performance Comparison
-          </SectionHeader>
+          </RegionsSectionHeader>
 
           <Card className="overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1320px]">
                 <thead>
-                  <tr style={{ backgroundColor: NAVY }}>
+                  <tr className="border-b border-slate-200 bg-slate-50/90">
                     {[
                       "Region",
                       ...(isMinistryUser ? ["Operators"] : []),
@@ -4601,7 +4602,7 @@ const Regions = ({
                       ) => (
                         <th
                           key={`${heading}-${index}`}
-                          className={`whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-200 ${
+                          className={`whitespace-nowrap px-4 py-3.5 text-[11px] font-semibold uppercase tracking-[0.055em] text-slate-500 ${
                             index === 0
                               ? "text-left"
                               : "text-right"
@@ -4631,11 +4632,11 @@ const Regions = ({
                               region
                             )
                           }
-                          className="cursor-pointer border-b border-slate-100 transition-colors last:border-0 hover:bg-slate-50"
+                          className="group cursor-pointer border-b border-slate-100/90 transition-colors last:border-0 hover:bg-blue-50/40"
                         >
                           <td className="px-4 py-4">
                             <div className="flex items-center gap-3">
-                              <MapPin className="h-5 w-5 shrink-0 text-slate-500" />
+                              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-blue-100 bg-blue-50"><MapPin className="h-4 w-4 text-blue-600" /></span>
 
                               <div>
                                 <p className="font-semibold text-slate-900">
@@ -4716,7 +4717,7 @@ const Regions = ({
                           </td>
 
                           <td className="px-4 py-4 text-right">
-                            <ChevronRight className="ml-auto h-4 w-4 text-slate-400" />
+                            <ChevronRight className="ml-auto h-4 w-4 text-slate-400 transition-colors group-hover:text-blue-600" />
                           </td>
                         </tr>
                       )
